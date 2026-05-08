@@ -2,7 +2,7 @@ use crate::manifest::PluginManifestInterface;
 use crate::manifest::load_plugin_manifest;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
-use codex_git_utils::get_git_repo_root;
+use codex_utils_git::get_git_repo_root;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_protocol::protocol::Product;

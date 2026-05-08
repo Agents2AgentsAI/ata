@@ -1,6 +1,6 @@
 use super::*;
-use codex_git_utils::GitBaselineChange;
-use codex_git_utils::GitBaselineChangeStatus;
+use codex_utils_git::GitBaselineChange;
+use codex_utils_git::GitBaselineChangeStatus;
 use pretty_assertions::assert_eq;
 use std::fs;
 use tempfile::TempDir;

@@ -148,7 +148,7 @@ pub(crate) use web_search::resolve_web_search_mode_for_turn;
 /// to the openai provider occurs (cached tokens are likely stale/absent).
 pub const MODEL_PROVIDER_FALLBACK_PREFIX: &str = "Model provider fallback:";
 
-pub use codex_git_utils::GhostSnapshotConfig;
+pub use codex_utils_git::GhostSnapshotConfig;
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of

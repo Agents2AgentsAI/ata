@@ -113,7 +113,7 @@ fn handle_server_request(
     stdin: &Arc<Mutex<Option<std::process::ChildStdin>>>,
     output: &Output,
 ) -> anyhow::Result<()> {
-    let server_request = match ServerRequest::try_from(request.clone()) {
+    let server_request = match ServerRequest::try_from(request) {
         Ok(server_request) => server_request,
         Err(_) => return Ok(()),
     };

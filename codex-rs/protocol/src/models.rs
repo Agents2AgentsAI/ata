@@ -25,8 +25,8 @@ use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
 use codex_execpolicy::Policy;
-use codex_git_utils::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_git::GhostCommit;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
 

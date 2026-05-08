@@ -498,11 +498,7 @@ async fn dispatch_after_tool_use_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(&turn.cwd)
-                .unwrap_or_else(|_| {
-                    codex_utils_absolute_path::AbsolutePathBuf::current_dir()
-                        .expect("current_dir for hook payload")
-                }),
+            cwd: turn.cwd.clone(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::AfterToolUse {

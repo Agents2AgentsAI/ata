@@ -92,3 +92,4 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+merge_info

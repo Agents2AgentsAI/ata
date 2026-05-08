@@ -386,6 +386,10 @@ async fn arm_session_post_failure(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// The mutex protects the test-only "armed failure" state and is held across
+// the next.run(request).await so the same request gets served the failing
+// status code observed under the lock.
+#[allow(clippy::await_holding_invalid_type)]
 async fn fail_session_post_when_armed(
     State(state): State<SessionFailureState>,
     request: Request<Body>,

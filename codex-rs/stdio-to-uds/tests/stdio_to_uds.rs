@@ -11,8 +11,6 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::anyhow;
 use pretty_assertions::assert_eq;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
 
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
@@ -51,7 +49,6 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
         let _ = event_tx.send("waiting for accept".to_string());
         let (mut connection, _) = listener
             .accept()
-            .await
             .context("failed to accept test connection")?;
         let _ = event_tx.send("accepted connection".to_string());
         let mut received = vec![0; request.len()];
@@ -63,7 +60,6 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
             .map_err(|_| anyhow!("failed to send received bytes to test thread"))?;
         connection
             .write_all(b"response")
-            .await
             .context("failed to write response to client")?;
         let _ = event_tx.send("wrote response".to_string());
         Ok(())

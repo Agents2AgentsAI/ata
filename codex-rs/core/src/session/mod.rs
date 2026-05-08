@@ -305,7 +305,7 @@ use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core_plugins::PluginsManager;
-use codex_git_utils::get_git_repo_root;
+use codex_utils_git::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::host_owned_codex_apps_enabled;
 use codex_mcp::with_codex_apps_mcp;

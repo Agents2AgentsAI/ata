@@ -231,7 +231,7 @@ codex-features = { path = "features" }
 codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
-codex-git-utils = { path = "utils/git" }
+codex-utils-git = { path = "utils/git" }
 codex-hooks = { path = "hooks" }
 codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
@@ -552,14 +552,77 @@ unwrap_used = "deny"
 # cargo-shear cannot see the platform-specific openssl-sys usage, so we
 # silence the false positive here instead of deleting a real dependency.
 [workspace.metadata.cargo-shear]
+# Phase 1 of the rust-v0.129.0 merge: many upstream-only path-dep entries are
+# parked in [workspace.dependencies] without active consumers. Tell cargo-shear
+# to ignore them until Phase 2-7 wires the new crates up.
 ignored = [
+    "aws-types",
     "codex-agent-graph-store",
+    "codex-agent-identity",
+    "codex-analytics",
+    "codex-app-server-transport",
+    "codex-aws-auth",
+    "codex-builtin-mcps",
+    "codex-code-mode",
+    "codex-collaboration-mode-templates",
+    "codex-cloud-tasks-mock-client",
+    "codex-core-api",
+    "codex-core-plugins",
+    "codex-core-skills",
+    "codex-device-key",
+    "codex-exec-server",
+    "codex-external-agent-migration",
+    "codex-external-agent-sessions",
+    "codex-features",
+    "codex-feedback",
+    "codex-file-system",
+    "codex-install-context",
+    "codex-mcp",
     "codex-memories-mcp",
-    "icu_provider",
-    "openssl-sys",
+    "codex-memories-read",
+    "codex-memories-write",
+    "codex-message-history",
+    "codex-model-provider",
+    "codex-model-provider-info",
+    "codex-models-manager",
+    "codex-plugin",
+    "codex-realtime-webrtc",
+    "codex-response-debug-context",
+    "codex-rollout",
+    "codex-rollout-trace",
+    "codex-sandboxing",
+    "codex-terminal-detection",
+    "codex-test-binary-support",
+    "codex-thread-store",
+    "codex-tools",
+    "codex-uds",
+    "codex-utils-output-truncation",
+    "codex-utils-path",
+    "codex-utils-plugins",
     "codex-utils-readiness",
     "codex-utils-template",
     "codex-v8-poc",
+    "async-io",
+    "aws-config",
+    "aws-credential-types",
+    "aws-sigv4",
+    "constant_time_eq",
+    "crypto_box",
+    "deno_core_icudata",
+    "dns-lookup",
+    "ed25519-dalek",
+    "gix",
+    "icu_provider",
+    "jsonwebtoken",
+    "openssl-sys",
+    "p256",
+    "rcgen",
+    "redis",
+    "tonic",
+    "tonic-prost",
+    "v8",
+    "whoami",
+    "winapi-util",
 ]
 
 [profile.dev]

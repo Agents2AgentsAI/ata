@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-use tokio::sync::Mutex;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::sync::Semaphore;
 
@@ -107,28 +107,32 @@ impl RateLimiter {
                 .await
                 .map_err(|_| ResearchError::RateLimiterClosed { api })?;
 
-            let mut window = limiter.window.lock().await;
-            let now = Instant::now();
-            while let Some(oldest) = window.front() {
-                if now.duration_since(*oldest) >= limiter.rule.per {
-                    window.pop_front();
-                } else {
-                    break;
+            let wait_for = {
+                let mut window = limiter
+                    .window
+                    .lock()
+                    .map_err(|_| ResearchError::RateLimiterClosed { api })?;
+                let now = Instant::now();
+                while let Some(oldest) = window.front() {
+                    if now.duration_since(*oldest) >= limiter.rule.per {
+                        window.pop_front();
+                    } else {
+                        break;
+                    }
                 }
-            }
 
-            if window.len() < limiter.rule.max_requests as usize {
-                window.push_back(now);
-                return Ok(RateLimitPermit::Limited(permit));
-            }
+                if window.len() < limiter.rule.max_requests as usize {
+                    window.push_back(now);
+                    return Ok(RateLimitPermit::Limited(permit));
+                }
 
-            let wait_for = if let Some(oldest) = window.front().copied() {
-                limiter.rule.per.saturating_sub(now.duration_since(oldest))
-            } else {
-                Duration::from_millis(1)
+                if let Some(oldest) = window.front().copied() {
+                    limiter.rule.per.saturating_sub(now.duration_since(oldest))
+                } else {
+                    Duration::from_millis(1)
+                }
             };
 
-            drop(window);
             drop(permit);
             tokio::time::sleep(wait_for).await;
         }

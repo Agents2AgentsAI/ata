@@ -1,7 +1,7 @@
 use crate::start_memories_startup_task;
 use codex_features::Feature;
-use codex_git_utils::diff_since_latest_init;
-use codex_git_utils::reset_git_repository;
+use codex_utils_git::diff_since_latest_init;
+use codex_utils_git::reset_git_repository;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;

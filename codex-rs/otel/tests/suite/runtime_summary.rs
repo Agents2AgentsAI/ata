@@ -2,6 +2,9 @@ use codex_otel::RuntimeMetricTotals;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
+use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use eventsource_stream::Event as StreamEvent;
@@ -22,10 +25,10 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         "gpt-5.1",
         "gpt-5.1",
         Some("account-id".to_string()),
-        /*account_email*/ None,
+        None,
         Some(TelemetryAuthMode::ApiKey),
         "test_originator".to_string(),
-        /*log_user_prompts*/ true,
+        true,
         "tty".to_string(),
         SessionSource::Cli,
     )
@@ -38,32 +41,11 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         "call-1",
         "{\"cmd\":\"echo\"}",
         Duration::from_millis(250),
-        /*success*/ true,
+        true,
         "ok",
         &[],
-        /*mcp_server*/ None,
-        /*mcp_server_origin*/ None,
-    );
-    manager.record_api_request(
-        /*attempt*/ 1,
-        Some(200),
-        /*error*/ None,
-        Duration::from_millis(300),
-        /*auth_header_attached*/ false,
-        /*auth_header_name*/ None,
-        /*retry_after_unauthorized*/ false,
-        /*recovery_mode*/ None,
-        /*recovery_phase*/ None,
-        "/responses",
-        /*request_id*/ None,
-        /*cf_ray*/ None,
-        /*auth_error*/ None,
-        /*auth_error_code*/ None,
-    );
-    manager.record_websocket_request(
-        Duration::from_millis(400),
-        /*error*/ None,
-        /*connection_reused*/ false,
+        None,
+        None,
     );
     manager.record_api_request(
         1,

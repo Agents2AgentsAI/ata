@@ -1080,6 +1080,10 @@ impl RmcpClient {
             })
     }
 
+    // The recovery flow runs entirely under the session_recovery_lock so that
+    // only one expiry handler can rebuild the connection at a time. Subsequent
+    // state.lock().await calls also hold across awaits intentionally.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn reinitialize_after_session_expiry(
         &self,
         failed_service: &Arc<RunningService<RoleClient, LoggingClientHandler>>,

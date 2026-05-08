@@ -1,3 +1,7 @@
+// The optional  feature is intentionally not declared in Cargo.toml
+// on the public release branch (its codex-coordination dep lives in the
+// private repo). Allow the resulting unexpected-cfg warning so the \ blocks still type-check on the public branch.
+#![allow(unexpected_cfgs)]
 // - In the default output mode, it is paramount that the only thing written to
 //   stdout is the final message (if any).
 // - In --json mode, stdout must be valid JSONL, one event per line.

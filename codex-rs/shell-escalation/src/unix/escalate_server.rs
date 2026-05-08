@@ -606,7 +606,7 @@ mod tests {
         let execve_wrapper_str = execve_wrapper.to_string_lossy().to_string();
         let server = EscalateServer::new(
             PathBuf::from("/bin/bash"),
-            execve_wrapper.clone(),
+            execve_wrapper,
             DeterministicEscalationPolicy {
                 decision: EscalationDecision::run(),
             },

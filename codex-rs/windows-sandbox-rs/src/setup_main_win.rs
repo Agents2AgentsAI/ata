@@ -6,24 +6,23 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use codex_otel::StatsigMetricsSettings;
 use codex_windows_sandbox::LOG_FILE_NAME;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
-use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
-use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::protect_workspace_agents_dir;
+use codex_windows_sandbox::protect_workspace_codex_dir;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -85,13 +84,6 @@ struct Payload {
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
-    #[serde(default)]
-    deny_write_paths: Vec<PathBuf>,
-    proxy_ports: Vec<u16>,
-    #[serde(default)]
-    allow_local_binding: bool,
-    #[serde(default)]
-    otel: Option<StatsigMetricsSettings>,
     real_user: String,
     #[serde(default)]
     mode: SetupMode,
@@ -161,7 +153,7 @@ fn apply_read_acls(
         let builtin_has = read_mask_allows_or_log(
             root,
             subjects.rx_psids,
-            /*label*/ None,
+            None,
             access_mask,
             access_label,
             refresh_errors,
@@ -223,7 +215,7 @@ fn read_mask_allows_or_log(
     refresh_errors: &mut Vec<String>,
     log: &mut File,
 ) -> Result<bool> {
-    match path_mask_allows(root, psids, read_mask, /*require_all_bits*/ true) {
+    match path_mask_allows(root, psids, read_mask, true) {
         Ok(has) => Ok(has),
         Err(e) => {
             let label_suffix = label
@@ -316,7 +308,8 @@ fn lock_sandbox_dir(
         );
         if set != 0 {
             return Err(anyhow::anyhow!(
-                "SetEntriesInAclW sandbox dir failed: {set}",
+                "SetEntriesInAclW sandbox dir failed: {}",
+                set
             ));
         }
         let path_w = to_wide(dir.as_os_str());
@@ -331,7 +324,8 @@ fn lock_sandbox_dir(
         );
         if res != 0 {
             return Err(anyhow::anyhow!(
-                "SetNamedSecurityInfoW sandbox dir failed: {res}",
+                "SetNamedSecurityInfoW sandbox dir failed: {}",
+                res
             ));
         }
         if !new_dacl.is_null() {
@@ -426,7 +420,7 @@ fn real_main() -> Result<()> {
             });
         let report = SetupErrorReport {
             code: failure.code,
-            message: failure.message,
+            message: failure.message.clone(),
         };
         if let Err(write_err) = write_setup_error_report(&payload.codex_home, &report) {
             let _ = log_line(
@@ -498,7 +492,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {
     if !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("read ACL run completed with errors: {refresh_errors:?}"),
+            &format!("read ACL run completed with errors: {:?}", refresh_errors),
         )?;
         if payload.refresh_only {
             anyhow::bail!("read ACL run had errors");
@@ -516,8 +510,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.codex_home,
             &payload.offline_username,
             &payload.online_username,
-            &payload.proxy_ports,
-            payload.allow_local_binding,
             log,
         );
         if let Err(err) = provision_result {
@@ -580,21 +572,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
-            &offline_sid_str,
-            &payload.proxy_ports,
-            payload.allow_local_binding,
-            log,
-        );
-        if let Err(err) = proxy_allowlist_result {
-            if extract_setup_failure(&err).is_some() {
-                return Err(err);
-            }
-            return Err(anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                format!("ensure offline proxy allowlist failed: {err}"),
-            )));
-        }
         let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
         if let Err(err) = firewall_result {
             if extract_setup_failure(&err).is_some() {
@@ -605,14 +582,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
                 format!("ensure offline outbound block failed: {err}"),
             )));
         }
-        install_wfp_filters(
-            &payload.codex_home,
-            &payload.offline_username,
-            payload.otel.as_ref(),
-            |message| {
-                let _ = log_line(log, message);
-            },
-        );
     }
 
     if payload.read_roots.is_empty() {
@@ -647,14 +616,13 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     }
 
-    let cap_sid_str = caps.workspace;
+    let cap_sid_str = caps.workspace.clone();
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
-    let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
     let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
 
@@ -685,26 +653,25 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             ("sandbox_group", sandbox_group_psid),
             (cap_label, cap_psid_for_root),
         ] {
-            let has =
-                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        refresh_errors.push(format!(
-                            "write mask check failed on {} for {label}: {}",
+            let has = match path_mask_allows(root, &[psid], write_mask, true) {
+                Ok(h) => h,
+                Err(e) => {
+                    refresh_errors.push(format!(
+                        "write mask check failed on {} for {label}: {}",
+                        root.display(),
+                        e
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "write mask check failed on {} for {label}: {}; continuing",
                             root.display(),
                             e
-                        ));
-                        log_line(
-                            log,
-                            &format!(
-                                "write mask check failed on {} for {label}: {}; continuing",
-                                root.display(),
-                                e
-                            ),
-                        )?;
-                        false
-                    }
-                };
+                        ),
+                    )?;
+                    false
+                }
+            };
             if !has {
                 need_grant = true;
             }
@@ -771,50 +738,6 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             }
         }
     });
-
-    for path in &payload.deny_write_paths {
-        if !seen_deny_paths.insert(path.clone()) {
-            continue;
-        }
-
-        // These are deny-write carveouts, not deny-read paths. They may come from explicit
-        // read-only-under-a-writable-root carveouts in the transformed sandbox policy, or from
-        // legacy protected children such as `.git`, `.codex`, and `.agents`.
-        //
-        // Deny ACEs attach to filesystem objects; if an explicit policy carveout does not exist
-        // during setup, the sandbox could otherwise create it later under a writable parent and
-        // bypass the carveout. Materialize missing carveouts as directories so the deny-write ACL
-        // is present before the command starts. Legacy protected children are filtered before
-        // payload creation, so this should not create sentinel directories in a workspace.
-        if !path.exists() {
-            std::fs::create_dir_all(path)
-                .with_context(|| format!("failed to create deny-write path {}", path.display()))?;
-        }
-
-        let canonical_path = canonicalize_path(path);
-        let deny_psid = if canonical_path.starts_with(&canonical_command_cwd) {
-            workspace_psid
-        } else {
-            cap_psid
-        };
-
-        match unsafe { add_deny_write_ace(path, deny_psid) } {
-            Ok(true) => {
-                log_line(
-                    log,
-                    &format!("applied deny ACE to protect {}", path.display()),
-                )?;
-            }
-            Ok(false) => {}
-            Err(err) => {
-                refresh_errors.push(format!("deny ACE failed on {}: {err}", path.display()));
-                log_line(
-                    log,
-                    &format!("deny ACE failed on {}: {err}", path.display()),
-                )?;
-            }
-        }
-    }
 
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
@@ -950,56 +873,10 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     if refresh_only && !refresh_errors.is_empty() {
         log_line(
             log,
-            &format!("setup refresh completed with errors: {refresh_errors:?}"),
+            &format!("setup refresh completed with errors: {:?}", refresh_errors),
         )?;
         anyhow::bail!("setup refresh had errors");
     }
     log_note("setup binary completed", Some(sbx_dir));
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Payload;
-    use super::SETUP_VERSION;
-    use codex_otel::StatsigMetricsSettings;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    fn payload_json() -> serde_json::Value {
-        json!({
-            "version": SETUP_VERSION,
-            "offline_username": "CodexSandboxOffline",
-            "online_username": "CodexSandboxOnline",
-            "codex_home": "C:\\codex-home",
-            "command_cwd": "C:\\workspace",
-            "read_roots": [],
-            "write_roots": [],
-            "proxy_ports": [],
-            "real_user": "User",
-        })
-    }
-
-    #[test]
-    fn payload_defaults_otel_absent() {
-        let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
-
-        assert_eq!(payload.otel, None);
-    }
-
-    #[test]
-    fn payload_accepts_otel_settings() {
-        let mut payload = payload_json();
-        payload["otel"] = json!({
-            "environment": "prod",
-        });
-        let payload: Payload = serde_json::from_value(payload).expect("payload");
-
-        assert_eq!(
-            payload.otel,
-            Some(StatsigMetricsSettings {
-                environment: "prod".to_string(),
-            })
-        );
-    }
 }

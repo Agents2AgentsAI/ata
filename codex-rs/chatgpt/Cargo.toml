@@ -15,7 +15,7 @@ codex-core = { workspace = true }
 codex-utils-cli = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
-codex-git-utils = { workspace = true }
+codex-utils-git = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

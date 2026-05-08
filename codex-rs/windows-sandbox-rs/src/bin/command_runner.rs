@@ -1,4 +1,4 @@
-#[path = "../elevated/command_runner_win.rs"]
+#[path = "../command_runner_win.rs"]
 mod win;
 
 #[cfg(target_os = "windows")]

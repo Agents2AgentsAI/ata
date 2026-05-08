@@ -590,6 +590,11 @@ fn deserialize_cache_entry(output: FetchOutput) -> Result<RepoHealth> {
     }
 }
 
+// The per-repo lock intentionally serializes the entire clone/fetch flow.
+// Multiple awaits inside (filesystem stat, git clone, git rev-parse) all run
+// while the guard is held; that is the desired behavior so two concurrent
+// callers do not race to clone the same cache directory.
+#[allow(clippy::await_holding_invalid_type)]
 async fn ensure_cloned(repo_ref: &RepoRef) -> Result<RepoCheckout> {
     let cache_root = repo_cache_dir();
     tokio::fs::create_dir_all(&cache_root)

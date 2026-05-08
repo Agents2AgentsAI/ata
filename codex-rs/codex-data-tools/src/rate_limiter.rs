@@ -65,6 +65,11 @@ impl RateLimiter {
         Self { states }
     }
 
+    // The request-times mutex is intentionally held across the
+    // sleep().await: the sliding window must reflect "in flight" requests so
+    // that only one waiter resumes per cycle. Releasing the lock would let
+    // multiple waiters simultaneously refill the window past max requests.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn acquire(&self, api: DataApi) -> crate::error::Result<RateLimitPermit> {
         let state = self.states.get(&api).ok_or_else(|| {
             crate::error::DataError::Internal(format!("no rate limit configured for {api}"))

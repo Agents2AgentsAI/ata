@@ -1,4 +1,9 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+// app-server's session-state holds tokio::sync::Mutex guards across awaits in
+// the bespoke event handling and message processor critical sections so the
+// thread-state mutations remain consistent with downstream notifications.
+// Each site is intentional; allowing crate-wide rather than dotting every fn.
+#![allow(clippy::await_holding_invalid_type)]
 
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_requirements::cloud_requirements_loader;

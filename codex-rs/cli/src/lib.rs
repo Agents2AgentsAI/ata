@@ -1,3 +1,7 @@
+// The optional  feature is intentionally not declared in Cargo.toml
+// on the public release branch (its codex-coordination dep lives in the
+// private repo). Allow the resulting unexpected-cfg warning so the \ blocks still type-check on the public branch.
+#![allow(unexpected_cfgs)]
 pub mod debug_sandbox;
 mod exit_status;
 pub mod login;

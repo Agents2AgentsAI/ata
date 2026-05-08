@@ -22,8 +22,11 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-codex-git-utils = { workspace = true }
+codex-utils-git = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lints]
 workspace = true
+
+[package.metadata.cargo-shear]
+ignored = ["codex-utils-git"]

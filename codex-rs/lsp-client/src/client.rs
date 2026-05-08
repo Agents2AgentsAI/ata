@@ -373,6 +373,11 @@ impl LspClient {
     // -----------------------------------------------------------------------
 
     /// Notify the server about a file being opened or changed (full-document sync).
+    // The version map must be checked-then-updated atomically; concurrent calls
+    // from different tasks must not both see the same `is_new` value. The
+    // explicit drop(versions) before the LSP notifications keeps the critical
+    // section short.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn notify_open(&self, path: &Path) -> Result<(), LspError> {
         let metadata = tokio::fs::metadata(path).await.map_err(LspError::Io)?;
         if metadata.len() > MAX_SYNC_FILE_SIZE {
@@ -771,7 +776,11 @@ impl LspClient {
     pub async fn shutdown(&self) {
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.send_request("shutdown", None)).await;
         let _ = self.send_notification("exit", None).await;
-        if let Some(mut child) = self.child.lock().await.take() {
+        let child_to_kill = {
+            let mut guard = self.child.lock().await;
+            guard.take()
+        };
+        if let Some(mut child) = child_to_kill {
             let _ = child.kill().await;
         }
     }
@@ -899,6 +908,11 @@ impl LspClient {
         self.write_message(body).await
     }
 
+    // The trace file is serialized: only one writer holds the lock at a time, and
+    // we explicitly await write_all/flush while holding it so each event is
+    // written atomically. Releasing across await would let writes from concurrent
+    // calls interleave on the same file.
+    #[allow(clippy::await_holding_invalid_type)]
     async fn trace_event(
         &self,
         kind: &'static str,
@@ -1100,6 +1114,10 @@ fn workspace_symbol_to_info(sym: WorkspaceSymbol) -> Option<SymbolInformation> {
     })
 }
 
+// The LSP framed-message lock must be held across the header and body writes;
+// otherwise concurrent calls would interleave headers and bodies and produce
+// malformed JSON-RPC frames.
+#[allow(clippy::await_holding_invalid_type)]
 async fn write_framed_message(
     writer: &Arc<Mutex<ChildStdin>>,
     body: &[u8],

@@ -2,6 +2,7 @@
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_windows_sandbox::SandboxPolicy;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_process_as_user;
@@ -12,7 +13,6 @@ use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::parse_policy;
 use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::SandboxPolicy;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -20,9 +20,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
-use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
@@ -30,13 +30,13 @@ use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
-use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
-use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
-use windows_sys::Win32::System::Threading::INFINITE;
 
 #[path = "cwd_junction.rs"]
 mod cwd_junction;
@@ -202,7 +202,9 @@ pub fn main() -> Result<()> {
             // Fail-safe: if we can't determine the state, assume the helper might be running and
             // use the junction path to avoid CWD failures on unreadable ancestors.
             log_note(
-                &format!("junction: read_acl_mutex_exists failed: {err}; assuming read ACL helper is running"),
+                &format!(
+                    "junction: read_acl_mutex_exists failed: {err}; assuming read ACL helper is running"
+                ),
                 log_dir,
             );
             true

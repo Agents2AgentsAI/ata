@@ -232,7 +232,11 @@ impl ResponsesWebsocketConnection {
         rewrite_openai_url_file_blocks_in_payload(&mut request_body);
 
         let current_span = Span::current();
-        tokio::spawn(
+        // The streaming task owns the websocket and must hold its mutex across
+        // every send/recv await for the lifetime of the response. Splitting the
+        // lock would interleave frames from concurrent responses.
+        #[allow(clippy::await_holding_invalid_type)]
+        let _stream_task = tokio::spawn(
             async move {
                 if let Some(model) = server_model {
                     let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;

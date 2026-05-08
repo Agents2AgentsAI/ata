@@ -27,3 +27,6 @@ uuid = { workspace = true }
 wiremock = { workspace = true }
 core_test_support = { path = "../../../core/tests/common" }
 shlex = { workspace = true }
+
+[lints]
+workspace = true

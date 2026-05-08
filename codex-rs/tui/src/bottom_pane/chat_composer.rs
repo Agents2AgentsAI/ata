@@ -7349,6 +7349,7 @@ mod tests {
                 path: PathBuf::from("src/main.rs"),
                 root: PathBuf::from("/tmp"),
                 indices: None,
+                match_type: codex_file_search::MatchType::File,
             }],
         );
 

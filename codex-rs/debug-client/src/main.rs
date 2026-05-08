@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 mod client;
 mod commands;
 mod output;

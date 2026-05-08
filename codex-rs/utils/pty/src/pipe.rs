@@ -3,9 +3,9 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use tokio::io::AsyncRead;
@@ -64,11 +64,7 @@ fn kill_process(pid: u32) -> io::Result<()> {
         let success = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
         let err = io::Error::last_os_error();
         winapi::um::handleapi::CloseHandle(handle);
-        if success == 0 {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        if success == 0 { Err(err) } else { Ok(()) }
     }
 }
 
@@ -167,13 +163,19 @@ async fn spawn_process_with_stdin_mode(
     let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
         let writer = Arc::new(tokio::sync::Mutex::new(stdin));
-        tokio::spawn(async move {
+        // The stdin writer task is the sole holder of this mutex; we still
+        // wrap stdin in a Mutex so external callers can address the writer
+        // through a clone if needed. Holding the guard across write_all/flush
+        // is intentional: the byte buffer must reach stdin atomically.
+        #[allow(clippy::await_holding_invalid_type)]
+        let task = tokio::spawn(async move {
             while let Some(bytes) = writer_rx.recv().await {
                 let mut guard = writer.lock().await;
                 let _ = guard.write_all(&bytes).await;
                 let _ = guard.flush().await;
             }
-        })
+        });
+        task
     } else {
         drop(writer_rx);
         tokio::spawn(async {})

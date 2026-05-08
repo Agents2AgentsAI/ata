@@ -394,6 +394,9 @@ mod tests {
         assert_eq!(owned, processed);
     }
 
+    // Cache tests serialize through lock_cache_tests; the guard is held
+    // across the tokio::test body intentionally.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_returns_same_result_for_unchanged_file() {
         let _lock = lock_cache_tests().await;
@@ -407,6 +410,9 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    // Cache tests serialize through lock_cache_tests; the guard is held
+    // across the tokio::test body intentionally.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_invalidates_on_file_change() {
         let _lock = lock_cache_tests().await;
@@ -445,6 +451,9 @@ mod tests {
         assert_eq!(parse_cache_capacity(" 32 "), NonZeroUsize::new(32));
     }
 
+    // Cache tests serialize through lock_cache_tests; the guard is held
+    // across the tokio::test body intentionally.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_handles_concurrent_reads_for_same_file() {
         let _lock = lock_cache_tests().await;
@@ -469,6 +478,9 @@ mod tests {
         }
     }
 
+    // Cache tests serialize through lock_cache_tests; the guard is held
+    // across the tokio::test body intentionally.
+    #[allow(clippy::await_holding_invalid_type)]
     #[tokio::test(flavor = "multi_thread")]
     async fn cache_covers_all_processable_files() {
         let _lock = lock_cache_tests().await;

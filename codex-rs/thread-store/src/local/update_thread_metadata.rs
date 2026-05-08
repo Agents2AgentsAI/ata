@@ -224,7 +224,7 @@ async fn apply_thread_git_info_to_rollout(
     }
 
     session_meta.git = Some(GitInfo {
-        commit_hash: sha.as_deref().map(codex_git_utils::GitSha::new),
+        commit_hash: sha.as_deref().map(codex_utils_git::GitSha::new),
         branch: branch.clone(),
         repository_url: origin_url.clone(),
     });

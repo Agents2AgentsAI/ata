@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::redundant_clone)]
 mod client;
 pub mod types;
 

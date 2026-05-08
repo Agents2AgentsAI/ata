@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use chrono::DateTime;
 use chrono::Utc;
-use codex_git_utils::GitSha;
+use codex_utils_git::GitSha;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;

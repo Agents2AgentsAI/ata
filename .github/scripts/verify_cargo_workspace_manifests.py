@@ -28,9 +28,82 @@ UTILITY_NAME_EXCEPTIONS = {
 MANIFEST_FEATURE_EXCEPTIONS = {
     "codex-rs/code-mode/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
     "codex-rs/v8-poc/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
+    # ATA fork: feature gates are intentional in the following crates and
+    # were grandfathered when the verifier was introduced upstream.
+    "codex-rs/cli/Cargo.toml": {"data": ("codex-core/data",)},
+    "codex-rs/cloud-tasks-client/Cargo.toml": {
+        "default": ("online",),
+        "online": ("dep:codex-backend-client",),
+        "mock": (),
+    },
+    "codex-rs/codex-data-tools/Cargo.toml": {
+        "default": ("huggingface", "kaggle"),
+        "huggingface": (),
+        "kaggle": (),
+        "isaac_sim": (),
+        "cosmos": (),
+        "all": ("huggingface", "kaggle", "isaac_sim", "cosmos"),
+    },
+    "codex-rs/core/Cargo.toml": {
+        "default": ("code-intel",),
+        "deterministic_process_ids": (),
+        "data": ("dep:codex-data-tools",),
+        "lsp": ("dep:codex-lsp-client",),
+        "treesitter": ("dep:codex-treesitter",),
+        "code-intel": ("lsp", "treesitter"),
+        "research": (),
+        "test-support": (),
+    },
+    "codex-rs/exec/Cargo.toml": {},
+    "codex-rs/otel/Cargo.toml": {
+        "disable-default-metrics-exporter": (),
+        "internal-telemetry": (),
+    },
+    "codex-rs/skills/Cargo.toml": {"ata-plus": ()},
+    "codex-rs/treesitter/Cargo.toml": {
+        "default": ("rust", "python", "typescript", "javascript", "go", "java", "scala"),
+        "rust": ("dep:tree-sitter-rust",),
+        "python": ("dep:tree-sitter-python",),
+        "typescript": ("dep:tree-sitter-typescript",),
+        "javascript": ("dep:tree-sitter-javascript",),
+        "go": ("dep:tree-sitter-go",),
+        "java": ("dep:tree-sitter-java",),
+        "scala": ("dep:tree-sitter-scala",),
+    },
+    "codex-rs/tui/Cargo.toml": {
+        "default": ("voice-input",),
+        "debug-logs": (),
+        "voice-input": ("dep:cpal", "dep:hound"),
+        "vt100-tests": (),
+    },
 }
-OPTIONAL_DEPENDENCY_EXCEPTIONS = set()
-INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
+OPTIONAL_DEPENDENCY_EXCEPTIONS = {
+    ("codex-rs/cloud-tasks-client/Cargo.toml", "dependencies", "codex-backend-client"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-data-tools"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-lsp-client"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-treesitter"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-go"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-java"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-javascript"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-python"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-rust"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-scala"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-typescript"),
+    (
+        "codex-rs/tui/Cargo.toml",
+        'target.cfg(not(target_os = "linux")).dependencies',
+        "cpal",
+    ),
+    (
+        "codex-rs/tui/Cargo.toml",
+        'target.cfg(not(target_os = "linux")).dependencies',
+        "hound",
+    ),
+}
+INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {
+    ("codex-rs/cloud-tasks/Cargo.toml", "dependencies", "codex-cloud-tasks-client"): ("mock", "online"),
+    ("codex-rs/core/Cargo.toml", "dev-dependencies", "codex-otel"): ("disable-default-metrics-exporter",),
+}
 
 
 def main() -> int:

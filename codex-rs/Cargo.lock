@@ -1628,9 +1628,9 @@ dependencies = [
  "clap",
  "codex-connectors",
  "codex-core",
- "codex-git-utils",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
+ "codex-utils-git",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -1781,7 +1781,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "codex-backend-client",
- "codex-git-utils",
+ "codex-utils-git",
  "diffy",
  "serde",
  "serde_json",
@@ -1851,7 +1851,6 @@ dependencies = [
  "codex-data-tools",
  "codex-execpolicy",
  "codex-file-search",
- "codex-git-utils",
  "codex-hooks",
  "codex-keyring-store",
  "codex-lsp-client",
@@ -1871,6 +1870,7 @@ dependencies = [
  "codex-utils-cache",
  "codex-utils-cargo-bin",
  "codex-utils-file",
+ "codex-utils-git",
  "codex-utils-home-dir",
  "codex-utils-image",
  "codex-utils-pty",
@@ -2118,22 +2118,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
-]
-
-[[package]]
-name = "codex-git-utils"
-version = "0.0.0"
-dependencies = [
- "assert_matches",
- "once_cell",
- "pretty_assertions",
- "regex",
- "schemars 0.8.22",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "ts-rs",
- "walkdir",
 ]
 
 [[package]]
@@ -2390,9 +2374,9 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-execpolicy",
- "codex-git-utils",
  "codex-utils-absolute-path",
  "codex-utils-file",
+ "codex-utils-git",
  "codex-utils-home-dir",
  "codex-utils-image",
  "icu_decimal",
@@ -2603,8 +2587,8 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "codex-git-utils",
  "codex-protocol",
+ "codex-utils-git",
  "dirs",
  "log",
  "owo-colors",
@@ -2830,6 +2814,22 @@ name = "codex-utils-fuzzy-match"
 version = "0.0.0"
 
 [[package]]
+name = "codex-utils-git"
+version = "0.0.0"
+dependencies = [
+ "assert_matches",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "schemars 0.8.22",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "ts-rs",
+ "walkdir",
+]
+
+[[package]]
 name = "codex-utils-home-dir"
 version = "0.0.0"
 dependencies = [
@@ -2846,6 +2846,7 @@ dependencies = [
  "codex-utils-cache",
  "image",
  "mime_guess",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

@@ -76,3 +76,6 @@ opentelemetry_sdk = { workspace = true, features = [
     "testing",
 ] }
 pretty_assertions = { workspace = true }
+
+[package.metadata.cargo-shear]
+ignored = ["codex-app-server-protocol"]

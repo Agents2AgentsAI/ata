@@ -1,8 +1,8 @@
 use anyhow::Context;
-use codex_git_utils::GitBaselineDiff;
-use codex_git_utils::diff_since_latest_init;
-use codex_git_utils::ensure_git_baseline_repository;
-use codex_git_utils::reset_git_repository;
+use codex_utils_git::GitBaselineDiff;
+use codex_utils_git::diff_since_latest_init;
+use codex_utils_git::ensure_git_baseline_repository;
+use codex_utils_git::reset_git_repository;
 use std::path::Path;
 
 /// Prepares the memory directory for git-baseline diffing.

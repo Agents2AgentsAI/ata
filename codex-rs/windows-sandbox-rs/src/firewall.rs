@@ -7,11 +7,8 @@ use std::io::Write;
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
-use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_TCP;
-use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_UDP;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_OUT;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
@@ -30,8 +27,6 @@ use codex_windows_sandbox::SetupFailure;
 // This is the stable identifier we use to find/update the rule idempotently.
 // It intentionally does not change between installs.
 const OFFLINE_BLOCK_RULE_NAME: &str = "codex_sandbox_offline_block_outbound";
-const OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "codex_sandbox_offline_block_loopback_tcp";
-const OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "codex_sandbox_offline_block_loopback_udp";
 
 // Friendly text shown in the firewall UI.
 const OFFLINE_BLOCK_RULE_FRIENDLY: &str = "Ata Sandbox Offline - Block Outbound";
@@ -66,15 +61,11 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
             // Block all outbound IP protocols for this user.
             ensure_block_rule(
                 &rules,
-                &BlockRuleSpec {
-                    internal_name: OFFLINE_BLOCK_RULE_NAME,
-                    friendly_desc: OFFLINE_BLOCK_RULE_FRIENDLY,
-                    protocol: NET_FW_IP_PROTOCOL_ANY.0,
-                    local_user_spec: &local_user_spec,
-                    offline_sid,
-                    remote_addresses: Some(NON_LOOPBACK_REMOTE_ADDRESSES),
-                    remote_ports: None,
-                },
+                OFFLINE_BLOCK_RULE_NAME,
+                OFFLINE_BLOCK_RULE_FRIENDLY,
+                NET_FW_IP_PROTOCOL_ANY.0,
+                &local_user_spec,
+                offline_sid,
                 log,
             )?;
             Ok(())
@@ -87,22 +78,16 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
     result
 }
 
-fn remove_rule_if_present(rules: &INetFwRules, internal_name: &str, log: &mut File) -> Result<()> {
+fn ensure_block_rule(
+    rules: &windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules,
+    internal_name: &str,
+    friendly_desc: &str,
+    protocol: i32,
+    local_user_spec: &str,
+    offline_sid: &str,
+    log: &mut File,
+) -> Result<()> {
     let name = BSTR::from(internal_name);
-    if unsafe { rules.Item(&name) }.is_ok() {
-        unsafe { rules.Remove(&name) }.map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                format!("Rules::Remove failed for {internal_name}: {err:?}"),
-            ))
-        })?;
-        log_line(log, &format!("firewall rule removed name={internal_name}"))?;
-    }
-    Ok(())
-}
-
-fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut File) -> Result<()> {
-    let name = BSTR::from(spec.internal_name);
     let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
         Ok(existing) => existing.cast().map_err(|err| {
             anyhow::Error::new(SetupFailure::new(
@@ -127,7 +112,13 @@ fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut Fi
                 ))
             })?;
             // Set all properties before adding the rule so we don't leave half-configured rules.
-            configure_rule(&new_rule, spec)?;
+            configure_rule(
+                &new_rule,
+                friendly_desc,
+                protocol,
+                local_user_spec,
+                offline_sid,
+            )?;
             unsafe { rules.Add(&new_rule) }.map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
@@ -139,24 +130,26 @@ fn ensure_block_rule(rules: &INetFwRules, spec: &BlockRuleSpec<'_>, log: &mut Fi
     };
 
     // Always re-apply fields to keep the setup idempotent.
-    configure_rule(&rule, spec)?;
-
-    let remote_addresses_log = spec.remote_addresses.unwrap_or("*");
-    let remote_ports_log = spec.remote_ports.unwrap_or("*");
+    configure_rule(&rule, friendly_desc, protocol, local_user_spec, offline_sid)?;
 
     log_line(
         log,
         &format!(
-            "firewall rule configured name={} protocol={} RemoteAddresses={remote_addresses_log} RemotePorts={remote_ports_log} LocalUserAuthorizedList={}",
-            spec.internal_name, spec.protocol, spec.local_user_spec
+            "firewall rule configured name={internal_name} protocol={protocol} LocalUserAuthorizedList={local_user_spec}"
         ),
     )?;
     Ok(())
 }
 
-fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
+fn configure_rule(
+    rule: &INetFwRule3,
+    friendly_desc: &str,
+    protocol: i32,
+    local_user_spec: &str,
+    offline_sid: &str,
+) -> Result<()> {
     unsafe {
-        rule.SetDescription(&BSTR::from(spec.friendly_desc))
+        rule.SetDescription(&BSTR::from(friendly_desc))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
@@ -187,8 +180,13 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                 format!("SetProfiles failed: {err:?}"),
             ))
         })?;
-        configure_rule_network_scope(rule, spec)?;
-        rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
+        rule.SetProtocol(protocol).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetProtocol failed: {err:?}"),
+            ))
+        })?;
+        rule.SetLocalUserAuthorizedList(&BSTR::from(local_user_spec))
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
@@ -205,192 +203,19 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
         ))
     })?;
     let actual_str = actual.to_string();
-    if !actual_str.contains(spec.offline_sid) {
+    if !actual_str.contains(offline_sid) {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleVerifyFailed,
             format!(
-                "offline firewall rule user scope mismatch: expected SID {}, got {actual_str}",
-                spec.offline_sid
+                "offline firewall rule user scope mismatch: expected SID {offline_sid}, got {actual_str}"
             ),
         )));
     }
     Ok(())
 }
 
-fn configure_rule_network_scope(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
-    unsafe {
-        rule.SetProtocol(spec.protocol).map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                format!("SetProtocol failed: {err:?}"),
-            ))
-        })?;
-        let remote_addresses = spec.remote_addresses.unwrap_or("*");
-        rule.SetRemoteAddresses(&BSTR::from(remote_addresses))
-            .map_err(|err| {
-                anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetRemoteAddresses failed: {err:?}"),
-                ))
-            })?;
-        if let Some(remote_ports) = spec.remote_ports {
-            rule.SetRemotePorts(&BSTR::from(remote_ports))
-                .map_err(|err| {
-                    anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                        format!("SetRemotePorts failed: {err:?}"),
-                    ))
-                })?;
-        }
-    }
-
-    Ok(())
-}
-
-fn blocked_loopback_tcp_remote_ports(proxy_ports: &[u16]) -> Option<String> {
-    let mut allowed_ports = proxy_ports
-        .iter()
-        .copied()
-        .filter(|port| *port != 0)
-        .collect::<Vec<_>>();
-    allowed_ports.sort_unstable();
-    allowed_ports.dedup();
-
-    let mut blocked_ranges = Vec::new();
-    let mut start = 1_u32;
-    for port in allowed_ports {
-        let port = u32::from(port);
-        if port < start {
-            continue;
-        }
-        if port > start {
-            blocked_ranges.push(port_range_string(start, port - 1));
-        }
-        start = port + 1;
-    }
-
-    if start <= u32::from(u16::MAX) {
-        blocked_ranges.push(port_range_string(start, u32::from(u16::MAX)));
-    }
-
-    if blocked_ranges.is_empty() {
-        None
-    } else {
-        Some(blocked_ranges.join(","))
-    }
-}
-
-fn port_range_string(start: u32, end: u32) -> String {
-    if start == end {
-        start.to_string()
-    } else {
-        format!("{start}-{end}")
-    }
-}
-
 fn log_line(log: &mut File, msg: &str) -> Result<()> {
     let ts = chrono::Utc::now().to_rfc3339();
     writeln!(log, "[{ts}] {msg}")?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn configured_remote_address_literals_are_accepted_by_firewall_com() {
-        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        assert!(hr.is_ok(), "CoInitializeEx failed: {hr:?}");
-
-        let candidates = [
-            LOOPBACK_REMOTE_ADDRESSES,
-            NON_LOOPBACK_REMOTE_ADDRESSES,
-            "*",
-        ];
-        let results = candidates.map(|remote_addresses| unsafe {
-            let rule: windows::core::Result<INetFwRule3> =
-                CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER);
-            rule.and_then(|rule| {
-                rule.SetRemoteAddresses(&BSTR::from(remote_addresses))?;
-                rule.RemoteAddresses()
-            })
-            .map(|stored| stored.to_string())
-        });
-
-        unsafe {
-            CoUninitialize();
-        }
-
-        for (remote_addresses, result) in candidates.into_iter().zip(results) {
-            assert!(
-                result.is_ok(),
-                "firewall rejected RemoteAddresses={remote_addresses:?}: {result:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn production_firewall_rule_network_scopes_are_accepted_by_firewall_com() {
-        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-        assert!(hr.is_ok(), "CoInitializeEx failed: {hr:?}");
-
-        let local_user_spec = "O:LSD:(A;;CC;;;S-1-5-18)";
-        let offline_sid = "S-1-5-18";
-        let blocked_remote_ports =
-            blocked_loopback_tcp_remote_ports(&[8080]).expect("proxy-port complement should exist");
-        let specs = [
-            BlockRuleSpec {
-                internal_name: OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME,
-                friendly_desc: OFFLINE_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY,
-                protocol: NET_FW_IP_PROTOCOL_UDP.0,
-                local_user_spec,
-                offline_sid,
-                remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
-                remote_ports: None,
-            },
-            BlockRuleSpec {
-                internal_name: OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME,
-                friendly_desc: OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
-                protocol: NET_FW_IP_PROTOCOL_TCP.0,
-                local_user_spec,
-                offline_sid,
-                remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
-                remote_ports: Some(&blocked_remote_ports),
-            },
-            BlockRuleSpec {
-                internal_name: OFFLINE_BLOCK_RULE_NAME,
-                friendly_desc: OFFLINE_BLOCK_RULE_FRIENDLY,
-                protocol: NET_FW_IP_PROTOCOL_ANY.0,
-                local_user_spec,
-                offline_sid,
-                remote_addresses: Some(NON_LOOPBACK_REMOTE_ADDRESSES),
-                remote_ports: None,
-            },
-        ];
-
-        let results = specs.each_ref().map(|spec| unsafe {
-            let rule: windows::core::Result<INetFwRule3> =
-                CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER);
-            match rule {
-                Ok(rule) => configure_rule_network_scope(&rule, spec),
-                Err(err) => Err(err.into()),
-            }
-        });
-
-        unsafe {
-            CoUninitialize();
-        }
-
-        for (spec, result) in specs.into_iter().zip(results) {
-            assert!(
-                result.is_ok(),
-                "firewall rejected network scope for rule={} protocol={} remote_addresses={:?} remote_ports={:?}: {result:?}",
-                spec.internal_name,
-                spec.protocol,
-                spec.remote_addresses,
-                spec.remote_ports
-            );
-        }
-    }
 }

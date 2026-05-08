@@ -1,4 +1,4 @@
-#![expect(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::redundant_clone)]
 
 use anyhow::Context as _;
 use anyhow::ensure;

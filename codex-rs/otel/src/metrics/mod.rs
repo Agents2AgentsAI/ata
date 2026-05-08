@@ -28,6 +28,10 @@ pub fn global() -> Option<MetricsClient> {
     GLOBAL_METRICS.get().cloned()
 }
 
+// Reserved for future Statsig configuration injection. Not yet wired up to any
+// caller in this crate, but kept on the public-private boundary so tests can
+// install a custom settings instance.
+#[allow(dead_code)]
 pub(crate) fn install_global_statsig_settings(settings: StatsigMetricsSettings) {
     let _ = GLOBAL_STATSIG_METRICS_SETTINGS.set(settings);
 }

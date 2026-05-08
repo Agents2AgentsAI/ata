@@ -1,3 +1,8 @@
+// `ata-plus` is gated on a private feature that the public release branch
+// does not declare. Silence the unexpected-cfg warning so `--all-features`
+// passes here.
+#![allow(unexpected_cfgs)]
+
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;

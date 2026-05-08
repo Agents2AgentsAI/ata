@@ -1,3 +1,7 @@
+// The shell-escalation server intentionally holds tokio::sync::MutexGuards
+// across awaits to keep the privileged session-state machine atomic.
+#![allow(clippy::await_holding_invalid_type)]
+
 #[cfg(unix)]
 mod unix;
 

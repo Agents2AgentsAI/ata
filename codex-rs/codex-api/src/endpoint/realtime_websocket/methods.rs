@@ -437,6 +437,10 @@ impl RealtimeWebsocketWriter {
 }
 
 impl RealtimeWebsocketEvents {
+    // The event stream serializes reads through this lock; only one consumer
+    // call at a time may pull the next message, and the recv() future is
+    // intentionally awaited under the lock to preserve message ordering.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn next_event(&self) -> Result<Option<RealtimeEvent>, ApiError> {
         if self.is_closed.load(Ordering::SeqCst) {
             return Ok(None);

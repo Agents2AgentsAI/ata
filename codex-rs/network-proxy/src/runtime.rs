@@ -401,6 +401,11 @@ impl NetworkProxyState {
         }
     }
 
+    // Holds the proxy state write lock across an observer notification await.
+    // The state write must be visible before any observer reacts to it, so we
+    // intentionally keep the guard live across the awaits rather than dropping
+    // it early.
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn record_blocked(&self, entry: BlockedRequest) -> Result<()> {
         self.reload_if_needed().await?;
         let blocked_for_observer = entry.clone();

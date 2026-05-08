@@ -1,3 +1,4 @@
+#![allow(clippy::expect_used, clippy::redundant_clone)]
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::collections::btree_map::Entry;

@@ -41,3 +41,6 @@ tokio = { workspace = true, features = [
 [build-dependencies]
 cc = "1"
 pkg-config = "0.3"
+
+[package.metadata.cargo-shear]
+ignored = ["pkg-config", "cc"]

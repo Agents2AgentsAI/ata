@@ -324,6 +324,10 @@ impl OAuthPersistor {
 
     /// Persists the latest stored credentials if they have changed.
     /// Deletes the credentials if they are no longer present.
+    // The authorization manager and last_credentials guards must straddle the
+    // get_credentials/save calls so the on-disk snapshot stays consistent with
+    // what the manager just returned.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn persist_if_needed(&self) -> Result<()> {
         let (client_id, maybe_credentials) = {
             let manager = self.inner.authorization_manager.clone();
@@ -376,6 +380,10 @@ impl OAuthPersistor {
         Ok(())
     }
 
+    // Holds the authorization-manager mutex across the refresh_token() await
+    // so that two concurrent requests cannot both initiate a refresh at the
+    // same time.
+    #[allow(clippy::await_holding_invalid_type)]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
         let expires_at = {
             let guard = self.inner.last_credentials.lock().await;

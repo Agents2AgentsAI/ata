@@ -2,6 +2,9 @@ use crate::harness::attributes_to_map;
 use crate::harness::find_metric;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::metrics::MetricsClient;
+use codex_otel::metrics::MetricsConfig;
+use codex_otel::metrics::Result;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
@@ -25,7 +28,7 @@ fn snapshot_collects_metrics_without_shutdown() -> Result<()> {
 
     metrics.counter(
         "codex.tool.call",
-        /*inc*/ 1,
+        1,
         &[("tool", "shell"), ("success", "true")],
     )?;
 
@@ -71,10 +74,10 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
         "gpt-5.1",
         "gpt-5.1",
         Some("account-id".to_string()),
-        /*account_email*/ None,
+        None,
         Some(TelemetryAuthMode::ApiKey),
         "test_originator".to_string(),
-        /*log_user_prompts*/ true,
+        true,
         "tty".to_string(),
         SessionSource::Cli,
     )
@@ -82,7 +85,7 @@ fn manager_snapshot_metrics_collects_without_shutdown() -> Result<()> {
 
     manager.counter(
         "codex.tool.call",
-        /*inc*/ 1,
+        1,
         &[("tool", "shell"), ("success", "true")],
     );
 
