@@ -96,3 +96,91 @@ build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_sort_by
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unnecessary_to_owned
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::unwrap_used
+
+# Phase 5: append upstream's CI/v8 bazelrc config blocks so the v8-canary,
+# Bazel CI, and argument-comment-lint workflows still work post-merge.
+# GitHub Actions CI configs.
+
+#common:remote --@rules_rust//rust/settings:pipelined_compilation
+# Enable pipelined compilation since we are not bound by local CPU count.
+# TODO(team): Evaluate if this actually helps, zbarsky is not sure, everything seems bottlenecked on `core` either way.
+common:ci --remote_download_minimal
+common:ci --keep_going
+common:ci --verbose_failures
+common:ci --build_metadata=REPO_URL=https://github.com/openai/codex.git
+common:ci --build_metadata=ROLE=CI
+common:ci --build_metadata=VISIBILITY=PUBLIC
+# not Cargo profiles. Keep CI Rust actions explicit and lean.
+# rules_rust derives debug level from Bazel toolchain/compilation-mode settings,
+common:ci --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+common:ci --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
+# Disable disk cache in CI since we have a remote one and aren't using persistent workers.
+
+common:ci --disk_cache=
+# Shared config for the main Bazel CI workflow.
+
+common:ci-bazel --config=ci
+common:ci-bazel --build_metadata=TAG_workflow=bazel
+# integration suites through the workspace-root launcher.
+# are not stable in that setup yet. Keep running the rest of the Rust
+# Bazel CI cross-compiles in several legs, and the V8-backed code-mode tests
+common:ci-bazel --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::
+# Shared config for Bazel-backed argument-comment-lint.
+
+build:argument-comment-lint --aspects=//tools/argument-comment-lint:lint_aspect.bzl%rust_argument_comment_lint_aspect
+build:argument-comment-lint --output_groups=argument_comment_lint_checks
+build:argument-comment-lint --@rules_rust//rust/toolchain/channel=nightly
+# Rearrange caches on Windows so they're on the same volume as the checkout.
+
+common:ci-windows --config=ci-bazel
+common:ci-windows --build_metadata=TAG_os=windows
+common:ci-windows --repo_contents_cache=D:/a/.cache/bazel-repo-contents-cache
+# Linux crossbuilds don't work until we untangle the libc constraint mess.
+# On linux, we can do a full remote build/test, by targeting the right (x86/arm) runners, so we have coverage of both.
+
+# We have platform-specific tests, so we want to execute the tests on all platforms using the strongest sandboxing available on each platform.
+# We prefer to run the build actions entirely remotely so we can dial up the concurrency.
+
+common:ci-linux --config=ci-bazel
+common:ci-linux --build_metadata=TAG_os=linux
+common:ci-linux --config=remote
+common:ci-linux --strategy=remote
+common:ci-linux --platforms=//:rbe
+# On mac, we can run all the build actions remotely but test actions locally.
+
+common:ci-macos --config=ci-bazel
+common:ci-macos --build_metadata=TAG_os=macos
+common:ci-macos --config=remote
+common:ci-macos --strategy=remote
+common:ci-macos --strategy=TestRunner=darwin-sandbox,local
+# still run against Windows binaries.
+# on the Windows runner so Bazel's normal test sharding and flaky-test retries
+# On Windows, use Linux remote execution for build actions but keep test actions
+
+common:ci-windows-cross --config=ci-windows
+common:ci-windows-cross --build_metadata=TAG_windows_cross_compile=true
+common:ci-windows-cross --config=remote
+common:ci-windows-cross --host_platform=//:rbe
+common:ci-windows-cross --strategy=remote
+common:ci-windows-cross --strategy=TestRunner=local
+common:ci-windows-cross --local_test_jobs=4
+common:ci-windows-cross --test_env=RUST_TEST_THREADS=1
+# run on the Windows runner.
+# binaries currently hang in PowerShell AST parser tests when those binaries are
+# Native Windows CI still covers the PowerShell tests. The cross-built gnullvm
+common:ci-windows-cross --test_env=CODEX_BAZEL_TEST_SKIP_FILTERS=suite::code_mode::,powershell
+common:ci-windows-cross --platforms=//:windows_x86_64_gnullvm
+common:ci-windows-cross --extra_execution_platforms=//:rbe,//:windows_x86_64_msvc
+common:ci-windows-cross --extra_toolchains=//:windows_gnullvm_tests_on_msvc_host_toolchain
+# Linux-only V8 CI config.
+
+common:ci-v8 --config=ci
+common:ci-v8 --build_metadata=TAG_workflow=v8
+common:ci-v8 --build_metadata=TAG_os=linux
+common:ci-v8 --config=remote
+common:ci-v8 --strategy=remote
+# artifact migration ships matching Rust feature selection for Cargo consumers.
+# Keep currently published rusty_v8 release artifacts non-sandboxed until the
+
+common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
+common:v8-release-compat --@v8//:v8_enable_sandbox=False
