@@ -2,7 +2,6 @@
 use crate::config::NetworkMode;
 use anyhow::Context;
 use anyhow::Result;
-use anyhow::bail;
 use anyhow::ensure;
 use globset::GlobBuilder;
 use globset::GlobSet;
@@ -32,7 +31,7 @@ impl Host {
 /// Returns true if the host is a loopback hostname or IP literal.
 pub fn is_loopback_host(host: &Host) -> bool {
     let host = host.as_str();
-    let host = unscoped_ip_literal(host).unwrap_or(host);
+    let host = host.split_once('%').map(|(ip, _)| ip).unwrap_or(host);
     if host == "localhost" {
         return true;
     }
@@ -59,14 +58,14 @@ fn is_non_public_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_unspecified()
         || ip.is_multicast()
         || ip.is_broadcast()
-        || ipv4_in_cidr(ip, [0, 0, 0, 0], /*prefix*/ 8) // "this network" (RFC 1122)
-        || ipv4_in_cidr(ip, [100, 64, 0, 0], /*prefix*/ 10) // CGNAT (RFC 6598)
-        || ipv4_in_cidr(ip, [192, 0, 0, 0], /*prefix*/ 24) // IETF Protocol Assignments (RFC 6890)
-        || ipv4_in_cidr(ip, [192, 0, 2, 0], /*prefix*/ 24) // TEST-NET-1 (RFC 5737)
-        || ipv4_in_cidr(ip, [198, 18, 0, 0], /*prefix*/ 15) // Benchmarking (RFC 2544)
-        || ipv4_in_cidr(ip, [198, 51, 100, 0], /*prefix*/ 24) // TEST-NET-2 (RFC 5737)
-        || ipv4_in_cidr(ip, [203, 0, 113, 0], /*prefix*/ 24) // TEST-NET-3 (RFC 5737)
-        || ipv4_in_cidr(ip, [240, 0, 0, 0], /*prefix*/ 4) // Reserved (RFC 6890)
+        || ipv4_in_cidr(ip, [0, 0, 0, 0], 8) // "this network" (RFC 1122)
+        || ipv4_in_cidr(ip, [100, 64, 0, 0], 10) // CGNAT (RFC 6598)
+        || ipv4_in_cidr(ip, [192, 0, 0, 0], 24) // IETF Protocol Assignments (RFC 6890)
+        || ipv4_in_cidr(ip, [192, 0, 2, 0], 24) // TEST-NET-1 (RFC 5737)
+        || ipv4_in_cidr(ip, [198, 18, 0, 0], 15) // Benchmarking (RFC 2544)
+        || ipv4_in_cidr(ip, [198, 51, 100, 0], 24) // TEST-NET-2 (RFC 5737)
+        || ipv4_in_cidr(ip, [203, 0, 113, 0], 24) // TEST-NET-3 (RFC 5737)
+        || ipv4_in_cidr(ip, [240, 0, 0, 0], 4) // Reserved (RFC 6890)
 }
 
 fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
@@ -103,48 +102,24 @@ pub fn normalize_host(host: &str) -> String {
     if host.starts_with('[')
         && let Some(end) = host.find(']')
     {
-        return normalize_dns_host_or_ip_literal(&host[1..end]);
+        return normalize_dns_host(&host[1..end]);
     }
 
     // The proxy stack should typically hand us a host without a port, but be
     // defensive and strip `:port` when there is exactly one `:`.
     if host.bytes().filter(|b| *b == b':').count() == 1 {
         let host = host.split(':').next().unwrap_or_default();
-        return normalize_dns_host_or_ip_literal(host);
+        return normalize_dns_host(host);
     }
 
     // Avoid mangling unbracketed IPv6 literals, but strip trailing dots so fully qualified domain
     // names are treated the same as their dotless variants.
-    normalize_dns_host_or_ip_literal(host)
+    normalize_dns_host(host)
 }
 
-fn normalize_dns_host_or_ip_literal(host: &str) -> String {
+fn normalize_dns_host(host: &str) -> String {
     let host = host.to_ascii_lowercase();
-    let host = host.trim_end_matches('.');
-    if let Some(ip) = normalize_ip_literal(host) {
-        return ip;
-    }
-    host.to_string()
-}
-
-pub(crate) fn unscoped_ip_literal(host: &str) -> Option<&str> {
-    let (ip, _) = host.split_once('%')?;
-    ip.parse::<IpAddr>().ok()?;
-    Some(ip)
-}
-
-fn normalize_ip_literal(host: &str) -> Option<String> {
-    if host.parse::<IpAddr>().is_ok() {
-        return Some(host.to_string());
-    }
-    for delimiter in ["%25", "%"] {
-        if let Some((ip, scope)) = host.split_once(delimiter)
-            && ip.parse::<IpAddr>().is_ok()
-        {
-            return Some(format!("{ip}%{scope}"));
-        }
-    }
-    None
+    host.trim_end_matches('.').to_string()
 }
 
 fn normalize_pattern(pattern: &str) -> String {
@@ -358,7 +333,7 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_trailing_dots() {
-        let set = compile_denylist_globset(&["Example.COM.".to_string()]).unwrap();
+        let set = compile_globset(&["Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(false, set.is_match("api.example.com"));
@@ -366,25 +341,15 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_wildcards() {
-        let set = compile_denylist_globset(&["*.Example.COM.".to_string()]).unwrap();
+        let set = compile_globset(&["*.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("api.example.com"));
         assert_eq!(false, set.is_match("example.com"));
     }
 
     #[test]
-    fn compile_globset_supports_mid_label_wildcards() {
-        let set = compile_denylist_globset(&["region*.v2.argotunnel.com".to_string()]).unwrap();
-
-        assert_eq!(true, set.is_match("region1.v2.argotunnel.com"));
-        assert_eq!(true, set.is_match("region.v2.argotunnel.com"));
-        assert_eq!(false, set.is_match("xregion1.v2.argotunnel.com"));
-        assert_eq!(false, set.is_match("foo.region1.v2.argotunnel.com"));
-    }
-
-    #[test]
     fn compile_globset_normalizes_apex_and_subdomains() {
-        let set = compile_denylist_globset(&["**.Example.COM.".to_string()]).unwrap();
+        let set = compile_globset(&["**.Example.COM.".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("example.com"));
         assert_eq!(true, set.is_match("api.example.com"));
@@ -392,18 +357,9 @@ mod tests {
 
     #[test]
     fn compile_globset_normalizes_bracketed_ipv6_literals() {
-        let set = compile_denylist_globset(&["[::1]".to_string()]).unwrap();
+        let set = compile_globset(&["[::1]".to_string()]).unwrap();
 
         assert_eq!(true, set.is_match("::1"));
-    }
-
-    #[test]
-    fn compile_globset_preserves_scoped_ipv6_literals() {
-        let set = compile_denylist_globset(&["[fe80::1%25lo0]".to_string()]).unwrap();
-
-        assert_eq!(true, set.is_match("fe80::1%lo0"));
-        assert_eq!(false, set.is_match("fe80::1%lo1"));
-        assert_eq!(false, set.is_match("fe80::1"));
     }
 
     #[test]
@@ -475,12 +431,5 @@ mod tests {
     fn normalize_host_strips_brackets_for_ipv6() {
         assert_eq!(normalize_host("[::1]"), "::1");
         assert_eq!(normalize_host("[::1]:443"), "::1");
-    }
-
-    #[test]
-    fn normalize_host_preserves_ipv6_scope_ids() {
-        assert_eq!(normalize_host("fe80::1%lo0"), "fe80::1%lo0");
-        assert_eq!(normalize_host("[fe80::1%lo0]"), "fe80::1%lo0");
-        assert_eq!(normalize_host("[fe80::1%25lo0]"), "fe80::1%lo0");
     }
 }
