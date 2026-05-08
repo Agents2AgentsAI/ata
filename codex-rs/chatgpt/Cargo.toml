@@ -20,12 +20,9 @@ codex-plugin = { workspace = true }
 codex-utils-cli = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["full"] }
-codex-git = { workspace = true }
 
 [dev-dependencies]
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-codex-utils-cargo-bin = { workspace = true }
-serde_json = { workspace = true }
