@@ -30,8 +30,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use codex_core::features::FEATURES;
-use codex_core::features::Feature;
+use codex_features::FEATURES;
+use codex_features::Feature;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -71,7 +71,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
         format!("while [ ! -f '{release_marker_escaped}' ]; do sleep 0.01; done");
     let response = create_shell_command_sse_response(
         vec!["/bin/sh".to_string(), "-c".to_string(), wait_for_interrupt],
-        None,
+        /*workdir*/ None,
         Some(5000),
         "call-zsh-fork",
     )?;
@@ -166,7 +166,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     assert!(command.contains("/bin/sh -c"));
     assert!(command.contains("sleep 0.01"));
     assert!(command.contains(&release_marker.display().to_string()));
-    assert_eq!(cwd, workspace);
+    assert_eq!(cwd.as_path(), workspace.as_path());
 
     mcp.interrupt_turn_and_wait_for_aborted(thread.id, turn.id, DEFAULT_READ_TIMEOUT)
         .await?;
@@ -197,7 +197,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
                 "-c".to_string(),
                 "print(42)".to_string(),
             ],
-            None,
+            /*workdir*/ None,
             Some(5000),
             "call-zsh-fork-decline",
         )?,
@@ -332,7 +332,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
             "-c".to_string(),
             "print(42)".to_string(),
         ],
-        None,
+        /*workdir*/ None,
         Some(5000),
         "call-zsh-fork-cancel",
     )?];
@@ -554,7 +554,6 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![workspace.clone().try_into()?],
-                read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -823,7 +822,7 @@ fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
         );
         return Ok(None);
     }
-    match core_test_support::fetch_dotslash_file(&dotslash_zsh, None) {
+    match core_test_support::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
         Ok(path) => return Ok(Some(path)),
         Err(error) => {
             eprintln!("failed to fetch vendored zsh via dotslash: {error:#}");

@@ -4,12 +4,12 @@ use std::fs;
 use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::config::types::Personality;
-use codex_core::features::Feature;
+use codex_config::types::Personality;
+use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
@@ -24,6 +24,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use serde_json::json;
 
@@ -100,7 +101,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     .await;
 
     let mut builder = test_codex()
-        .with_model("gpt-5.2-codex")
+        .with_model("gpt-5.3-codex")
         .with_config(|config| {
             config
                 .features
@@ -111,25 +112,29 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let test = builder.build(&server).await?;
     let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&preturn_context_diff_cwd)?;
+    let first_turn_cwd = test.cwd_path().to_path_buf();
+    let (first_sandbox_policy, first_permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), first_turn_cwd.as_path());
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
+            cwd: first_turn_cwd,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy: first_sandbox_policy,
+            permission_profile: first_permission_profile,
             model: test.session_configured.model.clone(),
-            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -137,8 +142,13 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     })
     .await;
 
+    let (second_sandbox_policy, second_permission_profile) = turn_permission_fields(
+        PermissionProfile::read_only(),
+        preturn_context_diff_cwd.as_path(),
+    );
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "second turn with context updates".into(),
                 text_elements: Vec::new(),
@@ -146,15 +156,15 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             final_output_json_schema: None,
             cwd: preturn_context_diff_cwd,
             approval_policy: AskForApproval::OnRequest,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy: second_sandbox_policy,
+            permission_profile: second_permission_profile,
             model: test.session_configured.model.clone(),
-            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -202,7 +212,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     )
     .await;
 
-    let mut builder = test_codex().with_model("gpt-5.2-codex");
+    let mut builder = test_codex().with_model("gpt-5.3-codex");
     let test = builder.build(&server).await?;
     let cwd_one = test.cwd_path().join("agents_one");
     let cwd_two = test.cwd_path().join("agents_two");
@@ -216,9 +226,12 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
         cwd_two.join("AGENTS.md"),
         "# AGENTS two\n\n<INSTRUCTIONS>\nTurn two agents instructions.\n</INSTRUCTIONS>\n",
     )?;
+    let (first_sandbox_policy, first_permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd_one.as_path());
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first turn in agents_one".into(),
                 text_elements: Vec::new(),
@@ -226,15 +239,15 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             final_output_json_schema: None,
             cwd: cwd_one.clone(),
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy: first_sandbox_policy,
+            permission_profile: first_permission_profile,
             model: test.session_configured.model.clone(),
-            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -242,8 +255,11 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
     })
     .await;
 
+    let (second_sandbox_policy, second_permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd_two.as_path());
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "second turn in agents_two".into(),
                 text_elements: Vec::new(),
@@ -251,15 +267,15 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             final_output_json_schema: None,
             cwd: cwd_two,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy: second_sandbox_policy,
+            permission_profile: second_permission_profile,
             model: test.session_configured.model.clone(),
-            model_provider: None,
             effort: test.config.model_reasoning_effort,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -321,11 +337,13 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -342,7 +360,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     .await;
 
     let mut resume_builder = test_codex().with_config(|config| {
-        config.model = Some("gpt-5.2-codex".to_string());
+        config.model = Some("gpt-5.3-codex".to_string());
         config
             .features
             .enable(Feature::Personality)
@@ -352,9 +370,14 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        PermissionProfile::read_only(),
+        resume_override_cwd.as_path(),
+    );
     resumed
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "resume and change personality".into(),
                 text_elements: Vec::new(),
@@ -362,15 +385,15 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             final_output_json_schema: None,
             cwd: resume_override_cwd,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
             model: resumed.session_configured.model.clone(),
-            model_provider: None,
             effort: resumed.config.model_reasoning_effort,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: Some(Personality::Friendly),
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -421,11 +444,13 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
     codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "seed resume history".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -442,7 +467,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     .await;
 
     let mut resume_builder = test_codex().with_config(|config| {
-        config.model = Some("gpt-5.2-codex".to_string());
+        config.model = Some("gpt-5.3-codex".to_string());
     });
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
@@ -454,25 +479,26 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: Some("gpt-5.2".to_string()),
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
     resumed
         .codex
         .submit(Op::UserInput {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "first resumed turn after model override".into(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+            responsesapi_client_metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

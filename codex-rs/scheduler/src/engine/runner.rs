@@ -74,7 +74,7 @@ pub async fn execute_job(
         // Default to scheduler workdir so jobs don't write files into
         // random directories (launchd sets cwd to / by default).
         let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-        let workdir = home.join("scheduler").join("workdir");
+        let workdir = home.join("scheduler").join("workdir").into_path_buf();
         tokio::fs::create_dir_all(&workdir).await?;
         cmd.arg("--cd").arg(&workdir);
     }

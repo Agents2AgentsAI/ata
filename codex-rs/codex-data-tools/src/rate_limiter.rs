@@ -35,7 +35,7 @@ impl ApiRateLimit {
 #[derive(Debug)]
 struct ApiState {
     semaphore: Arc<Semaphore>,
-    request_times: tokio::sync::Mutex<Vec<Instant>>,
+    request_times: std::sync::Mutex<Vec<Instant>>,
     window_duration: Duration,
     requests_per_window: u32,
 }
@@ -55,7 +55,7 @@ impl RateLimiter {
                 api,
                 ApiState {
                     semaphore: Arc::new(Semaphore::new(limit.max_concurrent as usize)),
-                    request_times: tokio::sync::Mutex::new(Vec::new()),
+                    request_times: std::sync::Mutex::new(Vec::new()),
                     window_duration: limit.window_duration,
                     requests_per_window: limit.requests_per_window,
                 },
@@ -79,27 +79,41 @@ impl RateLimiter {
             .map_err(|_| crate::error::DataError::Internal("semaphore closed".to_string()))?;
 
         // Check sliding window rate limit
-        let mut request_times = state.request_times.lock().await;
-        let now = Instant::now();
-        let window_start = now - state.window_duration;
+        let wait_time = {
+            let mut request_times = state
+                .request_times
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let now = Instant::now();
+            let window_start = now - state.window_duration;
+            request_times.retain(|&time| time > window_start);
 
-        // Remove old requests outside the window
-        request_times.retain(|&time| time > window_start);
+            if request_times.len() >= state.requests_per_window as usize
+                && let Some(&oldest) = request_times.first()
+            {
+                Some(state.window_duration - (now - oldest))
+            } else {
+                None
+            }
+        };
 
-        // If at capacity, wait until oldest request expires
-        if request_times.len() >= state.requests_per_window as usize
-            && let Some(&oldest) = request_times.first()
-        {
-            let wait_time = state.window_duration - (now - oldest);
-            drop(request_times);
+        if let Some(wait_time) = wait_time {
             tokio::time::sleep(wait_time).await;
-            request_times = state.request_times.lock().await;
+            let mut request_times = state
+                .request_times
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let new_now = Instant::now();
             let new_window_start = new_now - state.window_duration;
             request_times.retain(|&time| time > new_window_start);
+            request_times.push(Instant::now());
+        } else {
+            let mut request_times = state
+                .request_times
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            request_times.push(Instant::now());
         }
-
-        request_times.push(Instant::now());
 
         Ok(RateLimitPermit { _permit: permit })
     }

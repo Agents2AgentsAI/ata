@@ -1,25 +1,23 @@
-use async_trait::async_trait;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
+use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 
 use crate::function_tool::FunctionCallError;
-use crate::sandboxing::normalize_additional_permissions;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-
-pub(crate) fn request_permissions_tool_description() -> String {
-    "Request additional filesystem or network permissions from the user and wait for the client to grant a subset of the requested permission profile. Granted permissions apply automatically to later shell-like commands in the current turn, or for the rest of the session if the client approves them at session scope."
-        .to_string()
-}
+use codex_tools::ToolName;
 
 pub struct RequestPermissionsHandler;
 
-#[async_trait]
 impl ToolHandler for RequestPermissionsHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("request_permissions")
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -29,6 +27,7 @@ impl ToolHandler for RequestPermissionsHandler {
         let ToolInvocation {
             session,
             turn,
+            cancellation_token,
             call_id,
             payload,
             ..
@@ -44,7 +43,7 @@ impl ToolHandler for RequestPermissionsHandler {
         };
 
         let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, turn.cwd.as_path())?;
+            parse_arguments_with_base_path(&arguments, &turn.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;
@@ -55,7 +54,7 @@ impl ToolHandler for RequestPermissionsHandler {
         }
 
         let response = session
-            .request_permissions(turn.as_ref(), call_id, args)
+            .request_permissions(&turn, call_id, args, cancellation_token)
             .await
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(

@@ -1,15 +1,15 @@
 use anyhow::Result;
-use codex_core::config::types::McpServerConfig;
-use codex_core::config::types::McpServerTransportConfig;
-use codex_core::features::Feature;
+use codex_config::types::McpServerConfig;
+use codex_config::types::McpServerTransportConfig;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
@@ -26,6 +26,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
@@ -47,7 +48,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
     });
     let test = builder.build(&server).await?;
 
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let db_path = codex_state::state_db_path(test.config.sqlite_home.as_path());
 
@@ -83,7 +84,7 @@ async fn new_thread_is_recorded_in_state_db() -> Result<()> {
 
     let metadata = metadata.expect("thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert!(
         rollout_path.exists(),
         "rollout should be materialized after first user message"
@@ -103,6 +104,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let dynamic_tools = vec![
         DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
             name: "geo_lookup".to_string(),
             description: "lookup a city".to_string(),
             input_schema: json!({
@@ -113,6 +115,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
             defer_loading: true,
         },
         DynamicToolSpec {
+            namespace: None,
             name: "weather_lookup".to_string(),
             description: "lookup weather".to_string(),
             input_schema: json!({
@@ -141,6 +144,8 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     originator: "test".to_string(),
                     cli_version: "test".to_string(),
                     source: SessionSource::default(),
+                    thread_source: None,
+                    agent_path: None,
                     agent_nickname: None,
                     agent_role: None,
                     model_provider: None,
@@ -207,7 +212,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
 
     let metadata = metadata.expect("backfilled thread should exist in state db");
     assert_eq!(metadata.id, thread_id);
-    assert_eq!(metadata.rollout_path, rollout_path);
+    assert_eq!(metadata.rollout_path, rollout_path.to_path_buf());
     assert_eq!(metadata.model_provider, default_provider);
     assert!(metadata.first_user_message.is_some());
 
@@ -257,7 +262,7 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
     test.submit_turn("another message").await?;
 
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
 
     let mut metadata = None;
     for _ in 0..100 {
@@ -296,11 +301,11 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
 
     test.submit_turn("search the web").await?;
 
@@ -324,12 +329,17 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     let server = start_mock_server().await;
     let call_id = "call-123";
     let server_name = "rmcp";
-    let tool_name = format!("mcp__{server_name}__echo");
+    let namespace = format!("mcp__{server_name}__");
     mount_sse_once(
         &server,
         responses::sse(vec![
             ev_response_created("resp-1"),
-            ev_function_call(call_id, &tool_name, "{\"message\":\"ping\"}"),
+            responses::ev_function_call_with_namespace(
+                call_id,
+                &namespace,
+                "echo",
+                "{\"message\":\"ping\"}",
+            ),
             ev_completed("resp-1"),
         ]),
     )
@@ -349,7 +359,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
             .features
             .enable(Feature::Sqlite)
             .expect("test config should allow feature update");
-        config.memories.no_memories_if_mcp_or_web_search = true;
+        config.memories.disable_on_external_context = true;
 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
@@ -365,15 +375,19 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                     env_vars: Vec::new(),
                     cwd: None,
                 },
+                experimental_environment: None,
                 enabled: true,
                 required: false,
+                supports_parallel_tool_calls: false,
                 disabled_reason: None,
                 startup_timeout_sec: Some(Duration::from_secs(10)),
                 tool_timeout_sec: None,
+                default_tools_approval_mode: None,
                 enabled_tools: None,
                 disabled_tools: None,
                 scopes: None,
                 oauth_resource: None,
+                tools: HashMap::new(),
             },
         );
         config
@@ -383,26 +397,30 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.session_id;
+    let thread_id = test.session_configured.thread_id;
+    let cwd = test.cwd_path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
 
     test.codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: test.cwd_path().to_path_buf(),
+            cwd,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            model_provider: None,
-            feature_flags: None,
         })
         .await?;
     wait_for_event(&test.codex, |event| {
@@ -460,18 +478,19 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     });
     let test = builder.build(&server).await?;
     let db = test.codex.state_db().expect("state db enabled");
-    let expected_thread_id = test.session_configured.session_id.to_string();
-
-    let subscriber = tracing_subscriber::registry().with(codex_state::log_db::start(db.clone()));
-    let dispatch = tracing::Dispatch::new(subscriber);
-    let _guard = tracing::dispatcher::set_default(&dispatch);
+    let expected_thread_id = test.session_configured.thread_id.to_string();
 
     test.submit_turn("run a shell command").await?;
-    {
+
+    let log_db_layer = codex_state::log_db::start(db.clone());
+    let subscriber = tracing_subscriber::registry().with(log_db_layer.clone());
+    let dispatch = tracing::Dispatch::new(subscriber);
+    tracing::dispatcher::with_default(&dispatch, || {
         let span = tracing::info_span!("test_log_span", thread_id = %expected_thread_id);
         let _entered = span.enter();
         tracing::info!("ToolCall: shell_command {{\"command\":\"echo hello\"}}");
-    }
+    });
+    log_db_layer.flush().await;
 
     let mut found = None;
     for _ in 0..80 {
@@ -484,7 +503,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
         if let Some(row) = rows.into_iter().find(|row| {
             row.message
                 .as_deref()
-                .is_some_and(|m| m.starts_with("ToolCall:"))
+                .is_some_and(|m| m.contains("ToolCall:"))
         }) {
             let thread_id = row.thread_id;
             let message = row.message;
@@ -499,7 +518,7 @@ async fn tool_call_logs_include_thread_id() -> Result<()> {
     assert!(
         message
             .as_deref()
-            .is_some_and(|text| text.starts_with("ToolCall:")),
+            .is_some_and(|text| text.contains("ToolCall:")),
         "expected ToolCall message, got {message:?}"
     );
 

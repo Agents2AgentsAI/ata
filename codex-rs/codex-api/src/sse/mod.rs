@@ -1,13 +1,6 @@
-//! SSE parsing utilities for different LLM providers.
+pub(crate) mod responses;
 
-pub mod anthropic;
-pub mod gemini;
-pub mod responses;
-
-pub use anthropic::AnthropicStreamState;
-pub use anthropic::parse_anthropic_event;
-pub use gemini::GeminiStreamState;
-pub use gemini::parse_gemini_chunk;
-pub use responses::process_sse;
+pub(crate) use responses::ResponsesStreamEvent;
+pub(crate) use responses::process_responses_event;
 pub use responses::spawn_response_stream;
 pub use responses::stream_from_fixture;

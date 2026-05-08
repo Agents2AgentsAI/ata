@@ -10,6 +10,11 @@ use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppMetadata;
 use serde::Deserialize;
 
+pub mod accessible;
+pub mod filter;
+pub mod merge;
+pub mod metadata;
+
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,11 +158,9 @@ where
         let path = match next_token.as_deref() {
             Some(token) => {
                 let encoded_token = urlencoding::encode(token);
-                format!(
-                    "/connectors/directory/list?tier=categorized&token={encoded_token}&external_logos=true"
-                )
+                format!("/connectors/directory/list?token={encoded_token}&external_logos=true")
             }
-            None => "/connectors/directory/list?tier=categorized&external_logos=true".to_string(),
+            None => "/connectors/directory/list?external_logos=true".to_string(),
         };
         let response = fetch_page(path).await?;
         apps.extend(
@@ -411,15 +414,19 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+
+    static ALL_CONNECTORS_CACHE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     fn cache_key(id: &str) -> AllConnectorsCacheKey {
         AllConnectorsCacheKey::new(
             "https://chatgpt.example".to_string(),
             Some(format!("account-{id}")),
             Some(format!("user-{id}")),
-            true,
+            /*is_workspace_account*/ true,
         )
     }
 
@@ -439,26 +446,42 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
     async fn list_all_connectors_uses_shared_cache() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
         let key = cache_key("shared");
 
-        let first = list_all_connectors_with_options(key.clone(), false, false, move |_path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(DirectoryListResponse {
-                    apps: vec![app("alpha", "Alpha")],
-                    next_token: None,
-                })
-            }
-        })
+        let first = list_all_connectors_with_options(
+            key.clone(),
+            /*is_workspace_account*/ false,
+            /*force_refetch*/ false,
+            move |_path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: None,
+                    })
+                }
+            },
+        )
         .await?;
 
-        let second = list_all_connectors_with_options(key, false, false, move |_path| async move {
-            anyhow::bail!("cache should have been used");
-        })
+        let second = list_all_connectors_with_options(
+            key,
+            /*is_workspace_account*/ false,
+            /*force_refetch*/ false,
+            move |_path| async move {
+                anyhow::bail!("cache should have been used");
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -467,45 +490,56 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test serializes access to the shared connector cache for its full duration"
+    )]
     async fn list_all_connectors_merges_and_normalizes_directory_apps() -> anyhow::Result<()> {
+        let _cache_guard = ALL_CONNECTORS_CACHE_TEST_LOCK.lock().await;
+
         let key = cache_key("merged");
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
 
-        let connectors = list_all_connectors_with_options(key, true, true, move |path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                if path.starts_with("/connectors/directory/list_workspace") {
-                    Ok(DirectoryListResponse {
-                        apps: vec![
-                            DirectoryApp {
-                                description: Some("Merged description".to_string()),
-                                branding: Some(AppBranding {
-                                    category: Some("calendar".to_string()),
-                                    developer: None,
-                                    website: None,
-                                    privacy_policy: None,
-                                    terms_of_service: None,
-                                    is_discoverable_app: true,
-                                }),
-                                ..app("alpha", "")
-                            },
-                            DirectoryApp {
-                                visibility: Some("HIDDEN".to_string()),
-                                ..app("hidden", "Hidden")
-                            },
-                        ],
-                        next_token: None,
-                    })
-                } else {
-                    Ok(DirectoryListResponse {
-                        apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
-                        next_token: None,
-                    })
+        let connectors = list_all_connectors_with_options(
+            key,
+            /*is_workspace_account*/ true,
+            /*force_refetch*/ true,
+            move |path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    if path.starts_with("/connectors/directory/list_workspace") {
+                        Ok(DirectoryListResponse {
+                            apps: vec![
+                                DirectoryApp {
+                                    description: Some("Merged description".to_string()),
+                                    branding: Some(AppBranding {
+                                        category: Some("calendar".to_string()),
+                                        developer: None,
+                                        website: None,
+                                        privacy_policy: None,
+                                        terms_of_service: None,
+                                        is_discoverable_app: true,
+                                    }),
+                                    ..app("alpha", "")
+                                },
+                                DirectoryApp {
+                                    visibility: Some("HIDDEN".to_string()),
+                                    ..app("hidden", "Hidden")
+                                },
+                            ],
+                            next_token: None,
+                        })
+                    } else {
+                        Ok(DirectoryListResponse {
+                            apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
+                            next_token: None,
+                        })
+                    }
                 }
-            }
-        })
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -529,6 +563,54 @@ mod tests {
         );
         assert_eq!(connectors[1].id, "beta");
         assert_eq!(connectors[1].name, "Beta");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn list_directory_connectors_omits_tier_for_all_pages() -> anyhow::Result<()> {
+        let requested_paths: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let paths = Arc::clone(&requested_paths);
+
+        let apps = list_directory_connectors(&mut move |path| {
+            let paths = Arc::clone(&paths);
+            async move {
+                paths
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(path.clone());
+                if path == "/connectors/directory/list?external_logos=true" {
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: Some("page 2".to_string()),
+                    })
+                } else {
+                    assert_eq!(
+                        path,
+                        "/connectors/directory/list?token=page%202&external_logos=true"
+                    );
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("beta", "Beta")],
+                        next_token: None,
+                    })
+                }
+            }
+        })
+        .await?;
+
+        assert_eq!(
+            apps.iter().map(|app| app.id.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "beta"]
+        );
+        assert_eq!(
+            requested_paths
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            &[
+                "/connectors/directory/list?external_logos=true".to_string(),
+                "/connectors/directory/list?token=page%202&external_logos=true".to_string(),
+            ]
+        );
         Ok(())
     }
 }

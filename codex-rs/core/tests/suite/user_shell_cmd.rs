@@ -1,5 +1,6 @@
 use anyhow::Context;
-use codex_core::features::Feature;
+use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -7,9 +8,9 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -21,6 +22,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
@@ -46,7 +48,7 @@ async fn user_shell_cmd_ls_and_cat_in_temp_dir() {
     let server = start_mock_server().await;
     let cwd_path = cwd.path().to_path_buf();
     let mut builder = test_codex().with_config(move |config| {
-        config.cwd = cwd_path;
+        config.cwd = cwd_path.abs();
     });
     let codex = builder
         .build(&server)
@@ -140,7 +142,7 @@ async fn user_shell_cmd_can_be_interrupted() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()> {
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.1");
+    let mut builder = test_codex().with_model("gpt-5.4");
     let fixture = builder.build(&server).await?;
 
     let call_id = "active-turn-shell-call";
@@ -166,25 +168,30 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     ]);
     let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
 
+    let cwd = fixture.cwd.path().to_path_buf();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
+
     fixture
         .codex
         .submit(Op::UserTurn {
+            environments: None,
             items: vec![UserInput::Text {
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: fixture.cwd.path().to_path_buf(),
+            cwd,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            approvals_reviewer: None,
+            sandbox_policy,
+            permission_profile,
             model: fixture.session_configured.model.clone(),
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
 
@@ -294,15 +301,15 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     assert_eq!(delta_event.stream, ExecOutputStream::Stdout);
     let chunk_text =
         String::from_utf8(delta_event.chunk.clone()).expect("user command chunk is valid utf-8");
+    assert_eq!(chunk_text.trim(), "not-set");
 
     let end_event = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
-    let observed_output = end_event.stdout.trim().to_string();
-    assert_eq!(chunk_text.trim(), observed_output);
     assert_eq!(end_event.exit_code, 0);
+    assert_eq!(end_event.stdout.trim(), "not-set");
 
     let _ = wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
@@ -324,9 +331,8 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
         .expect("command message recorded in request");
     let command_message = command_message.replace("\r\n", "\n");
     let escaped_command = escape(&command);
-    let escaped_output = escape(&observed_output);
     let expected_pattern = format!(
-        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\n{escaped_output}\n</result>\n</user_shell_command>\z"
+        r"(?m)\A<user_shell_command>\n<command>\n{escaped_command}\n</command>\n<result>\nExit code: 0\nDuration: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\nnot-set\n</result>\n</user_shell_command>\z"
     );
     assert_regex_match(&expected_pattern, &command_message);
 
@@ -337,7 +343,12 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
 async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
-        config.permissions.network_sandbox_policy = NetworkSandboxPolicy::Restricted;
+        let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+        config.permissions.permission_profile =
+            codex_config::Constrained::allow_any(PermissionProfile::from_runtime_permissions(
+                &file_system_sandbox_policy,
+                NetworkSandboxPolicy::Restricted,
+            ));
     });
     let test = builder.build(&server).await?;
 
@@ -351,13 +362,22 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
         .submit(Op::RunUserShellCommand { command })
         .await?;
 
-    let end_event = wait_for_event_match(&test.codex, |ev| match ev {
+    let ExecCommandEndEvent {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = wait_for_event_match(&test.codex, |ev| match ev {
         EventMsg::ExecCommandEnd(event) => Some(event.clone()),
         _ => None,
     })
     .await;
-    assert_eq!(end_event.exit_code, 0);
-    assert_eq!(end_event.stdout.trim(), "not-set");
+
+    assert_eq!(
+        exit_code, 0,
+        "shell command should execute successfully. stdout=`{stdout}`, stderr=`{stderr}`",
+    );
+    assert_eq!(stdout.trim(), "not-set");
 
     Ok(())
 }
@@ -431,11 +451,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5.1-codex")
-        .with_config(|config| {
-            config.tool_output_token_limit = Some(100);
-        });
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config.tool_output_token_limit = Some(100);
+    });
     let fixture = builder.build(&server).await?;
 
     let call_id = "user-shell-double-truncation";
@@ -470,9 +488,9 @@ async fn user_shell_command_is_truncated_only_once() -> anyhow::Result<()> {
     .await;
 
     fixture
-        .submit_turn_with_policy(
+        .submit_turn_with_permission_profile(
             "trigger big shell_command output",
-            SandboxPolicy::DangerFullAccess,
+            PermissionProfile::Disabled,
         )
         .await?;
 

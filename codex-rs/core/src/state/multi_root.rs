@@ -321,6 +321,7 @@ impl MultiRootState {
         self.roots.read().await.clone()
     }
 
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn root_statuses(&self) -> Vec<RootStatus> {
         let roots = self.roots().await;
         #[cfg(feature = "lsp")]
@@ -381,6 +382,7 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn treesitter_index_for_file(
         &self,
         file: &Path,
@@ -408,6 +410,7 @@ impl MultiRootState {
     /// - the root has no tree-sitter index,
     /// - the index is still building or has failed.
     #[cfg(feature = "treesitter")]
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn try_treesitter_index_for_file(
         &self,
         file: &Path,
@@ -424,6 +427,7 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn treesitter_indices(
         &self,
         root_name: Option<&str>,
@@ -454,6 +458,7 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[allow(clippy::await_holding_invalid_type)]
     pub async fn reindex_file(&self, file: &Path) {
         // Best-effort; don't block tool calls waiting for background index build.
         let root = self.root_for_file(file).await;

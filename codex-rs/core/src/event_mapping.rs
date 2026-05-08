@@ -10,21 +10,60 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::models::is_file_close_tag_text;
-use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::models::is_image_close_tag_text;
 use codex_protocol::models::is_image_open_tag_text;
 use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
+use codex_protocol::protocol::COLLABORATION_MODE_OPEN_TAG;
+use codex_protocol::protocol::REALTIME_CONVERSATION_OPEN_TAG;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::contextual_user_message::is_contextual_user_fragment;
+use crate::context::is_contextual_user_fragment;
+use crate::context::parse_visible_hook_prompt_message;
 use crate::web_search::web_search_action_detail;
+
+const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
+    "<permissions instructions>",
+    "<model_switch>",
+    COLLABORATION_MODE_OPEN_TAG,
+    REALTIME_CONVERSATION_OPEN_TAG,
+    "<personality_spec>",
+];
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
     message.iter().any(is_contextual_user_fragment)
+}
+
+/// Returns true when a developer message contains any rollback-trimmable contextual fragment.
+///
+/// `build_initial_context` can bundle these fragments together with persistent developer text in a
+/// single developer message, so callers that care about invalidating a stored reference baseline
+/// should pair this with `has_non_contextual_dev_message_content`.
+pub(crate) fn is_contextual_dev_message_content(message: &[ContentItem]) -> bool {
+    message.iter().any(is_contextual_dev_fragment)
+}
+
+/// Returns true when a developer message contains any fragment that is not part of the
+/// rollback-trimmable contextual prefix set.
+pub(crate) fn has_non_contextual_dev_message_content(message: &[ContentItem]) -> bool {
+    message
+        .iter()
+        .any(|content_item| !is_contextual_dev_fragment(content_item))
+}
+
+fn is_contextual_dev_fragment(content_item: &ContentItem) -> bool {
+    let ContentItem::InputText { text } = content_item else {
+        return false;
+    };
+
+    let trimmed = text.trim_start();
+    CONTEXTUAL_DEVELOPER_PREFIXES.iter().any(|prefix| {
+        trimmed
+            .get(..prefix.len())
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+    })
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
@@ -45,33 +84,17 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                 {
                     continue;
                 }
-                if is_file_open_tag_text(text)
-                    && (matches!(
-                        message.get(idx + 1),
-                        Some(ContentItem::InputFile { .. } | ContentItem::UrlFile { .. })
-                    ))
-                    || (idx > 0
-                        && is_file_close_tag_text(text)
-                        && matches!(
-                            message.get(idx - 1),
-                            Some(ContentItem::InputFile { .. } | ContentItem::UrlFile { .. })
-                        ))
-                {
-                    continue;
-                }
                 content.push(UserInput::Text {
                     text: text.clone(),
                     // Model input content does not carry UI element ranges.
                     text_elements: Vec::new(),
                 });
             }
-            ContentItem::InputImage { image_url } => {
+            ContentItem::InputImage { image_url, .. } => {
                 content.push(UserInput::Image {
                     image_url: image_url.clone(),
                 });
             }
-            ContentItem::InputFile { .. } => {}
-            ContentItem::UrlFile { .. } => {}
             ContentItem::OutputText { text } => {
                 warn!("Output text in user message: {}", text);
             }
@@ -89,7 +112,7 @@ fn parse_agent_message(
     let mut content: Vec<AgentMessageContent> = Vec::new();
     for content_item in message.iter() {
         match content_item {
-            ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
                 content.push(AgentMessageContent::Text { text: text.clone() });
             }
             _ => {
@@ -101,7 +124,12 @@ fn parse_agent_message(
         }
     }
     let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
-    AgentMessageItem { id, content, phase }
+    AgentMessageItem {
+        id,
+        content,
+        phase,
+        memory_citation: None,
+    }
 }
 
 pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
@@ -113,7 +141,9 @@ pub fn parse_turn_item(item: &ResponseItem) -> Option<TurnItem> {
             phase,
             ..
         } => match role.as_str() {
-            "user" => parse_user_message(content).map(TurnItem::UserMessage),
+            "user" => parse_visible_hook_prompt_message(id.as_ref(), content)
+                .map(TurnItem::HookPrompt)
+                .or_else(|| parse_user_message(content).map(TurnItem::UserMessage)),
             "assistant" => Some(TurnItem::AgentMessage(parse_agent_message(
                 id.as_ref(),
                 content,

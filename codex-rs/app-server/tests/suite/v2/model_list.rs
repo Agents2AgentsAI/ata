@@ -9,11 +9,11 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::Model;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::ModelServiceTier;
 use codex_app_server_protocol::ModelUpgradeInfo;
 use codex_app_server_protocol::ReasoningEffortOption;
 use codex_app_server_protocol::RequestId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -51,28 +51,35 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         // cache report `supports_personality = false`.
         // todo(sayan): fix, maybe make roundtrip use ModelInfo only
         supports_personality: false,
+        additional_speed_tiers: preset.additional_speed_tiers.clone(),
+        service_tiers: preset
+            .service_tiers
+            .iter()
+            .map(|service_tier| ModelServiceTier {
+                id: service_tier.id.clone(),
+                name: service_tier.name.clone(),
+                description: service_tier.description.clone(),
+            })
+            .collect(),
         is_default: preset.is_default,
     }
 }
 
-fn expected_visible_models() -> Result<Vec<Model>> {
-    let mut bundled: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../core/models.json"))?;
-    let mut third_party: ModelsResponse =
-        serde_json::from_str(include_str!("../../../../core/third_party_models.json"))?;
-    bundled.models.append(&mut third_party.models);
-    bundled.models.sort_by(|a, b| a.priority.cmp(&b.priority));
-
+fn expected_visible_models() -> Vec<Model> {
     // Filter by supported_in_api to support testing with both ChatGPT and non-ChatGPT auth modes.
-    let mut presets: Vec<ModelPreset> = bundled.models.into_iter().map(Into::into).collect();
-    presets = ModelPreset::filter_by_auth(presets, false);
+    let mut presets = ModelPreset::filter_by_auth(
+        codex_core::test_support::all_model_presets().clone(),
+        /*chatgpt_mode*/ false,
+    );
+
+    // Mirror `ModelsManager::build_available_models()` default selection after auth filtering.
     ModelPreset::mark_default_by_picker_visibility(&mut presets);
 
-    Ok(presets
+    presets
         .iter()
         .filter(|preset| preset.show_in_picker)
         .map(model_from_preset)
-        .collect())
+        .collect()
 }
 
 #[tokio::test]
@@ -102,7 +109,7 @@ async fn list_models_returns_all_models_with_large_limit() -> Result<()> {
         next_cursor,
     } = to_response::<ModelListResponse>(response)?;
 
-    let expected_models = expected_visible_models()?;
+    let expected_models = expected_visible_models();
 
     assert_eq!(items, expected_models);
     assert!(next_cursor.is_none());
@@ -149,7 +156,7 @@ async fn list_models_pagination_works() -> Result<()> {
 
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
-    let expected_models = expected_visible_models()?;
+    let expected_models = expected_visible_models();
     let mut cursor = None;
     let mut items = Vec::new();
 

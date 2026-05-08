@@ -327,7 +327,7 @@ pub async fn run_scheduler(
 ) -> anyhow::Result<()> {
     let guard = Arc::new(ConcurrencyGuard::new(max_concurrent));
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-    let runs_dir = home.join("scheduler").join("runs");
+    let runs_dir: PathBuf = home.join("scheduler").join("runs").into_path_buf();
 
     // Initial sync.
     let mut defs = load_all_defs()?;

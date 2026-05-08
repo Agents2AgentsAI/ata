@@ -398,13 +398,19 @@ impl LspClient {
         let uri_key = uri.as_str().to_string();
         let language_id = language_id_for_path(path).unwrap_or("plaintext");
 
-        let mut versions = self.file_versions.lock().await;
-        let is_new = !versions.contains_key(&uri_key);
+        let next_version = {
+            let mut versions = self.file_versions.lock().await;
+            if let Some(prev) = versions.get(&uri_key).copied() {
+                let next = prev + 1;
+                versions.insert(uri_key.clone(), next);
+                Some(next)
+            } else {
+                versions.insert(uri_key.clone(), 0);
+                None
+            }
+        };
 
-        if is_new {
-            versions.insert(uri_key.clone(), 0);
-            drop(versions);
-
+        if next_version.is_none() {
             // Send didChangeWatchedFiles (Created).
             self.send_file_watch_event(&uri, FileChangeType::CREATED)
                 .await?;
@@ -426,10 +432,7 @@ impl LspClient {
             )
             .await?;
         } else {
-            let version = versions.get(&uri_key).copied().unwrap_or(0) + 1;
-            versions.insert(uri_key.clone(), version);
-            drop(versions);
-
+            let version = next_version.unwrap_or(0);
             // Send didChangeWatchedFiles (Changed).
             self.send_file_watch_event(&uri, FileChangeType::CHANGED)
                 .await?;
@@ -771,7 +774,11 @@ impl LspClient {
     pub async fn shutdown(&self) {
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.send_request("shutdown", None)).await;
         let _ = self.send_notification("exit", None).await;
-        if let Some(mut child) = self.child.lock().await.take() {
+        let child = {
+            let mut guard = self.child.lock().await;
+            guard.take()
+        };
+        if let Some(mut child) = child {
             let _ = child.kill().await;
         }
     }
@@ -899,6 +906,7 @@ impl LspClient {
         self.write_message(body).await
     }
 
+    #[allow(clippy::await_holding_invalid_type)]
     async fn trace_event(
         &self,
         kind: &'static str,
@@ -1100,6 +1108,7 @@ fn workspace_symbol_to_info(sym: WorkspaceSymbol) -> Option<SymbolInformation> {
     })
 }
 
+#[allow(clippy::await_holding_invalid_type)]
 async fn write_framed_message(
     writer: &Arc<Mutex<ChildStdin>>,
     body: &[u8],

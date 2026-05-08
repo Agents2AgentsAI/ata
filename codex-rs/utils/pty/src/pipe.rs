@@ -3,9 +3,9 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::Result;
 use tokio::io::AsyncRead;
@@ -64,11 +64,7 @@ fn kill_process(pid: u32) -> io::Result<()> {
         let success = winapi::um::processthreadsapi::TerminateProcess(handle, 1);
         let err = io::Error::last_os_error();
         winapi::um::handleapi::CloseHandle(handle);
-        if success == 0 {
-            Err(err)
-        } else {
-            Ok(())
-        }
+        if success == 0 { Err(err) } else { Ok(()) }
     }
 }
 
@@ -166,12 +162,11 @@ async fn spawn_process_with_stdin_mode(
     let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>(128);
     let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>(128);
     let writer_handle = if let Some(stdin) = stdin {
-        let writer = Arc::new(tokio::sync::Mutex::new(stdin));
         tokio::spawn(async move {
+            let mut writer = stdin;
             while let Some(bytes) = writer_rx.recv().await {
-                let mut guard = writer.lock().await;
-                let _ = guard.write_all(&bytes).await;
-                let _ = guard.flush().await;
+                let _ = writer.write_all(&bytes).await;
+                let _ = writer.flush().await;
             }
         })
     } else {
@@ -238,7 +233,8 @@ async fn spawn_process_with_stdin_mode(
         wait_handle,
         exit_status,
         exit_code,
-        None,
+        /*pty_handles*/ None,
+        /*resizer*/ None,
     );
 
     Ok(SpawnedProcess {
