@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
 use crate::network_policy::NetworkDecisionSource;
@@ -34,7 +35,6 @@ use rama_socks5::server::udp::RelayRequest;
 use rama_socks5::server::udp::RelayResponse;
 use rama_tcp::TcpStream;
 use rama_tcp::client::Request as TcpRequest;
-use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
 use std::io;
 use std::net::SocketAddr;
@@ -94,7 +94,7 @@ async fn run_socks5_with_listener(
         }
     }
 
-    let tcp_connector = TcpConnector::default();
+    let tcp_connector = TargetCheckedTcpConnector::new(state.clone());
     let policy_tcp_connector = service_fn({
         let policy_decider = policy_decider.clone();
         move |req: TcpRequest| {
@@ -131,7 +131,7 @@ async fn run_socks5_with_listener(
 
 async fn handle_socks5_tcp(
     req: TcpRequest,
-    tcp_connector: TcpConnector,
+    tcp_connector: TargetCheckedTcpConnector,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 ) -> Result<EstablishedClientConnection<TcpStream, TcpRequest>, BoxError> {
     let app_state = req
@@ -545,10 +545,9 @@ mod tests {
             TcpRequest::new(HostWithPort::try_from("example.com:443").expect("valid authority"));
         request.extensions_mut().insert(state.clone());
 
-        let (result, events) = capture_events(|| async {
-            handle_socks5_tcp(request, TcpConnector::default(), None).await
-        })
-        .await;
+        let connector = TargetCheckedTcpConnector::new(state.clone());
+        let (result, events) =
+            capture_events(|| async { handle_socks5_tcp(request, connector, None).await }).await;
         assert!(result.is_err(), "proxy-disabled request should be denied");
 
         let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)

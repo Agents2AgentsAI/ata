@@ -1,4 +1,5 @@
 use crate::config::NetworkMode;
+use crate::connect_policy::TargetCheckedTcpConnector;
 use crate::mitm;
 use crate::network_policy::BlockDecisionAuditEventArgs;
 use crate::network_policy::NetworkDecision;
@@ -66,7 +67,6 @@ use rama_net::proxy::ProxyTarget;
 use rama_net::proxy::StreamForwardService;
 use rama_net::stream::SocketInfo;
 use rama_tcp::client::Request as TcpRequest;
-use rama_tcp::client::service::TcpConnector;
 use rama_tcp::server::TcpListener;
 use rama_tls_rustls::client::TlsConnectorDataBuilder;
 use rama_tls_rustls::client::TlsConnectorLayer;
@@ -345,11 +345,11 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
         return Ok(());
     }
 
-    let allow_upstream_proxy = match upgraded
+    let app_state = upgraded
         .extensions()
         .get::<Arc<NetworkProxyState>>()
-        .cloned()
-    {
+        .cloned();
+    let allow_upstream_proxy = match app_state.as_ref() {
         Some(state) => match state.allow_upstream_proxy().await {
             Ok(allowed) => allowed,
             Err(err) => {
@@ -369,7 +369,7 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
         None
     };
 
-    if let Err(err) = forward_connect_tunnel(upgraded, proxy).await {
+    if let Err(err) = forward_connect_tunnel(upgraded, proxy, app_state).await {
         warn!("tunnel error: {err}");
     }
     Ok(())
@@ -378,6 +378,7 @@ async fn http_connect_proxy(upgraded: Upgraded) -> Result<(), Infallible> {
 async fn forward_connect_tunnel(
     upgraded: Upgraded,
     proxy: Option<ProxyAddress>,
+    app_state: Option<Arc<NetworkProxyState>>,
 ) -> Result<(), BoxError> {
     let authority = upgraded
         .extensions()
@@ -392,7 +393,14 @@ async fn forward_connect_tunnel(
 
     let req = TcpRequest::new_with_extensions(authority.clone(), extensions)
         .with_protocol(Protocol::HTTPS);
-    let proxy_connector = HttpProxyConnector::optional(TcpConnector::new());
+    // Match upstream wiring: gate the CONNECT tunnel TCP connect on the network proxy's
+    // allow_local_binding policy via TargetCheckedTcpConnector. When state is unavailable, fall
+    // back to disallowing local binding (defensive default).
+    let target_checked = match app_state {
+        Some(state) => TargetCheckedTcpConnector::new(state),
+        None => TargetCheckedTcpConnector::from_allow_local_binding(false),
+    };
+    let proxy_connector = HttpProxyConnector::optional(target_checked);
     let tls_config = TlsConnectorDataBuilder::new()
         .with_alpn_protocols_http_auto()
         .build();
@@ -722,9 +730,9 @@ async fn http_plain_proxy(
         Err(resp) => return Ok(resp),
     };
     let client = if allow_upstream_proxy {
-        UpstreamClient::from_env_proxy()
+        UpstreamClient::from_env_proxy(app_state.clone())
     } else {
-        UpstreamClient::direct()
+        UpstreamClient::direct(app_state.clone())
     };
 
     // Strip hop-by-hop headers only after extracting metadata used for policy correlation.

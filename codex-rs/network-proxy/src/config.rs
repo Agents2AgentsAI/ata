@@ -43,6 +43,10 @@ pub struct NetworkProxySettings {
     pub allow_local_binding: bool,
     #[serde(default)]
     pub mitm: bool,
+    /// Optional debug-only admin API listener (loopback). Empty string disables the admin API.
+    /// Endpoints: `/health`, `/config`, `/patterns`, `/blocked`, `/mode`, `/reload`.
+    #[serde(default)]
+    pub admin_url: String,
 }
 
 impl Default for NetworkProxySettings {
@@ -62,6 +66,7 @@ impl Default for NetworkProxySettings {
             allow_unix_sockets: Vec::new(),
             allow_local_binding: false,
             mitm: false,
+            admin_url: String::new(),
         }
     }
 }
@@ -163,6 +168,8 @@ pub(crate) fn clamp_bind_addrs(
 pub struct RuntimeConfig {
     pub http_addr: SocketAddr,
     pub socks_addr: SocketAddr,
+    /// `None` when `admin_url` is empty (admin API disabled).
+    pub admin_addr: Option<SocketAddr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,11 +219,32 @@ pub fn resolve_runtime(cfg: &NetworkProxyConfig) -> Result<RuntimeConfig> {
         .with_context(|| format!("invalid network.proxy_url: {}", cfg.network.proxy_url))?;
     let socks_addr = resolve_addr(&cfg.network.socks_url, 8081)
         .with_context(|| format!("invalid network.socks_url: {}", cfg.network.socks_url))?;
+    let admin_addr = if cfg.network.admin_url.trim().is_empty() {
+        None
+    } else {
+        Some(
+            resolve_addr(&cfg.network.admin_url, 8080)
+                .with_context(|| format!("invalid network.admin_url: {}", cfg.network.admin_url))?,
+        )
+    };
     let (http_addr, socks_addr) = clamp_bind_addrs(http_addr, socks_addr, &cfg.network);
+    // Admin API is loopback-only by construction (no escape-hatch flag).
+    let admin_addr = admin_addr.map(|addr| {
+        if addr.ip().is_loopback() {
+            addr
+        } else {
+            warn!(
+                "admin API requested non-loopback bind ({addr}); clamping to 127.0.0.1:{port}",
+                port = addr.port()
+            );
+            SocketAddr::from(([127, 0, 0, 1], addr.port()))
+        }
+    });
 
     Ok(RuntimeConfig {
         http_addr,
         socks_addr,
+        admin_addr,
     })
 }
 
@@ -376,6 +404,7 @@ mod tests {
                 allow_unix_sockets: Vec::new(),
                 allow_local_binding: false,
                 mitm: false,
+                admin_url: String::new(),
             }
         );
     }

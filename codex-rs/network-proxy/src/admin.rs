@@ -35,6 +35,7 @@ pub async fn run_admin_api(state: Arc<NetworkProxyState>, addr: SocketAddr) -> R
     run_admin_api_with_listener(state, listener).await
 }
 
+#[allow(dead_code)] // Public API for callers that pre-bind a listener (e.g. integration tests).
 pub async fn run_admin_api_with_std_listener(
     state: Arc<NetworkProxyState>,
     listener: StdTcpListener,

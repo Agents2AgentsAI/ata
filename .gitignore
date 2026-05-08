@@ -93,3 +93,4 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 merge_info
+merge_to_be_fixed.md

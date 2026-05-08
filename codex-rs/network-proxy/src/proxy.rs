@@ -1,3 +1,4 @@
+use crate::admin;
 use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
@@ -174,10 +175,13 @@ impl NetworkProxyBuilder {
             &current_cfg.network,
         );
 
+        let admin_addr = config::resolve_runtime(&current_cfg)?.admin_addr;
+
         Ok(NetworkProxy {
             state,
             http_addr,
             socks_addr,
+            admin_addr,
             socks_enabled: current_cfg.network.enable_socks5,
             allow_local_binding: current_cfg.network.allow_local_binding,
             allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
@@ -213,6 +217,8 @@ pub struct NetworkProxy {
     state: Arc<NetworkProxyState>,
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
+    /// `None` when `network.admin_url` is empty.
+    admin_addr: Option<SocketAddr>,
     socks_enabled: bool,
     allow_local_binding: bool,
     allow_unix_sockets: Vec<String>,
@@ -228,6 +234,7 @@ impl std::fmt::Debug for NetworkProxy {
         f.debug_struct("NetworkProxy")
             .field("http_addr", &self.http_addr)
             .field("socks_addr", &self.socks_addr)
+            .field("admin_addr", &self.admin_addr)
             .finish_non_exhaustive()
     }
 }
@@ -236,6 +243,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
+            && self.admin_addr == other.admin_addr
             && self.allow_local_binding == other.allow_local_binding
     }
 }
@@ -389,6 +397,10 @@ impl NetworkProxy {
         self.socks_addr
     }
 
+    pub fn admin_addr(&self) -> Option<SocketAddr> {
+        self.admin_addr
+    }
+
     pub async fn current_cfg(&self) -> Result<config::NetworkProxyConfig> {
         self.state.current_cfg().await
     }
@@ -486,9 +498,22 @@ impl NetworkProxy {
             None
         };
 
+        // Optional debug-only admin API. Activated by setting `network.admin_url`. Endpoints:
+        // `/health`, `/config`, `/patterns`, `/blocked`, `/mode`, `/reload`. Loopback-only by
+        // construction (clamped in `resolve_runtime`).
+        let admin_task = if let Some(admin_addr) = self.admin_addr {
+            let admin_state = self.state.clone();
+            Some(tokio::spawn(async move {
+                admin::run_admin_api(admin_state, admin_addr).await
+            }))
+        } else {
+            None
+        };
+
         Ok(NetworkProxyHandle {
             http_task: Some(http_task),
             socks_task,
+            admin_task,
             completed: false,
         })
     }
@@ -497,6 +522,7 @@ impl NetworkProxy {
 pub struct NetworkProxyHandle {
     http_task: Option<JoinHandle<Result<()>>>,
     socks_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
     completed: bool,
 }
 
@@ -505,6 +531,7 @@ impl NetworkProxyHandle {
         Self {
             http_task: Some(tokio::spawn(async { Ok(()) })),
             socks_task: None,
+            admin_task: None,
             completed: true,
         }
     }
@@ -512,8 +539,13 @@ impl NetworkProxyHandle {
     pub async fn wait(mut self) -> Result<()> {
         let http_task = self.http_task.take().context("missing http proxy task")?;
         let socks_task = self.socks_task.take();
+        let admin_task = self.admin_task.take();
         let http_result = http_task.await;
         let socks_result = match socks_task {
+            Some(task) => Some(task.await),
+            None => None,
+        };
+        let admin_result = match admin_task {
             Some(task) => Some(task.await),
             None => None,
         };
@@ -522,11 +554,19 @@ impl NetworkProxyHandle {
         if let Some(socks_result) = socks_result {
             socks_result??;
         }
+        if let Some(admin_result) = admin_result {
+            admin_result??;
+        }
         Ok(())
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
-        abort_tasks(self.http_task.take(), self.socks_task.take()).await;
+        abort_tasks(
+            self.http_task.take(),
+            self.socks_task.take(),
+            self.admin_task.take(),
+        )
+        .await;
         self.completed = true;
         Ok(())
     }
@@ -542,9 +582,11 @@ async fn abort_task(task: Option<JoinHandle<Result<()>>>) {
 async fn abort_tasks(
     http_task: Option<JoinHandle<Result<()>>>,
     socks_task: Option<JoinHandle<Result<()>>>,
+    admin_task: Option<JoinHandle<Result<()>>>,
 ) {
     abort_task(http_task).await;
     abort_task(socks_task).await;
+    abort_task(admin_task).await;
 }
 
 impl Drop for NetworkProxyHandle {
@@ -554,8 +596,9 @@ impl Drop for NetworkProxyHandle {
         }
         let http_task = self.http_task.take();
         let socks_task = self.socks_task.take();
+        let admin_task = self.admin_task.take();
         tokio::spawn(async move {
-            abort_tasks(http_task, socks_task).await;
+            abort_tasks(http_task, socks_task, admin_task).await;
         });
     }
 }

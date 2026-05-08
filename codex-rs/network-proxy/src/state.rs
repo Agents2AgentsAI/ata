@@ -1,6 +1,7 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::mitm::MitmState;
+use crate::mitm::MitmUpstreamConfig;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::policy::is_global_wildcard_domain_pattern;
@@ -66,9 +67,10 @@ pub fn build_config_state(
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
     let mitm = if config.network.mitm {
-        Some(Arc::new(MitmState::new(
-            config.network.allow_upstream_proxy,
-        )?))
+        Some(Arc::new(MitmState::new(MitmUpstreamConfig {
+            allow_upstream_proxy: config.network.allow_upstream_proxy,
+            allow_local_binding: config.network.allow_local_binding,
+        })?))
     } else {
         None
     };

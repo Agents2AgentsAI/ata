@@ -1628,6 +1628,7 @@ dependencies = [
  "clap",
  "codex-connectors",
  "codex-core",
+ "codex-login",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-git",
