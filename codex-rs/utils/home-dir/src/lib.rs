@@ -57,7 +57,7 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Abs
                 )
             })?;
             p.push(".ata");
-            Ok(p)
+            AbsolutePathBuf::from_absolute_path(p)
         }
     }
 }
