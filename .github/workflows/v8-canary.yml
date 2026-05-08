@@ -58,6 +58,11 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: metadata
+    # The build job leans on a remote BuildBuddy executor for which the ATA
+    # fork does not yet have a BUILDBUDDY_API_KEY secret configured. Skip on
+    # PRs and only run when the secret is available (push to main / manual
+    # dispatch from a maintainer).
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
