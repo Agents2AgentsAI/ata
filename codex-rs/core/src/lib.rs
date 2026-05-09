@@ -9,6 +9,15 @@ mod apply_patch;
 mod apps;
 mod arc_monitor;
 pub(crate) mod auth;
+/// Re-export Copilot OAuth helpers needed by `codex-app-server` to drive the
+/// device-code login flow on behalf of the TUI/desktop client. Kept narrow on
+/// purpose: the rest of `auth` stays `pub(crate)`.
+pub mod auth_public {
+    pub use crate::auth::CopilotDeviceCodeResponse;
+    pub use crate::auth::complete_copilot_login;
+    pub use crate::auth::poll_copilot_access_token;
+    pub use crate::auth::start_copilot_device_flow;
+}
 mod client;
 mod client_common;
 mod realtime_context;
