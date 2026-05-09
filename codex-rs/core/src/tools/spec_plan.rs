@@ -5,6 +5,7 @@ use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::ContainerExecHandler;
 use crate::tools::handlers::CreateGoalHandler;
+use crate::tools::handlers::DocumentReaderHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::GetGoalHandler;
@@ -30,6 +31,11 @@ use crate::tools::handlers::agent_jobs_spec::create_report_agent_job_result_tool
 use crate::tools::handlers::agent_jobs_spec::create_spawn_agents_on_csv_tool;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_json_tool;
+use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
+use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
+use crate::tools::handlers::document_reader::PATCH_DOCUMENT_SECTION_TOOL;
+use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
+use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::goal_spec::create_create_goal_tool;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
@@ -274,6 +280,21 @@ pub fn build_tool_registry_builder(
             config.code_mode_enabled,
         );
         builder.register_handler(Arc::new(UpdateGoalHandler));
+    }
+
+    for (tool_static, name) in [
+        (&*PRESENT_DOCUMENT_TOOL, "present_reading_view"),
+        (&*UPDATE_DOCUMENT_SECTION_TOOL, "update_document_section"),
+        (&*APPEND_TO_SECTION_TOOL, "append_to_section"),
+        (&*ADD_DOCUMENT_SECTION_TOOL, "add_section"),
+        (&*PATCH_DOCUMENT_SECTION_TOOL, "patch_document_section"),
+    ] {
+        builder.push_spec(
+            tool_static.clone(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        builder.register_handler(Arc::new(DocumentReaderHandler::new(ToolName::plain(name))));
     }
 
     builder.push_spec(
