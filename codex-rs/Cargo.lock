@@ -2223,6 +2223,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-rollout-trace",
  "codex-sandboxing",
+ "codex-scheduler",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
