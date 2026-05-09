@@ -92,8 +92,7 @@
       "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
       "properties": {
         "enabled": {
-          "default": false,
-          "description": "When `true`, enables analytics across Codex product surfaces in this profile.",
+          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
           "type": "boolean"
         }
       },
@@ -281,7 +280,7 @@
       "description": "Determine where Codex should store CLI auth credentials.",
       "oneOf": [
         {
-          "description": "Persist credentials in CODEX_HOME/auth.json with 0600 permissions.",
+          "description": "Persist credentials in CODEX_HOME/auth.json.",
           "enum": [
             "file"
           ],
@@ -295,7 +294,7 @@
           "type": "string"
         },
         {
-          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME. More secure - stores credentials in OS keyring. If keyring access fails once, it automatically falls back to file storage for the session to avoid repeated prompts.",
+          "description": "Use keyring when available; otherwise, fall back to a file in CODEX_HOME.",
           "enum": [
             "auto"
           ],
@@ -413,12 +412,6 @@
             "connectors": {
               "type": "boolean"
             },
-            "coordination": {
-              "type": "boolean"
-            },
-            "data": {
-              "type": "boolean"
-            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -482,9 +475,6 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
-            "lsp": {
-              "type": "boolean"
-            },
             "memories": {
               "type": "boolean"
             },
@@ -507,9 +497,6 @@
               "type": "boolean"
             },
             "prevent_idle_sleep": {
-              "type": "boolean"
-            },
-            "reading_view": {
               "type": "boolean"
             },
             "realtime_conversation": {
@@ -546,9 +533,6 @@
               "type": "boolean"
             },
             "runtime_metrics": {
-              "type": "boolean"
-            },
-            "scheduler": {
               "type": "boolean"
             },
             "search_tool": {
@@ -696,8 +680,8 @@
         "tools": {
           "$ref": "#/definitions/ToolsToml"
         },
-        "tools": {
-          "$ref": "#/definitions/ToolsToml"
+        "tools_view_image": {
+          "type": "boolean"
         },
         "tui": {
           "allOf": [
@@ -826,8 +810,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "default": false,
-          "description": "When `true`, enables the feedback upload flow across Codex product surfaces.",
+          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
           "type": "boolean"
         }
       },
@@ -927,7 +910,7 @@
     },
     "History": {
       "additionalProperties": false,
-      "description": "Settings that govern if and what will be written to `~/.ata/history.jsonl`.",
+      "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`.",
       "properties": {
         "max_bytes": {
           "default": null,
@@ -2081,17 +2064,6 @@
       },
       "type": "object"
     },
-    "ReadingViewToml": {
-      "additionalProperties": false,
-      "description": "Reading view configuration persisted under `[reading_view]` in config.toml.",
-      "properties": {
-        "mode": {
-          "description": "Display mode: \"tui\", \"browser\", or \"disabled\".",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "RealtimeAudioToml": {
       "additionalProperties": false,
       "properties": {
@@ -2169,16 +2141,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
@@ -2211,14 +2194,6 @@
     "SandboxWorkspaceWrite": {
       "additionalProperties": false,
       "properties": {
-        "additional_writable_roots": {
-          "default": [],
-          "description": "Additional writable root paths that support `~` expansion and relative paths.  These are resolved at config-load time and merged into the effective writable roots for the sandbox.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "exclude_slash_tmp": {
           "default": false,
           "type": "boolean"
@@ -3797,23 +3772,23 @@
           "type": "string"
         },
         {
-          "description": "Anthropic Messages API at `/v1/messages`.",
+          "description": "The Anthropic Messages API at `/v1/messages`.",
           "enum": [
-            "anthropic_messages"
+            "anthropicmessages"
           ],
           "type": "string"
         },
         {
-          "description": "Google Gemini GenerateContent API.",
+          "description": "The Google Gemini `generateContent` API.",
           "enum": [
-            "gemini_generate"
+            "geminigenerate"
           ],
           "type": "string"
         },
         {
-          "description": "GitHub Copilot inline completions at `https://api.github.com/copilot/inline`.",
+          "description": "GitHub Copilot's Chat Completions endpoint at `https://api.githubcopilot.com/chat/completions`. Despite the legacy \"inline\" suffix, this is the streamed Chat Completions wire format, translated to ResponseEvents by `codex-api::sse::chat_completions`.",
           "enum": [
-            "copilot_inline"
+            "copilotinline"
           ],
           "type": "string"
         }
@@ -4042,12 +4017,6 @@
         "connectors": {
           "type": "boolean"
         },
-        "coordination": {
-          "type": "boolean"
-        },
-        "data": {
-          "type": "boolean"
-        },
         "default_mode_request_user_input": {
           "type": "boolean"
         },
@@ -4111,9 +4080,6 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
-        "lsp": {
-          "type": "boolean"
-        },
         "memories": {
           "type": "boolean"
         },
@@ -4136,9 +4102,6 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
-          "type": "boolean"
-        },
-        "reading_view": {
           "type": "boolean"
         },
         "realtime_conversation": {
@@ -4175,9 +4138,6 @@
           "type": "boolean"
         },
         "runtime_metrics": {
-          "type": "boolean"
-        },
-        "scheduler": {
           "type": "boolean"
         },
         "search_tool": {
@@ -4648,10 +4608,6 @@
       ],
       "description": "Nested tools section for feature toggles"
     },
-    "treesitter": {
-      "default": null,
-      "description": "TreeSitter indexing configuration."
-    },
     "tui": {
       "allOf": [
         {
@@ -4659,15 +4615,6 @@
         }
       ],
       "description": "Collection of settings that are specific to the TUI."
-    },
-    "voice_mode": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/VoiceModeToml"
-        }
-      ],
-      "default": null,
-      "description": "Voice mode settings (mic → STT → agent → TTS → speaker)."
     },
     "web_search": {
       "allOf": [

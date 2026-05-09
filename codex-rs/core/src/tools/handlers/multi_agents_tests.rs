@@ -3148,8 +3148,28 @@ async fn close_agent_submits_shutdown_and_returns_previous_status() {
     assert_eq!(status_after, AgentStatus::NotFound);
 }
 
-#[tokio::test]
-async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed() {
+// The cascade builds a deep agent-tree fixture and its async assertions
+// overflow the default 8MB main-thread stack on debug builds. Run the test
+// body on a dedicated thread with a 16MB stack so it doesn't depend on
+// developers exporting `RUST_MIN_STACK` ahead of `cargo test`.
+#[test]
+fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed() {
+    let handle = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build runtime")
+                .block_on(
+                    tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed_impl(),
+                );
+        })
+        .expect("spawn dedicated stack thread");
+    handle.join().expect("test thread join");
+}
+
+async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtrees_closed_impl() {
     let (_session, turn) = make_session_and_context().await;
     let mut config = turn.config.as_ref().clone();
     config.agent_max_depth = 3;

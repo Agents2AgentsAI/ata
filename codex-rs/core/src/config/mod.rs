@@ -2807,11 +2807,17 @@ impl Config {
         let model_provider = match model_providers.get(&model_provider_id) {
             Some(provider) => provider.clone(),
             None => {
-                let warning = if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
-                    OLLAMA_CHAT_PROVIDER_REMOVED_ERROR.to_string()
-                } else {
-                    format!("Model provider `{model_provider_id}` not found")
-                };
+                // The legacy `ollama-chat` provider was removed and there is
+                // no drop-in equivalent (config still says `chat` but the wire
+                // API was deleted). Hard-fail so users notice and fix the
+                // config rather than silently falling back to openai.
+                if model_provider_id == LEGACY_OLLAMA_CHAT_PROVIDER_ID {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        OLLAMA_CHAT_PROVIDER_REMOVED_ERROR,
+                    ));
+                }
+                let warning = format!("Model provider `{model_provider_id}` not found");
                 tracing::warn!("{warning}; falling back to openai");
                 startup_warnings.push(format!(
                     "{MODEL_PROVIDER_FALLBACK_PREFIX} {warning}. Using the default openai provider."
