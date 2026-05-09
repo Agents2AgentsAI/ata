@@ -520,7 +520,6 @@ ignored = [
     "codex-lsp-client",
     "codex-reading-view-server",
     "codex-data-tools",
-    "codex-scheduler",
     "codex-test-macros",
     "cpal",
     "hound",
