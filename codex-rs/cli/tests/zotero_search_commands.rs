@@ -8,7 +8,7 @@ use tempfile::TempDir;
 static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 fn ata_bin() -> &'static PathBuf {
-    ATA_BIN.get_or_init(|| match codex_utils_cargo_bin::cargo_bin("codex") {
+    ATA_BIN.get_or_init(|| match codex_utils_cargo_bin::cargo_bin("ata") {
         Ok(path) => path,
         Err(error) => panic!("failed to locate codex binary: {error}"),
     })

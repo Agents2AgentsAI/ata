@@ -470,7 +470,7 @@ qrcode = "0.14"
 # that these cfg names are intentional, so the gated code stays inactive
 # on the public branch without warnings.
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("ata-plus", "data", "lsp", "treesitter", "relay"))',
+    'cfg(feature, values("ata-plus", "data", "lsp", "treesitter", "relay", "huggingface", "kaggle", "go", "java", "javascript", "python", "rust", "scala", "typescript"))',
 ] }
 
 [workspace.lints.clippy]

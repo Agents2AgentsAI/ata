@@ -701,9 +701,7 @@ fn mcp_init_error_display(
             "GitHub MCP does not support OAuth. Log in by adding a personal access token (https://github.com/settings/personal-access-tokens) to your environment and config.toml:\n[mcp_servers.{server_name}]\nbearer_token_env_var = CODEX_GITHUB_PERSONAL_ACCESS_TOKEN"
         )
     } else if is_mcp_client_auth_required_error(err) {
-        format!(
-            "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
-        )
+        format!("The {server_name} MCP server is not logged in. Run `ata mcp login {server_name}`.")
     } else if is_mcp_client_startup_timeout_error(err) {
         let startup_timeout_secs = match entry {
             Some(entry) => match entry.config.startup_timeout_sec {
