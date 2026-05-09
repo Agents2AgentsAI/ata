@@ -1025,17 +1025,16 @@ pub async fn run_main(
     })) {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: {e}");
-            }
+            // Log via tracing so the message goes to the rolling log file
+            // (~/.ata/log/codex-tui.log) instead of stderr — the TUI is on
+            // the alternate screen by the time we get here, and any stderr
+            // write smears across the rendered chat surface.
+            tracing::error!(error = %e, "could not create otel exporter");
             None
         }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
+        Err(payload) => {
+            let detail = panic_payload_message(&payload);
+            tracing::error!(panic = %detail, "otel exporter panicked during initialization");
             None
         }
     };
@@ -1538,6 +1537,19 @@ async fn run_ratatui_app(
     clippy::print_stderr,
     reason = "TUI should no longer be displayed, so we can write to stderr."
 )]
+/// Best-effort extraction of a `Display` panic message from a
+/// `catch_unwind` payload. Falls back to a generic label when the
+/// payload is neither `String` nor `&'static str`.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 fn restore() {
     if let Err(err) = tui::restore_after_exit() {
         eprintln!(
