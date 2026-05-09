@@ -15,10 +15,10 @@ use super::ProviderOauthCredential;
 use super::clear_provider_oauth_credential;
 use super::get_provider_oauth_credential;
 use super::login_with_provider_oauth;
-use crate::default_client::build_reqwest_client;
-use crate::error::CodexErr;
-use crate::error::Result;
 use crate::util::redact_error_body;
+use codex_login::default_client::build_reqwest_client;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 
 pub const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
 pub const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";

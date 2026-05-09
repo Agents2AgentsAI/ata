@@ -3,6 +3,7 @@ use std::path::Path;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 
 use crate::auth::storage::AuthCredentialsStoreMode;
+use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::create_auth_storage;
 
 use super::env::read_api_key_from_env;
@@ -50,7 +51,10 @@ pub fn list_configured_providers(
     }
 
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    match storage.load() {
+    match storage
+        .load()
+        .map(|opt| opt.map(AuthDotJson::migrate_if_needed))
+    {
         Ok(Some(auth)) => {
             if auth.auth_mode == Some(ApiAuthMode::Chatgpt)
                 && auth.tokens.is_some()
