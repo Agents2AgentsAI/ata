@@ -1250,6 +1250,75 @@ async fn token_usage_update_refreshes_status_line_with_runtime_context_window() 
 }
 
 #[tokio::test]
+async fn collab_receiver_notification_caches_thread_without_app_server_read() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "wait-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::Wait,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::InProgress,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: None,
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::new(),
+            },
+        }),
+    ));
+
+    assert_eq!(
+        app.agent_navigation.get(&receiver_thread_id),
+        Some(&AgentPickerThreadEntry {
+            agent_nickname: None,
+            agent_role: None,
+            is_closed: false,
+        })
+    );
+}
+
+#[tokio::test]
+async fn collab_receiver_notification_does_not_cache_not_found_thread() {
+    let mut app = make_test_app().await;
+    let receiver_thread_id =
+        ThreadId::from_string("00000000-0000-0000-0000-000000000124").expect("valid thread id");
+
+    app.handle_thread_event_now(ThreadBufferedEvent::Notification(
+        ServerNotification::ItemCompleted(codex_app_server_protocol::ItemCompletedNotification {
+            thread_id: ThreadId::new().to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: ThreadItem::CollabAgentToolCall {
+                id: "send-1".to_string(),
+                tool: codex_app_server_protocol::CollabAgentTool::SendInput,
+                status: codex_app_server_protocol::CollabAgentToolCallStatus::Failed,
+                sender_thread_id: ThreadId::new().to_string(),
+                receiver_thread_ids: vec![receiver_thread_id.to_string()],
+                prompt: Some("hello".to_string()),
+                model: None,
+                reasoning_effort: None,
+                agents_states: HashMap::from([(
+                    receiver_thread_id.to_string(),
+                    codex_app_server_protocol::CollabAgentState {
+                        status: codex_app_server_protocol::CollabAgentStatus::NotFound,
+                        message: None,
+                    },
+                )]),
+            },
+        }),
+    ));
+
+    assert_eq!(app.agent_navigation.get(&receiver_thread_id), None);
+}
+
+#[tokio::test]
 async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
     let mut app = Box::pin(make_test_app()).await;
     let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
