@@ -1242,6 +1242,7 @@ impl UnifiedExecProcessManager {
 
     /// Removes all processes that have already exited from the store,
     /// freeing their associated file descriptors (PTY fds, pipes, etc.).
+    #[allow(dead_code)]
     pub(crate) async fn cleanup_exited_processes(&self) {
         let exited_entries: Vec<ProcessEntry> = {
             let mut store = self.process_store.lock().await;

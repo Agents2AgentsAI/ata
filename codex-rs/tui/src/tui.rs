@@ -437,6 +437,7 @@ pub struct Tui {
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
     // Tracks whether mouse capture is currently enabled, to avoid redundant escape sequences.
+    #[allow(dead_code)]
     mouse_capture_active: bool,
 }
 

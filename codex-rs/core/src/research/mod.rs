@@ -10,6 +10,7 @@ pub use prompt::build_research_prompt;
 pub use researcher_prompt::RESEARCHER_SYSTEM_PROMPT;
 pub use types::ResearchOutput;
 
+#[allow(dead_code)]
 pub(crate) type SharedResearchToolkit = codex_research_tools::ResearchToolkit;
 
 use crate::config::types::ResearchToolsToml;

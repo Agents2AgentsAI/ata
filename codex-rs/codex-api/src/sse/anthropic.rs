@@ -2,6 +2,14 @@
 //!
 //! Anthropic uses standard SSE with specific event types for content blocks.
 //! This module handles the interleaved streaming of text and tool calls.
+//!
+//! `#![allow(dead_code)]` applies module-wide because the wire-envelope
+//! structs (`AnthropicMessage`, `ContentBlock::ToolUse::input`,
+//! `MessageDelta`, etc.) deserialize from the Anthropic Messages API
+//! response shape; not every field is read at runtime, but each is
+//! load-bearing documentation of the protocol contract and may be
+//! consumed by future code paths (telemetry, error recovery, etc.).
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::collections::HashSet;

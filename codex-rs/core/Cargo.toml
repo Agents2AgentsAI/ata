@@ -4,6 +4,16 @@ license.workspace = true
 name = "codex-core"
 version.workspace = true
 
+[features]
+default = []
+# Optional ATA tooling integrations. None are enabled in the public release
+# branch; the `#[cfg(feature = "<name>")]`-gated code is only built on the
+# private branches that wire these in. Declared here so rustc doesn't emit
+# `unexpected_cfgs` warnings for the gates.
+data = []
+lsp = []
+treesitter = []
+
 [lib]
 doctest = false
 name = "codex_core"

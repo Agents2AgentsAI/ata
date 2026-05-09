@@ -66,7 +66,7 @@ impl AppEventSender {
         )));
     }
 
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) fn realtime_conversation_audio(&self, frame: ThreadRealtimeAudioChunk) {
         self.send(AppEvent::CodexOp(AppCommand::realtime_conversation_audio(
             frame,

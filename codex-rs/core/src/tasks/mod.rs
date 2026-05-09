@@ -795,6 +795,7 @@ impl Session {
             .await;
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn cleanup_after_interrupt(&self, _turn_context: &Arc<TurnContext>) {
         // No-op: js_repl support is not present in this build.
     }

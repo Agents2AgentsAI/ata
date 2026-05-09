@@ -1864,8 +1864,6 @@ fn build_review_request(args: &ReviewArgs) -> anyhow::Result<ReviewRequest> {
     })
 }
 
-// Worker relay functions have been moved to ata_plus::worker
-
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
