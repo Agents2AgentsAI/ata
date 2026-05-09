@@ -3,6 +3,7 @@ pub(crate) mod auth;
 pub(crate) mod common;
 pub(crate) mod endpoint;
 pub(crate) mod error;
+pub mod file_support;
 pub(crate) mod files;
 pub(crate) mod provider;
 pub mod provider_adapter;
