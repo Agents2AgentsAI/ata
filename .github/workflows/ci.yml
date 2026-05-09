@@ -67,7 +67,7 @@ jobs:
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
-            --package codex \
+            --package ata \
             --allow-missing-native-component bwrap \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/ata-npm-${ATA_VERSION}.tgz"
