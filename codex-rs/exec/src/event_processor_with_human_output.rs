@@ -101,11 +101,7 @@ impl EventProcessorWithHumanOutput {
     fn render_item_completed(&mut self, item: ThreadItem) {
         match item {
             ThreadItem::AgentMessage { text, .. } => {
-                eprintln!(
-                    "{}\n{}",
-                    "ata".style(self.italic).style(self.magenta),
-                    text
-                );
+                eprintln!("{}\n{}", "ata".style(self.italic).style(self.magenta), text);
                 self.final_message = Some(text);
                 self.final_message_rendered = true;
             }
