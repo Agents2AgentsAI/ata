@@ -1043,10 +1043,7 @@ pub async fn run_main(
     let otel = match otel_result {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
-            append_otel_init_failure(
-                &log_dir,
-                &format!("otel exporter init returned error: {e}"),
-            );
+            append_otel_init_failure(&log_dir, &format!("otel exporter init returned error: {e}"));
             None
         }
         Err(payload) => {
