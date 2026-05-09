@@ -56,6 +56,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
+pub use document_reader::DocumentReaderHandler;
 pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
