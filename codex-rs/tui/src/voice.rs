@@ -341,6 +341,58 @@ impl RealtimeAudioPlayer {
             guard.clear();
         }
     }
+
+    /// Return a `Send`-able handle that can push PCM into the same queue
+    /// `enqueue_frame` writes to. The handle does not keep the cpal stream
+    /// alive — once the parent `RealtimeAudioPlayer` is dropped, pushes are
+    /// silently no-ops because the consumer thread stops draining.
+    /// Used by alternative TTS backends (e.g. ElevenLabs) that drive PCM
+    /// from an async/Send task while the cpal stream stays on the UI thread.
+    pub(crate) fn playback_handle(&self) -> RealtimeAudioPlaybackHandle {
+        RealtimeAudioPlaybackHandle {
+            queue: Arc::clone(&self.queue),
+            output_sample_rate: self.output_sample_rate,
+            output_channels: self.output_channels,
+        }
+    }
+
+}
+
+/// Send-able view of the playback queue. Constructed via
+/// `RealtimeAudioPlayer::playback_handle` so async tasks can push PCM
+/// while the underlying cpal stream stays on its constructing thread.
+#[derive(Clone)]
+pub(crate) struct RealtimeAudioPlaybackHandle {
+    queue: Arc<Mutex<VecDeque<i16>>>,
+    output_sample_rate: u32,
+    output_channels: u16,
+}
+
+impl RealtimeAudioPlaybackHandle {
+    pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
+        if pcm.is_empty() || channels == 0 || sample_rate == 0 {
+            return;
+        }
+        let converted = convert_pcm16(
+            pcm,
+            sample_rate,
+            channels,
+            self.output_sample_rate,
+            self.output_channels,
+        );
+        if converted.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.queue.lock() {
+            guard.extend(converted);
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        if let Ok(mut guard) = self.queue.lock() {
+            guard.clear();
+        }
+    }
 }
 
 fn build_output_stream(

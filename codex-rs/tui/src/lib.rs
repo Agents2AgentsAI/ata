@@ -160,6 +160,7 @@ mod theme_picker;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;
+mod tts;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;

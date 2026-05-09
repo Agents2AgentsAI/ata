@@ -790,6 +790,10 @@ pub(crate) struct ChatWidget {
     stream_controller: Option<StreamController>,
     // Stream lifecycle controller for proposed plan output.
     plan_stream_controller: Option<PlanStreamController>,
+    /// ElevenLabs TTS pipeline. `Some` when `[elevenlabs] api_key` is set
+    /// in the user's config; `None` falls back to the upstream realtime
+    /// audio path.
+    tts: Option<crate::tts::ElevenLabsTtsManager>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
     copy_last_response_binding: Vec<KeyBinding>,
@@ -2311,7 +2315,15 @@ impl ChatWidget {
             && let Some(message) = message
             && !message.is_empty()
         {
+            // Forward to TTS in the no-stream-controller branch only; the
+            // delta path below already covers the streamed case.
+            if let Some(tts) = self.tts.as_ref() {
+                tts.enqueue_text(message);
+            }
             self.handle_streaming_delta(message.to_string());
+        }
+        if let Some(tts) = self.tts.as_ref() {
+            tts.flush();
         }
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
@@ -2319,6 +2331,9 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        if let Some(tts) = self.tts.as_ref() {
+            tts.enqueue_text(&delta);
+        }
         self.handle_streaming_delta(delta);
     }
 
@@ -4911,6 +4926,7 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let tts_manager = crate::tts::ElevenLabsTtsManager::try_new(&config);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -4954,6 +4970,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            tts: tts_manager,
             clipboard_lease: None,
             copy_last_response_binding,
             running_commands: HashMap::new(),
@@ -5655,6 +5672,11 @@ impl ChatWidget {
         history_record: UserMessageHistoryRecord,
         shell_escape_policy: ShellEscapePolicy,
     ) -> (bool, Option<AppCommand>) {
+        // A new user turn cancels in-flight TTS playback so the assistant
+        // doesn't keep talking over the user.
+        if let Some(tts) = self.tts.as_ref() {
+            tts.interrupt();
+        }
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages

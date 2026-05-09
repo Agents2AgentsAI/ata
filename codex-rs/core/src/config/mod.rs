@@ -26,6 +26,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ElevenLabsToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -768,6 +769,13 @@ pub struct Config {
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
+
+    /// Optional ElevenLabs TTS/STT credentials and voice selection. When
+    /// `api_key` is set, the TUI streams agent text into ElevenLabs and
+    /// plays the returned PCM through the same speaker pipeline used by
+    /// upstream realtime voice. Disabled (`None`) means the upstream voice
+    /// path stays in control.
+    pub elevenlabs: Option<ElevenLabsToml>,
 
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
@@ -3342,6 +3350,7 @@ impl Config {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
                 }),
+            elevenlabs: cfg.elevenlabs.clone(),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
