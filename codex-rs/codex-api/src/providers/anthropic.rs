@@ -91,17 +91,39 @@ impl ProviderAdapter for AnthropicAdapter {
         if let Some(reasoning) = &options.reasoning
             && let Some(effort) = reasoning.get("effort").and_then(|e| e.as_str())
         {
+            // Opus 4.7 exposes a dedicated Max tier that maps to a much
+            // larger thinking budget than the older models. The xhigh tier
+            // also gets a known mapping (parallels Adaptive's ceiling) so
+            // it doesn't fall through to the generic max_tokens-1 branch.
+            let model_lower = model.to_lowercase();
+            let is_opus_4_7 = model_lower.contains("claude-opus-4-7");
             match effort {
                 "none" => { /* skip — no thinking requested */ }
                 "adaptive" => {
                     body["thinking"] = json!({"type": "adaptive"});
+                }
+                "max" if is_opus_4_7 => {
+                    // Anthropic Opus 4.7 supports the largest documented
+                    // thinking budget (~200K tokens). Clamp to leave room
+                    // for the response.
+                    let budget = 200_000_u32.min(max_tokens.saturating_sub(1));
+                    let budget = budget.max(1024);
+                    body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                }
+                "xhigh" if is_opus_4_7 => {
+                    // Match the second-highest tier (parallels Adaptive's
+                    // ceiling) — half of the Max budget keeps a clear gap
+                    // between High (32K) and Max (200K).
+                    let budget = 100_000_u32.min(max_tokens.saturating_sub(1));
+                    let budget = budget.max(1024);
+                    body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
                 }
                 _ => {
                     let budget = match effort {
                         "minimal" | "low" => 1024_u32,
                         "medium" => 10_000,
                         "high" => 32_000,
-                        _ => max_tokens.saturating_sub(1).max(1024), // xhigh or unknown
+                        _ => max_tokens.saturating_sub(1).max(1024), // xhigh, max, or unknown
                     };
                     let budget = budget.max(1024).min(max_tokens.saturating_sub(1));
                     body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
@@ -657,8 +679,11 @@ fn build_anthropic_messages(input: &[Value]) -> Result<Vec<Value>, ApiError> {
 pub fn default_max_tokens(model: &str) -> u32 {
     let model_lower = model.to_lowercase();
 
-    // 128K models — check most specific first
-    if model_lower.contains("claude-opus-4-6") {
+    // 200K models (Opus 4.7 supports the largest documented thinking budget)
+    if model_lower.contains("claude-opus-4-7") {
+        200000
+    // 128K models
+    } else if model_lower.contains("claude-opus-4-6") {
         128000
     // 64K models
     } else if model_lower.contains("claude-3-7")
@@ -763,6 +788,8 @@ mod tests {
         assert_eq!(default_max_tokens("claude-haiku-4-5-20251001"), 64000);
         // 128K models
         assert_eq!(default_max_tokens("claude-opus-4-6-20260101"), 128000);
+        // 200K models
+        assert_eq!(default_max_tokens("claude-opus-4-7-20260301"), 200000);
         // Unknown
         assert_eq!(default_max_tokens("unknown-model"), 4096);
     }
@@ -1025,6 +1052,86 @@ mod tests {
             .unwrap();
         assert_eq!(body["thinking"]["type"], "enabled");
         assert_eq!(body["thinking"]["budget_tokens"], 32_000);
+    }
+
+    #[test]
+    fn test_build_request_body_opus_4_7_max_thinking() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "max"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body(
+                "claude-opus-4-7-20260301",
+                "Be helpful",
+                &input,
+                &[],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        // max_tokens for opus-4-7 is 200_000, so the budget is clamped to
+        // max_tokens - 1 (still the documented Max ceiling).
+        assert_eq!(body["thinking"]["budget_tokens"], 199_999);
+    }
+
+    #[test]
+    fn test_build_request_body_opus_4_7_xhigh_thinking() {
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "xhigh"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body(
+                "claude-opus-4-7-20260301",
+                "Be helpful",
+                &input,
+                &[],
+                &options,
+            )
+            .unwrap();
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 100_000);
+    }
+
+    #[test]
+    fn test_build_request_body_opus_4_7_max_only_for_4_7() {
+        // The Max tier should not bump the budget for older models — they
+        // fall through to the default branch and clamp to max_tokens-1.
+        let adapter = AnthropicAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "Hello"}]
+        })];
+        let options = RequestOptions {
+            reasoning: Some(json!({"effort": "max"})),
+            ..Default::default()
+        };
+        let body = adapter
+            .build_request_body(
+                "claude-opus-4-6-20260101",
+                "Be helpful",
+                &input,
+                &[],
+                &options,
+            )
+            .unwrap();
+        // Falls into the default branch: max_tokens (128_000) - 1.
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 127_999);
     }
 
     #[test]
