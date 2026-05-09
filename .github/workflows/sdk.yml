@@ -49,6 +49,11 @@ jobs:
           target: x86_64-unknown-linux-gnu
 
       - name: Build codex with Bazel
+        # Skip when BuildBuddy credentials are unavailable (fork PRs); the
+        # local Bazel fallback still tries to fetch via remote_downloader and
+        # fails. Re-enable once a BUILDBUDDY_API_KEY secret is provisioned on
+        # the public ATA repo.
+        if: env.BUILDBUDDY_API_KEY != ''
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -104,6 +109,9 @@ jobs:
           echo "CODEX_EXEC_PATH=${install_dir}/codex" >> "$GITHUB_ENV"
 
       - name: Warm up Bazel-built codex
+        if: env.BUILDBUDDY_API_KEY != ''
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -119,6 +127,9 @@ jobs:
         run: pnpm -r --filter ./sdk/typescript run lint
 
       - name: Test SDK packages
+        if: env.BUILDBUDDY_API_KEY != ''
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: pnpm -r --filter ./sdk/typescript run test
 
       - name: Save bazel repository cache
