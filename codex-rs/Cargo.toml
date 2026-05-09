@@ -525,7 +525,6 @@ ignored = [
     "cpal",
     "hound",
     "mdns-sd",
-    "pdfium-render",
     "qrcode",
     "redis",
 ]

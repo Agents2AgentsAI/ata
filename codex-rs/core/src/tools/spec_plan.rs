@@ -6,6 +6,7 @@ use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::ContainerExecHandler;
 use crate::tools::handlers::CreateGoalHandler;
+use crate::tools::handlers::CropFigureHandler;
 use crate::tools::handlers::DocumentReaderHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
@@ -33,6 +34,7 @@ use crate::tools::handlers::agent_jobs_spec::create_spawn_agents_on_csv_tool;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch_spec::create_apply_patch_json_tool;
 use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
+use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
 use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::document_reader::PATCH_DOCUMENT_SECTION_TOOL;
@@ -305,6 +307,13 @@ pub fn build_tool_registry_builder(
         config.code_mode_enabled,
     );
     builder.register_handler(Arc::new(AttachUrlFilesHandler));
+
+    builder.push_spec(
+        CROP_FIGURE_TOOL.clone(),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    builder.register_handler(Arc::new(CropFigureHandler));
 
     builder.push_spec(
         create_request_user_input_tool(request_user_input_tool_description(
