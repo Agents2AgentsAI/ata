@@ -1,14 +1,17 @@
 use crate::error::WorkspaceError;
 use crate::paths;
 use crate::selection::write_selection_for;
+use crate::workspace_resolution;
 use std::path::Path;
 
-/// Set the active workspace selection.
-pub fn run(workspace_id: &str) -> Result<(), WorkspaceError> {
+/// Resolve a workspace selector and set it as the active selection.
+///
+/// Returns the resolved workspace ID.
+pub fn run(selector: &str) -> Result<String, WorkspaceError> {
     let context = paths::SessionContext::from_env();
     run_for(
         &context.codex_home,
-        workspace_id,
+        selector,
         context.session_id.as_deref(),
         context.thread_id.as_deref(),
     )
@@ -16,14 +19,13 @@ pub fn run(workspace_id: &str) -> Result<(), WorkspaceError> {
 
 fn run_for(
     codex_home: &Path,
-    workspace_id: &str,
+    selector: &str,
     session_id: Option<&str>,
     thread_id: Option<&str>,
-) -> Result<(), WorkspaceError> {
-    if !paths::manifest_path_for(codex_home, workspace_id).is_file() {
-        return Err(WorkspaceError::WorkspaceNotFound(workspace_id.to_string()));
-    }
-    write_selection_for(codex_home, workspace_id, session_id, thread_id)
+) -> Result<String, WorkspaceError> {
+    let workspace_id = workspace_resolution::resolve_workspace_selector_for(codex_home, selector)?;
+    write_selection_for(codex_home, &workspace_id, session_id, thread_id)?;
+    Ok(workspace_id)
 }
 
 #[cfg(test)]
@@ -43,7 +45,9 @@ mod tests {
         )
         .expect("write manifest");
 
-        run_for(temp.path(), "workspace-1", Some("session-1"), None).expect("select workspace");
+        let resolved =
+            run_for(temp.path(), "workspace-1", Some("session-1"), None).expect("select workspace");
+        assert_eq!(resolved, "workspace-1");
 
         let path = paths::selection_path_for(temp.path(), Some("session-1"));
         assert_eq!(

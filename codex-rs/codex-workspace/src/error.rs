@@ -1,5 +1,11 @@
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSelectorCandidate {
+    pub id: String,
+    pub name: String,
+}
+
 /// Errors that can occur during workspace operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -23,6 +29,24 @@ pub enum WorkspaceError {
 
     #[error("workspace '{0}' not found")]
     WorkspaceNotFound(String),
+
+    #[error(
+        "workspace selector '{selector}' not found{suggestions}",
+        suggestions = selector_candidate_suffix(candidates)
+    )]
+    WorkspaceSelectorNotFound {
+        selector: String,
+        candidates: Vec<WorkspaceSelectorCandidate>,
+    },
+
+    #[error(
+        "workspace selector '{selector}' is ambiguous; matches: {matches}",
+        matches = selector_candidate_list(candidates)
+    )]
+    WorkspaceSelectorAmbiguous {
+        selector: String,
+        candidates: Vec<WorkspaceSelectorCandidate>,
+    },
 
     #[error("cannot delete the global workspace")]
     DeleteGlobal,
@@ -162,4 +186,26 @@ impl WorkspaceError {
             _ => 1,
         }
     }
+}
+
+fn selector_candidate_suffix(candidates: &[WorkspaceSelectorCandidate]) -> String {
+    if candidates.is_empty() {
+        String::new()
+    } else {
+        format!("; suggestions: {}", selector_candidate_list(candidates))
+    }
+}
+
+fn selector_candidate_list(candidates: &[WorkspaceSelectorCandidate]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| {
+            if candidate.name.is_empty() {
+                candidate.id.clone()
+            } else {
+                format!("{} ({})", candidate.id, candidate.name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

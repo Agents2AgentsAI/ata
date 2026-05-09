@@ -28,6 +28,7 @@ codex-builtin-mcps = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
 codex-scheduler = { workspace = true }
+codex-workspace = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }

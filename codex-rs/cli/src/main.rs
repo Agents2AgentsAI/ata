@@ -1,6 +1,7 @@
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
+use codex_workspace::Cli as WorkspaceCli;
 use clap_complete::Shell;
 use clap_complete::generate;
 use codex_arg0::Arg0DispatchPaths;
@@ -169,6 +170,10 @@ enum Subcommand {
 
     /// Control the scheduler daemon.
     Scheduler(codex_scheduler::cli::SchedulerCli),
+
+    /// Manage workspaces (repos, runs, artifacts, audit).
+    #[clap(visible_alias = "ws")]
+    Workspace(WorkspaceCli),
 
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
@@ -1085,6 +1090,17 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 "scheduler",
             )?;
             codex_scheduler::cli::run_scheduler_command(scheduler_cli).await?;
+        }
+        Some(Subcommand::Workspace(workspace_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "workspace",
+            )?;
+            let code = codex_workspace::run_cli(workspace_cli);
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {

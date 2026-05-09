@@ -8,7 +8,7 @@ pub fn run() -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
     run_for(&paths::codex_home())
 }
 
-fn run_for(codex_home: &Path) -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
+pub fn run_for(codex_home: &Path) -> Result<Vec<WorkspaceSummary>, WorkspaceError> {
     let root = paths::ensure_workspaces_root_for(codex_home)?;
 
     let mut results = Vec::new();

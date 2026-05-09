@@ -2233,6 +2233,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "codex-workspace",
  "libc",
  "owo-colors",
  "predicates",
