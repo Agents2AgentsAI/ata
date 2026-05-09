@@ -8,6 +8,10 @@ pub(crate) fn file_capabilities_for_provider(
         WireApi::Responses => "openai",
         WireApi::AnthropicMessages => "anthropic",
         WireApi::GeminiGenerate => "gemini",
+        // Copilot proxies OpenAI-shaped Chat Completions; reuse OpenAI's
+        // file-attachment capabilities for now (Copilot inline chat tier
+        // doesn't currently accept native file uploads anyway).
+        WireApi::CopilotInline => "openai",
     };
     (
         provider_id.to_string(),

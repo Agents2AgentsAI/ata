@@ -127,6 +127,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 
 mod anthropic;
+mod copilot;
 mod gemini;
 mod provider_streaming;
 use codex_protocol::error::CodexErr;
@@ -251,7 +252,7 @@ pub struct ModelClientSession {
 }
 
 #[derive(Debug, Clone)]
-struct LastResponse {
+pub(super) struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
 }
@@ -1598,6 +1599,15 @@ impl ModelClientSession {
             WireApi::GeminiGenerate => {
                 gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
             }
+            WireApi::CopilotInline => {
+                copilot::stream_copilot_chat_completions(
+                    self,
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                )
+                .await
+            }
         }
     }
 
@@ -1699,7 +1709,7 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
 
-fn map_response_stream(
+pub(super) fn map_response_stream(
     api_stream: codex_api::ResponseStream,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,

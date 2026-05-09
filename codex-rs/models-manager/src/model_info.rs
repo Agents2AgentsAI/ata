@@ -1,5 +1,6 @@
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
@@ -63,8 +64,75 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     model
 }
 
+/// Built-in metadata for the Copilot-served models we know about.
+///
+/// Returns `None` for slugs we do not recognize so callers fall through to
+/// the generic fallback in `model_info_from_slug`.
+pub(crate) fn copilot_model_info(slug: &str) -> Option<ModelInfo> {
+    let (display_name, context_window, supports_vision, supports_parallel_tool_calls) = match slug {
+        "gpt-4o" | "gpt-4o-2024-11-20" | "gpt-4o-2024-08-06" | "gpt-4o-2024-05-13" => {
+            ("GPT-4o", 128_000, true, true)
+        }
+        "gpt-4o-mini" | "gpt-4o-mini-2024-07-18" => ("GPT-4o mini", 128_000, false, true),
+        "gpt-4.1" | "gpt-4.1-2025-04-14" => ("GPT-4.1", 1_000_000, true, true),
+        "gpt-4" | "gpt-4-0613" | "gpt-4-0125-preview" => ("GPT-4", 128_000, false, false),
+        "gpt-3.5-turbo" | "gpt-3.5-turbo-0613" => ("GPT-3.5 Turbo", 16_000, false, false),
+        "gpt-5-mini" => ("GPT-5 mini", 400_000, true, true),
+        "gpt-5.4" => ("GPT-5.4", 400_000, true, true),
+        "gpt-5.5" => ("GPT-5.5", 400_000, true, true),
+        "gpt-5.2-codex" => ("GPT-5.2 Codex", 400_000, true, true),
+        "claude-sonnet-4.6" => ("Claude Sonnet 4.6", 200_000, true, true),
+        "claude-opus-4.7" => ("Claude Opus 4.7", 200_000, true, true),
+        "claude-haiku-4.5" => ("Claude Haiku 4.5", 200_000, true, true),
+        "gemini-3.1-pro-preview" => ("Gemini 3.1 Pro", 2_000_000, true, true),
+        _ => return None,
+    };
+
+    Some(ModelInfo {
+        slug: slug.to_string(),
+        display_name: display_name.to_string(),
+        description: None,
+        default_reasoning_level: None,
+        supported_reasoning_levels: Vec::new(),
+        shell_type: ConfigShellToolType::Default,
+        visibility: ModelVisibility::None,
+        supported_in_api: true,
+        priority: 99,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        availability_nux: None,
+        upgrade: None,
+        base_instructions: BASE_INSTRUCTIONS.to_string(),
+        model_messages: None,
+        supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
+        support_verbosity: false,
+        default_verbosity: None,
+        apply_patch_tool_type: None,
+        web_search_tool_type: WebSearchToolType::Text,
+        truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
+        supports_parallel_tool_calls,
+        supports_image_detail_original: false,
+        context_window: Some(context_window),
+        max_context_window: Some(context_window),
+        auto_compact_token_limit: None,
+        effective_context_window_percent: 95,
+        experimental_supported_tools: Vec::new(),
+        input_modalities: if supports_vision {
+            vec![InputModality::Text, InputModality::Image]
+        } else {
+            vec![InputModality::Text]
+        },
+        used_fallback_model_metadata: false,
+        supports_search_tool: false,
+    })
+}
+
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub fn model_info_from_slug(slug: &str) -> ModelInfo {
+    if let Some(info) = copilot_model_info(slug) {
+        return info;
+    }
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
     ModelInfo {
         slug: slug.to_string(),

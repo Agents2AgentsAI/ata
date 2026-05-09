@@ -53,6 +53,11 @@ pub enum WireApi {
     AnthropicMessages,
     /// The Google Gemini `generateContent` API.
     GeminiGenerate,
+    /// GitHub Copilot's Chat Completions endpoint at
+    /// `https://api.githubcopilot.com/chat/completions`. Despite the legacy
+    /// "inline" suffix, this is the streamed Chat Completions wire format,
+    /// translated to ResponseEvents by `codex-api::sse::chat_completions`.
+    CopilotInline,
 }
 
 impl fmt::Display for WireApi {
@@ -61,6 +66,7 @@ impl fmt::Display for WireApi {
             Self::Responses => "responses",
             Self::AnthropicMessages => "anthropic_messages",
             Self::GeminiGenerate => "gemini_generate",
+            Self::CopilotInline => "copilot_inline",
         };
         f.write_str(value)
     }
@@ -76,10 +82,16 @@ impl<'de> Deserialize<'de> for WireApi {
             "responses" => Ok(Self::Responses),
             "anthropic_messages" => Ok(Self::AnthropicMessages),
             "gemini_generate" => Ok(Self::GeminiGenerate),
+            "copilot_inline" => Ok(Self::CopilotInline),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(
                 &value,
-                &["responses", "anthropic_messages", "gemini_generate"],
+                &[
+                    "responses",
+                    "anthropic_messages",
+                    "gemini_generate",
+                    "copilot_inline",
+                ],
             )),
         }
     }
@@ -405,6 +417,34 @@ impl ModelProviderInfo {
         }
     }
 
+    /// Built-in GitHub Copilot provider. Auth is performed via the OAuth
+    /// device flow in `core::auth::copilot_oauth`; the bearer token is
+    /// resolved per-request by `ModelClient::current_client_setup` rather
+    /// than carried in `experimental_bearer_token`.
+    pub fn create_copilot_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "GitHub Copilot".into(),
+            base_url: Some("https://api.githubcopilot.com".into()),
+            env_key: None,
+            env_key_instructions: Some(
+                "Sign in with GitHub Copilot from the login screen to authenticate.".into(),
+            ),
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::CopilotInline,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn create_amazon_bedrock_provider(
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
@@ -470,6 +510,10 @@ pub fn built_in_model_providers(
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
+        // GitHub Copilot is a built-in provider so the OAuth login flow can
+        // wire `model_provider = "copilot"` without writing a manual provider
+        // entry to config.toml.
+        ("copilot", ModelProviderInfo::create_copilot_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

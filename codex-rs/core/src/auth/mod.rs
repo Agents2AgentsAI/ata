@@ -110,6 +110,10 @@ impl ModelProviderApiKeyExt for codex_model_provider_info::ModelProviderInfo {
             codex_model_provider_info::WireApi::Responses => PROVIDER_OPENAI,
             codex_model_provider_info::WireApi::AnthropicMessages => PROVIDER_ANTHROPIC,
             codex_model_provider_info::WireApi::GeminiGenerate => PROVIDER_GEMINI,
+            // Copilot uses OAuth — there's no API key in storage to return.
+            // Surface "no credential" so callers fall through to the OAuth
+            // bearer-token resolution path in `ModelClient`.
+            codex_model_provider_info::WireApi::CopilotInline => return Ok(None),
         };
         Ok(get_provider_api_key(codex_home, provider_id, store_mode))
     }
