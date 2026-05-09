@@ -17,6 +17,7 @@ use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
 use codex_cli::run_login_with_chatgpt;
 use codex_cli::run_login_with_device_code;
+use codex_cli::run_login_with_provider;
 use codex_cli::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
@@ -426,6 +427,11 @@ struct LoginCommand {
 enum LoginSubcommand {
     /// Show login status.
     Status,
+    /// Sign in with a non-OpenAI provider (currently: copilot).
+    Provider {
+        /// Provider name. Currently only `copilot` is supported.
+        provider: String,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -1008,6 +1014,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             match login_cli.action {
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
+                }
+                Some(LoginSubcommand::Provider { provider }) => {
+                    run_login_with_provider(login_cli.config_overrides, &provider).await;
                 }
                 None => {
                     if login_cli.with_api_key && login_cli.with_access_token {

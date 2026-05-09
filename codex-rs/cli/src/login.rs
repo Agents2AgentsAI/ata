@@ -362,6 +362,79 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
 }
 
+/// Headless OAuth flow for non-OpenAI providers. Currently only `copilot`
+/// is supported. This drives the same device-code flow the TUI onboarding
+/// picker uses, but prints the user code + verification URI to stderr
+/// instead of rendering an interactive screen.
+pub async fn run_login_with_provider(
+    cli_config_overrides: CliConfigOverrides,
+    provider: &str,
+) -> ! {
+    if provider != "copilot" {
+        eprintln!(
+            "Unknown provider '{provider}'. Currently `copilot` is the only supported OAuth provider for `ata login provider`."
+        );
+        std::process::exit(2);
+    }
+
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let _file_log_guard = init_login_file_logging(&config);
+
+    let device = match codex_core::auth_public::start_copilot_device_flow().await {
+        Ok(device) => device,
+        Err(err) => {
+            eprintln!("Failed to start GitHub Copilot login: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!();
+    eprintln!("Open this URL in your browser to authorize:");
+    eprintln!("    {}", device.verification_uri);
+    eprintln!();
+    eprintln!("Enter this one-time code:");
+    eprintln!("    {}", device.user_code);
+    eprintln!();
+    eprintln!("Waiting for authorization...");
+
+    let token = match codex_core::auth_public::poll_copilot_access_token(&device).await {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("Authorization failed: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(err) = codex_core::auth_public::complete_copilot_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        token,
+    )
+    .await
+    {
+        eprintln!("Token exchange failed: {err}");
+        std::process::exit(1);
+    }
+
+    // Persist `model_provider = "copilot"` and `model = "gpt-4o"` so the
+    // next launch uses Copilot without manual `-c model=...` flags. This
+    // mirrors what the TUI device-code path does in
+    // app-server::AccountRequestProcessor::login_copilot_device_code_response.
+    if let Err(err) = codex_core::config::edit::ConfigEditsBuilder::new(&config.codex_home)
+        .set_model(Some("gpt-4o"), None, Some("copilot".to_string()))
+        .apply()
+        .await
+    {
+        eprintln!(
+            "Login succeeded but failed to persist model_provider=copilot to config.toml: {err}"
+        );
+    }
+
+    eprintln!();
+    eprintln!("{LOGIN_SUCCESS_MESSAGE} with GitHub Copilot.");
+    std::process::exit(0);
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 

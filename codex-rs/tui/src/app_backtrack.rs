@@ -243,8 +243,16 @@ impl App {
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
         let was_backtrack = self.backtrack.overlay_preview_active;
-        // TODO(ata): document reader gate temporarily disabled during the
-        // v0.129.0 upstream merge; will be re-introduced in a follow-up PR.
+        // The pre-v0.129.0 ATA tree had a reading-view gate here that
+        // suppressed flushing deferred_history_lines while a reading view
+        // was active (so the user wouldn't see the buffered history twice
+        // when re-entering the reading view). The TUI side of the reading
+        // view (`ReadingView` overlay state, alt-screen ownership) was not
+        // ported during the v0.129.0 upstream merge — only the core-side
+        // `document_reader` tool exists today — so there is nothing to
+        // gate against. When the reading-view UI lands as a follow-up,
+        // that PR should re-introduce the gate alongside the overlay
+        // state it tracks.
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_lines_with_wrap_policy(lines, self.history_line_wrap_policy());
