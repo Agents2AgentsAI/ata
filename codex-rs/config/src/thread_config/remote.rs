@@ -284,7 +284,7 @@ fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
         // ATA multi-provider WireApi variants — not yet wired to proto.
-        WireApi::AnthropicMessages | WireApi::GeminiGenerate => {
+        WireApi::AnthropicMessages | WireApi::GeminiGenerate | WireApi::CopilotInline => {
             unimplemented!("ATA multi-provider WireApi not wired for thread_config remote proto")
         }
     }
