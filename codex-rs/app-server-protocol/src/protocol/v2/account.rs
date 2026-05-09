@@ -61,6 +61,12 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
+    /// Start the GitHub Copilot device-code OAuth flow. The response carries
+    /// the user_code + verification URI the client should display; the
+    /// completion notification arrives once the user authorizes.
+    #[serde(rename = "copilotDeviceCode")]
+    #[ts(rename = "copilotDeviceCode")]
+    CopilotDeviceCode,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
@@ -107,6 +113,18 @@ pub enum LoginAccountResponse {
         /// URL the client should open in a browser to complete device code authorization.
         verification_url: String,
         /// One-time code the user must enter after signing in.
+        user_code: String,
+    },
+    /// Initial response for the GitHub Copilot device-code OAuth flow. The
+    /// `AccountLoginCompletedNotification` (with the same `login_id`) fires
+    /// once the user authorizes and the Copilot bearer token is exchanged.
+    #[serde(rename = "copilotDeviceCode", rename_all = "camelCase")]
+    #[ts(rename = "copilotDeviceCode", rename_all = "camelCase")]
+    CopilotDeviceCode {
+        login_id: String,
+        /// URL the client should open in a browser to authorize the device.
+        verification_uri: String,
+        /// One-time code the user must enter on the verification page.
         user_code: String,
     },
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]

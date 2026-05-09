@@ -18,6 +18,7 @@
 //! still pending.
 #![allow(unused_imports, dead_code)]
 
+pub mod copilot_oauth;
 pub mod gemini_oauth;
 pub mod gemini_revoke;
 pub mod providers;
@@ -49,10 +50,23 @@ pub use codex_login::CodexAuth;
 pub use codex_login::OPENAI_API_KEY_ENV_VAR;
 pub use codex_login::auth::storage::AuthDotJson;
 
+pub use copilot_oauth::COPILOT_EDITOR_PLUGIN_VERSION;
+pub use copilot_oauth::COPILOT_EDITOR_VERSION;
+pub use copilot_oauth::COPILOT_INTEGRATION_ID;
+pub use copilot_oauth::COPILOT_OAUTH_CLIENT_ID;
+pub use copilot_oauth::COPILOT_USER_AGENT;
+pub use copilot_oauth::DeviceCodeResponse as CopilotDeviceCodeResponse;
+pub use copilot_oauth::complete_login as complete_copilot_login;
+pub use copilot_oauth::get_or_refresh_copilot_token;
+pub use copilot_oauth::logout as copilot_logout;
+pub use copilot_oauth::poll_for_access_token as poll_copilot_access_token;
+pub use copilot_oauth::save_credentials as save_copilot_credentials;
+pub use copilot_oauth::start_device_flow as start_copilot_device_flow;
 pub use providers::ANTHROPIC_API_KEY_ENV_VAR;
 pub use providers::GOOGLE_API_KEY_ENV_VAR;
 pub use providers::GeminiAuthSource;
 pub use providers::PROVIDER_ANTHROPIC;
+pub use providers::PROVIDER_COPILOT;
 pub use providers::PROVIDER_GEMINI;
 pub use providers::PROVIDER_OPENAI;
 pub use providers::ProviderAuthMethod;
@@ -96,6 +110,10 @@ impl ModelProviderApiKeyExt for codex_model_provider_info::ModelProviderInfo {
             codex_model_provider_info::WireApi::Responses => PROVIDER_OPENAI,
             codex_model_provider_info::WireApi::AnthropicMessages => PROVIDER_ANTHROPIC,
             codex_model_provider_info::WireApi::GeminiGenerate => PROVIDER_GEMINI,
+            // Copilot uses OAuth — there's no API key in storage to return.
+            // Surface "no credential" so callers fall through to the OAuth
+            // bearer-token resolution path in `ModelClient`.
+            codex_model_provider_info::WireApi::CopilotInline => return Ok(None),
         };
         Ok(get_provider_api_key(codex_home, provider_id, store_mode))
     }
