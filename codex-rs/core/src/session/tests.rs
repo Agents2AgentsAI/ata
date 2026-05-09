@@ -3832,6 +3832,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
         next_internal_sub_id: AtomicU64::new(0),
     };
 
@@ -5543,6 +5544,7 @@ where
         goal_runtime: crate::goals::GoalRuntimeState::new(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
         next_internal_sub_id: AtomicU64::new(0),
     });
 
