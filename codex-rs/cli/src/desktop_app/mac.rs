@@ -21,7 +21,7 @@ pub async fn run_mac_app_open_or_install(
         open_codex_app(&app_path, &workspace).await?;
         return Ok(());
     }
-    eprintln!("Codex Desktop not found; downloading installer...");
+    eprintln!("ATA Desktop not found; downloading installer...");
     let download_url = download_url_override.unwrap_or_else(|| {
         let default_url = if is_apple_silicon_mac() {
             CODEX_DMG_URL_ARM64

@@ -1016,25 +1016,57 @@ pub async fn run_main(
         ensure_oss_provider_ready(provider_id, &config).await?;
     }
 
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    // Run otel init under a captured panic hook so the default stderr
+    // print (including "Backtrace omitted. Run with RUST_BACKTRACE=1
+    // ...") never reaches the alt-screen TUI. We persist whatever the
+    // hook captured to `codex-tui.log` directly because the tracing
+    // subscriber isn't registered yet at this point.
+    let captured_panic: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let original_hook = std::panic::take_hook();
+    {
+        let sink = captured_panic.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            if let Ok(mut guard) = sink.lock() {
+                *guard = Some(format!("{info}"));
+            }
+        }));
+    }
+    let otel_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::legacy_core::otel_init::build_provider(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
         )
-    })) {
+    }));
+    std::panic::set_hook(original_hook);
+    let otel = match otel_result {
         Ok(Ok(otel)) => otel,
         Ok(Err(e)) => {
-            // Log via tracing so the message goes to the rolling log file
-            // (~/.ata/log/codex-tui.log) instead of stderr — the TUI is on
-            // the alternate screen by the time we get here, and any stderr
-            // write smears across the rendered chat surface.
-            tracing::error!(error = %e, "could not create otel exporter");
+            append_otel_init_failure(
+                &log_dir,
+                &format!("otel exporter init returned error: {e}"),
+            );
             None
         }
         Err(payload) => {
-            let detail = panic_payload_message(&payload);
-            tracing::error!(panic = %detail, "otel exporter panicked during initialization");
+            let captured = captured_panic
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_default();
+            let downcast = panic_payload_message(&payload);
+            let detail = if captured.is_empty() {
+                downcast
+            } else if downcast.is_empty() || downcast == "<non-string panic payload>" {
+                captured
+            } else {
+                format!("{captured} (payload: {downcast})")
+            };
+            append_otel_init_failure(
+                &log_dir,
+                &format!("otel exporter panicked during initialization: {detail}"),
+            );
             None
         }
     };
@@ -1101,13 +1133,19 @@ async fn run_ratatui_app(
 
     tooltips::announcement::prewarm();
 
-    // Forward panic reports through tracing so they appear in the UI status
-    // line, but do not swallow the default/color-eyre panic handler.
-    // Chain to the previous hook so users still get a rich panic report
-    // (including backtraces) after we restore the terminal.
+    // Forward panic reports through tracing so they appear in the rolling
+    // log file, restore the terminal so the rich panic report (color_eyre
+    // backtrace) lands on a normal screen instead of smearing across the
+    // alt-screen TUI, then chain to the previous hook so users still get
+    // the standard report after the cleanup.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!("panic: {info}");
+        // Best-effort terminal restore: leaves alt-screen, disables raw mode,
+        // turns off mouse capture. If this fails (terminal already in normal
+        // mode, or never entered alt-screen), we silently ignore — the
+        // panic chain still runs.
+        let _ = tui::restore();
         prev_hook(info);
     }));
     let mut terminal = tui::init()?;
@@ -1547,6 +1585,29 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         (*s).to_string()
     } else {
         "<non-string panic payload>".to_string()
+    }
+}
+
+/// Persist a one-line otel-init failure note to `codex-tui.log` directly.
+/// Used when the tracing subscriber isn't registered yet (otel init runs
+/// before the subscriber is ready, by design — the otel layers are
+/// registered alongside the file layer). Failures here are silently
+/// dropped because we don't want to escalate them to the user during
+/// startup.
+fn append_otel_init_failure(log_dir: &std::path::Path, message: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let path = log_dir.join("codex-tui.log");
+    let mut opts = OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    if let Ok(mut file) = opts.open(path) {
+        let ts = chrono::Utc::now().to_rfc3339();
+        let _ = writeln!(file, "{ts}  ERROR codex_tui: {message}");
     }
 }
 
