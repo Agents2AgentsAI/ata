@@ -57,8 +57,6 @@ pub mod models_manager;
 mod network_policy_decision;
 pub mod network_proxy_loader;
 mod original_image_detail;
-#[cfg(feature = "ata-plus")]
-mod plus_context;
 pub mod plus_provider;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_CAPABILITY;
 pub use mcp_connection_manager::MCP_SANDBOX_STATE_METHOD;

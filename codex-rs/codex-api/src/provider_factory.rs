@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::provider_adapter::ProviderAdapter;
 use crate::providers::AnthropicAdapter;
+use crate::providers::CopilotAdapter;
 use crate::providers::GeminiAdapter;
 use crate::providers::OpenAiAdapter;
 
@@ -18,6 +19,8 @@ pub enum WireApi {
     AnthropicMessages,
     /// Google Gemini GenerateContent API.
     GeminiGenerate,
+    /// GitHub Copilot inline completions at `https://api.github.com/copilot/inline`.
+    CopilotInline,
 }
 
 /// Factory for creating provider adapters.
@@ -30,6 +33,7 @@ impl ProviderFactory {
             WireApi::Responses => Arc::new(OpenAiAdapter::new()),
             WireApi::AnthropicMessages => Arc::new(AnthropicAdapter::new()),
             WireApi::GeminiGenerate => Arc::new(GeminiAdapter::new()),
+            WireApi::CopilotInline => Arc::new(CopilotAdapter::new()),
         }
     }
 }

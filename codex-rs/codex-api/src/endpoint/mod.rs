@@ -1,3 +1,4 @@
+pub mod chat_completions;
 pub mod compact;
 pub mod memories;
 pub mod models;

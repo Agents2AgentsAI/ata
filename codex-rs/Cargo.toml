@@ -341,7 +341,9 @@ wiremock = "0.6"
 zeroize = "1.8.2"
 
 [workspace.lints]
-rust = {}
+rust = { unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("ata-plus"))',
+] } }
 
 [workspace.lints.clippy]
 expect_used = "deny"
@@ -383,7 +385,8 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "icu_provider",
-    "openssl-sys"
+    "openssl-sys",
+    "redis"
 ]
 
 [profile.release]
