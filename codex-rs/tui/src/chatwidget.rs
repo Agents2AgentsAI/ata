@@ -9976,6 +9976,61 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    /// /workspace summary. Workspace selection / migration is managed by the
+    /// `ata workspace` CLI; this in-TUI command just confirms the verb exists
+    /// and points the user at it.
+    pub(crate) fn add_workspace_summary(&mut self) {
+        self.add_info_message(
+            "Workspace management is in the `ata workspace` CLI subcommand.".to_string(),
+            Some("Try `ata workspace --help` for a list of operations.".to_string()),
+        );
+    }
+
+    /// /jobs summary. Scheduled-job management lives in `ata jobs` and
+    /// `ata scheduler`; this command surfaces those entry points in-chat.
+    pub(crate) fn add_jobs_summary(&mut self) {
+        self.add_info_message(
+            "Background and scheduled jobs are managed by `ata jobs` (per-job) \
+             and `ata scheduler` (cron / daemon)."
+                .to_string(),
+            Some("Run `ata jobs list` to see active jobs.".to_string()),
+        );
+    }
+
+    /// /research summary. The research toolkit is invoked by the agent itself
+    /// (it shows up as tools the model can call); for ad-hoc one-off queries
+    /// the user can invoke `ata research` from the CLI.
+    pub(crate) fn add_research_summary(&mut self) {
+        self.add_info_message(
+            "The research toolkit is exposed to the agent as tools (search, fetch, \
+             summarise). It runs automatically when the agent decides to research."
+                .to_string(),
+            Some("For one-off CLI research, use `ata research --help`.".to_string()),
+        );
+    }
+
+    /// /undo summary. Ghost snapshots are recorded automatically by the
+    /// `GhostSnapshotTask` session task — every turn that mutates the
+    /// workspace gets its own ghost commit. The full one-button revert path
+    /// (`UndoTask`) is implemented in `core::tasks::undo` but not yet exposed
+    /// through the app-server protocol; until that lands, surface the
+    /// manual workaround so users can still recover.
+    pub(crate) fn add_undo_summary(&mut self) {
+        self.add_info_message(
+            "Each turn records a ghost commit before any workspace edits. To \
+             roll back the last turn, find the most recent ghost commit with \
+             `git log --all --oneline | head` (look for the auto-generated \
+             snapshot subject) and run `git reset --hard <commit>` from the \
+             repo root."
+                .to_string(),
+            Some(
+                "A one-button /undo flow (UndoTask) is implemented in core but \
+                 not yet wired through app-server protocol; coming in a follow-up."
+                    .to_string(),
+            ),
+        );
+    }
+
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(

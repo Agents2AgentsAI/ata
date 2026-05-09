@@ -411,6 +411,18 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::Workspace => {
+                self.add_workspace_summary();
+            }
+            SlashCommand::Jobs => {
+                self.add_jobs_summary();
+            }
+            SlashCommand::Research => {
+                self.add_research_summary();
+            }
+            SlashCommand::Undo => {
+                self.add_undo_summary();
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -906,6 +918,10 @@ impl ChatWidget {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
+            | SlashCommand::Workspace
+            | SlashCommand::Jobs
+            | SlashCommand::Research
+            | SlashCommand::Undo
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw
