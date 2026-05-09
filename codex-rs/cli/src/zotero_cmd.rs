@@ -1122,10 +1122,28 @@ pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
     }
 }
 
-async fn load_research_config(_config_overrides: &CliConfigOverrides) -> Result<ResearchConfig> {
-    // TODO(ata): restore Config-driven research overrides once ResearchToolsToml
-    // is reintroduced into codex-core::config. For now, populate from env only.
-    Ok(ResearchConfig::from_env())
+async fn load_research_config(config_overrides: &CliConfigOverrides) -> Result<ResearchConfig> {
+    let cli_overrides = config_overrides
+        .parse_overrides()
+        .map_err(|e| anyhow!("invalid -c override: {e}"))?;
+    let cwd = std::env::current_dir().context("failed to read current working directory")?;
+
+    match codex_core::config::Config::load_with_cli_overrides(cli_overrides).await {
+        Ok(config) => {
+            let toml: Option<codex_core::config::types::ResearchToolsToml> = config
+                .config_layer_stack
+                .effective_config()
+                .as_table()
+                .and_then(|t| t.get("research"))
+                .and_then(|v| v.clone().try_into().ok());
+            Ok(codex_core::research::build_research_config(
+                toml.as_ref(),
+                config.codex_home.as_path(),
+                &cwd,
+            ))
+        }
+        Err(_) => Ok(ResearchConfig::from_env()),
+    }
 }
 
 async fn load_toolkit(config_overrides: &CliConfigOverrides) -> Result<ResearchToolkit> {
