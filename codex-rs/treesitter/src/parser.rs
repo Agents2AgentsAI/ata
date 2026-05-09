@@ -242,9 +242,6 @@ pub fn reindex_file(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use tempfile::tempdir;
 
     use super::*;
 

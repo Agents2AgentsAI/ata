@@ -663,7 +663,9 @@ impl AuthModeWidget {
             "  Decide how much autonomy you want to grant Codex".into(),
             "".into(),
             "  Codex can make mistakes".into(),
-            "  Review the code it writes and commands it runs".dim().into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
             "".into(),
             "  Powered by your GitHub Copilot subscription".into(),
             "  Default model is gpt-4o; switch with `-c model=...`."
@@ -683,11 +685,7 @@ impl AuthModeWidget {
     }
 
     fn render_copilot_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
-            "✓ Signed in with GitHub Copilot"
-                .fg(Color::Green)
-                .into(),
-        ];
+        let lines = vec!["✓ Signed in with GitHub Copilot".fg(Color::Green).into()];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })

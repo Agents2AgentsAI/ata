@@ -1361,7 +1361,11 @@ model_instructions_file = "child.txt"
         "root instructions",
     )
     .await?;
-    tokio::fs::write(nested.join(".codex").join("child.txt"), "child instructions").await?;
+    tokio::fs::write(
+        nested.join(".codex").join("child.txt"),
+        "child instructions",
+    )
+    .await?;
 
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;

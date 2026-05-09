@@ -135,9 +135,13 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Workspace => "summarize the active workspace; manage with `ata workspace`",
+            SlashCommand::Workspace => {
+                "summarize the active workspace; manage with `ata workspace`"
+            }
             SlashCommand::Jobs => "summarize scheduled jobs; manage with `ata jobs`",
-            SlashCommand::Research => "summarize research toolkit status; run one-off via `ata research`",
+            SlashCommand::Research => {
+                "summarize research toolkit status; run one-off via `ata research`"
+            }
             SlashCommand::Undo => "show the most recent ghost snapshot and how to revert to it",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",

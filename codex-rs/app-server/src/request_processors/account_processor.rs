@@ -448,9 +448,9 @@ impl AccountRequestProcessor {
             }
         }
 
-        let device = start_copilot_device_flow().await.map_err(|err| {
-            internal_error(format!("failed to start GitHub device flow: {err}"))
-        })?;
+        let device = start_copilot_device_flow()
+            .await
+            .map_err(|err| internal_error(format!("failed to start GitHub device flow: {err}")))?;
 
         let login_id = Uuid::new_v4();
         let cancel = CancellationToken::new();
@@ -500,11 +500,7 @@ impl AccountRequestProcessor {
                 let codex_home_for_edit = codex_home.clone();
                 let edit_result = tokio::task::spawn_blocking(move || {
                     ConfigEditsBuilder::new(&codex_home_for_edit)
-                        .set_model(
-                            Some("gpt-4o"),
-                            None,
-                            Some("copilot".to_string()),
-                        )
+                        .set_model(Some("gpt-4o"), None, Some("copilot".to_string()))
                         .apply_blocking()
                 })
                 .await;

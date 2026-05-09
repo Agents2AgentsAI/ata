@@ -5,7 +5,6 @@ pub(crate) mod responses;
 
 pub use anthropic::AnthropicStreamState;
 pub use anthropic::parse_anthropic_event;
-pub use chat_completions::spawn_chat_completions_stream;
 pub use gemini::GeminiStreamState;
 pub use gemini::parse_gemini_chunk;
 pub(crate) use responses::ResponsesStreamEvent;

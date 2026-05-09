@@ -75,7 +75,7 @@ impl ToolOutput for JsReplToolOutput {
         map.insert(
             "elapsed_ms".to_string(),
             JsonValue::Number(serde_json::Number::from(
-                self.outcome.elapsed.as_millis() as u64,
+                self.outcome.elapsed.as_millis() as u64
             )),
         );
         JsonValue::Object(map)
