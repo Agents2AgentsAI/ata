@@ -12,10 +12,11 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-file = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
-reqwest = { workspace = true, features = ["json", "stream"] }
+reqwest = { workspace = true, features = ["json", "multipart", "stream"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

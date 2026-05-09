@@ -1826,6 +1826,7 @@ dependencies = [
  "chrono",
  "codex-client",
  "codex-protocol",
+ "codex-utils-file",
  "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
