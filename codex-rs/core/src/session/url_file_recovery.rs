@@ -9,10 +9,10 @@ use codex_protocol::models::ResponseInputItem;
 use super::Session;
 use super::TurnContext;
 use crate::context_manager::DroppedUrlFileInfo;
-use crate::protocol::EventMsg;
-use crate::protocol::WarningEvent;
 use crate::tools::url_downloader::cache_entry_dir;
 use crate::tools::url_validation::normalize_url_for_cache;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 
 #[derive(Default)]
 pub(crate) struct UrlFileRecoveryState {
@@ -95,6 +95,7 @@ impl UrlFileRecoveryState {
                         .inject_response_items(vec![ResponseInputItem::Message {
                             role: "user".to_string(),
                             content: reinjected,
+                            phase: None,
                         }])
                         .await;
                     format!(
@@ -140,6 +141,7 @@ impl UrlFileRecoveryState {
                              Continue your task without the rejected file.]"
                         ),
                     }],
+                    phase: None,
                 }])
                 .await;
             return true;
