@@ -223,8 +223,10 @@ pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+#[allow(dead_code)]
 const OPENAI_BASE_URL_ENV_VAR: &str = "OPENAI_BASE_URL";
 const MODEL_PROVIDER_FALLBACK_PREFIX: &str = "Model provider fallback:";
+#[allow(dead_code)]
 const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OPENAI_PROVIDER_ID,
     OLLAMA_OSS_PROVIDER_ID,
@@ -1098,12 +1100,14 @@ impl ConfigBuilder {
     }
 }
 
+#[allow(dead_code)]
 fn config_scope_segments(scope: &[String], key: &str) -> Vec<String> {
     let mut segments = scope.to_vec();
     segments.push(key.to_string());
     segments
 }
 
+#[allow(dead_code)]
 fn feature_scope_segments(scope: &[String], feature_key: &str) -> Vec<String> {
     let mut segments = scope.to_vec();
     segments.push("features".to_string());
@@ -1111,6 +1115,7 @@ fn feature_scope_segments(scope: &[String], feature_key: &str) -> Vec<String> {
     segments
 }
 
+#[allow(dead_code)]
 fn push_smart_approvals_alias_migration_edits(
     edits: &mut Vec<ConfigEdit>,
     scope: &[String],
@@ -1154,6 +1159,7 @@ fn push_smart_approvals_alias_migration_edits(
 /// migrated feature value is `true`.
 /// In all cases it removes the deprecated `smart_approvals` entry so future
 /// loads only see the canonical feature flag name.
+#[allow(dead_code)]
 async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     if !tokio::fs::try_exists(&config_path).await? {
@@ -2011,6 +2017,7 @@ fn apply_managed_filesystem_constraints(
     }
 }
 
+#[allow(dead_code)]
 fn add_additional_file_system_writes(
     file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
     additional_writable_roots: &[AbsolutePathBuf],
@@ -2064,6 +2071,7 @@ pub struct ConfigOverrides {
     pub additional_writable_roots: Vec<PathBuf>,
 }
 
+#[allow(dead_code)]
 fn validate_reserved_model_provider_ids(
     model_providers: &HashMap<String, ModelProviderInfo>,
 ) -> Result<(), String> {
@@ -2084,6 +2092,7 @@ Built-in providers cannot be overridden. Rename your custom provider (for exampl
     }
 }
 
+#[allow(dead_code)]
 fn deserialize_model_providers<'de, D>(
     deserializer: D,
 ) -> Result<HashMap<String, ModelProviderInfo>, D::Error>

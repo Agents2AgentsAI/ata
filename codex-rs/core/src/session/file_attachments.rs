@@ -1,3 +1,11 @@
+// Several functions, structs, and methods in this module are part of the
+// file-attachment public surface but are only consumed by the
+// proactive-refresh and recovery paths that aren't yet wired (see TODOs in
+// session/url_file_recovery.rs and tools/handlers/attach_url_files.rs).
+// Allow dead_code at the module level so cargo build stays clean while the
+// integration follow-ups land.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;

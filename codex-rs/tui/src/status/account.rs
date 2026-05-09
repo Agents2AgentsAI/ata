@@ -5,6 +5,7 @@ pub(crate) enum StatusAccountDisplay {
         plan: Option<String>,
     },
     ApiKey,
+    #[allow(dead_code)]
     Ata {
         email: Option<String>,
     },

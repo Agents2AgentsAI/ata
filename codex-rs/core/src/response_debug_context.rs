@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use base64::Engine;
 use codex_api::ApiError;
 use codex_api::TransportError;

@@ -31,13 +31,6 @@ const WORKSPACE_SKILLS_DIR: Dir =
 const ADAPT_ENVIRONMENT_SKILLS_DIR: Dir =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/adapt-environment");
 
-/// Remote-exec skill is private (ata-plus only) — the directory is stripped
-/// on the public release branch, so gating the include_dir avoids a compile
-/// error when the directory doesn't exist.
-#[cfg(feature = "ata-plus")]
-const REMOTE_EXEC_SKILLS_DIR: Dir =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/src/assets/remote-exec");
-
 /// A custom skill category embedded at compile time.
 struct CustomSkillCategory {
     /// The embedded directory contents.
@@ -68,13 +61,6 @@ const CUSTOM_SKILL_CATEGORIES_BASE: &[CustomSkillCategory] = &[
         fingerprint_salt: "v1-adapt-environment",
     },
 ];
-
-#[cfg(feature = "ata-plus")]
-const CUSTOM_SKILL_CATEGORIES_PLUS: &[CustomSkillCategory] = &[CustomSkillCategory {
-    dir: &REMOTE_EXEC_SKILLS_DIR,
-    cache_dir_name: ".system-remote-exec",
-    fingerprint_salt: "v1-remote-exec",
-}];
 
 // ============================================================================
 // Upstream skill category (system/samples only)
@@ -157,10 +143,7 @@ pub fn install_workspace_skills(codex_home: &Path) -> Result<(), SystemSkillsErr
 // ============================================================================
 
 fn all_custom_categories() -> impl Iterator<Item = &'static CustomSkillCategory> {
-    let base = CUSTOM_SKILL_CATEGORIES_BASE.iter();
-    #[cfg(feature = "ata-plus")]
-    let base = base.chain(CUSTOM_SKILL_CATEGORIES_PLUS.iter());
-    base
+    CUSTOM_SKILL_CATEGORIES_BASE.iter()
 }
 
 /// Installs all custom (non-upstream) skill categories.

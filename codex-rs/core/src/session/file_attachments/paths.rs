@@ -1,3 +1,8 @@
+// Local-PDF inference helpers consumed by the proactive-injection path
+// that's not wired yet (`prepare_session_file_inputs`). Allow dead_code at
+// module level until that hookup lands.
+#![allow(dead_code)]
+
 use super::*;
 
 pub(crate) fn inject_local_pdf_paths_from_text_inputs(

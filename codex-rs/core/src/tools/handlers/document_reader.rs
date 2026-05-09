@@ -251,9 +251,11 @@ const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: For supplementar
      set foldable=true. Direct answers, corrections, and rewrites should NOT be foldable \
      (foldable=false, the default).";
 
+#[allow(dead_code)]
 const READING_VIEW_TOOL_CALL_ONLY_GUIDANCE: &str =
     "Do NOT output plain text; only tool calls are visible to the user.";
 
+#[allow(dead_code)]
 const READING_VIEW_REWRITE_BOUNDARY_GUIDANCE: &str =
     "Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.";
 
@@ -268,6 +270,7 @@ pub fn reading_view_display_mode_state(mode: ReadingViewDisplayMode) -> &'static
     }
 }
 
+#[allow(dead_code)]
 pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -281,6 +284,7 @@ pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -
     )
 }
 
+#[allow(dead_code)]
 pub fn reading_view_section_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -320,6 +324,7 @@ pub enum ReadingViewDisplayMode {
     #[default]
     Tui,
     /// Browser with full HTML/KaTeX/Mermaid rendering.
+    #[allow(dead_code)]
     Browser,
 }
 
@@ -344,6 +349,7 @@ impl DocumentCache {
 
     /// Set the display mode (called by the UI layer when the user changes
     /// reading view mode).
+    #[allow(dead_code)]
     pub fn set_display_mode(&self, mode: ReadingViewDisplayMode) {
         if let Ok(mut m) = self.display_mode.lock() {
             *m = mode;
@@ -373,6 +379,7 @@ impl DocumentCache {
     /// (e.g. `present_reading_view(document_id=...)` without title/content)
     /// can serve the cached version instantly instead of forcing the agent
     /// to regenerate the document from scratch.
+    #[allow(dead_code)]
     pub fn restore_document(&self, document_id: String, title: String, content: &str) {
         let sections = parse_sections(content);
         let mut cache = self.lock();
@@ -387,6 +394,7 @@ impl DocumentCache {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
     match config
         .config_layer_stack

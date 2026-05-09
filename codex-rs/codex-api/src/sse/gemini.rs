@@ -2,6 +2,15 @@
 //!
 //! Gemini uses a JSON lines streaming format rather than standard SSE.
 //! Each response chunk contains candidates with content parts.
+//!
+//! `#![allow(dead_code)]` applies module-wide because the wire-envelope
+//! structs (`GeminiCandidate`, `GeminiContent`, `GeminiPart`,
+//! `GeminiPromptFeedback`, `GeminiSafetyRating`, etc.) deserialize from
+//! the `generateContent` response shape; not every field is read at
+//! runtime, but each is load-bearing documentation of the protocol
+//! contract and may be consumed by future code paths (telemetry, safety
+//! gating, etc.).
+#![allow(dead_code)]
 
 use serde::Deserialize;
 use serde_json::Value;

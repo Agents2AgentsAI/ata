@@ -271,9 +271,6 @@ async fn run_codex_tool_session_inner(
                     EventMsg::GuardianAssessment(_) => {
                         continue;
                     }
-                    EventMsg::GuardianAssessment(_) => {
-                        continue;
-                    }
                     EventMsg::ElicitationRequest(_) => {
                         // TODO: forward elicitation requests to the client?
                         continue;

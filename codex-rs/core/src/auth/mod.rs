@@ -8,6 +8,15 @@
 //! Naming convention: `crate::auth::storage` re-exports codex-login's
 //! storage primitives so the stranded provider modules below can keep their
 //! original `crate::auth::storage::*` import paths.
+//!
+//! `#![allow(unused_imports, dead_code)]` covers the public surface here:
+//! many `pub use` re-exports are not consumed inside `codex-core` itself
+//! (they're forwarded for cli/tui/app-server consumption) and several
+//! provider helper APIs (`login_with_provider_*`, `list_configured_providers`,
+//! the gemini revoke helpers, etc.) are exposed for the eventual
+//! `ata login provider` / `ata logout provider` CLI subcommands that are
+//! still pending.
+#![allow(unused_imports, dead_code)]
 
 pub mod gemini_oauth;
 pub mod gemini_revoke;

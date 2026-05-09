@@ -22,6 +22,7 @@ pub(crate) enum UnifiedExecError {
         "File descriptor usage is critical ({usage_pct:.1}% of limit). \
          Close unused terminals or processes before running new commands."
     )]
+    #[allow(dead_code)]
     FdLimitExhausted { usage_pct: f64 },
     #[error("Command denied by sandbox: {message}")]
     SandboxDenied {
