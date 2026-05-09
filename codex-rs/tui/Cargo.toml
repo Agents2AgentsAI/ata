@@ -31,6 +31,7 @@ codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-install-context = { workspace = true }
 codex-chatgpt = { workspace = true }
+codex-client = { workspace = true }
 codex-cloud-requirements = { workspace = true }
 codex-config = { workspace = true }
 codex-connectors = { workspace = true }
@@ -66,11 +67,13 @@ codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
 codex-utils-string = { workspace = true }
 color-eyre = { workspace = true }
+cpal = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
 diffy = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
+hound = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png", "gif", "webp"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
