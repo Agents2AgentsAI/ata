@@ -4,6 +4,7 @@ pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 #[cfg(feature = "data")]
 pub(crate) mod data;
+pub(crate) mod document_reader;
 mod dynamic;
 mod goal;
 pub(crate) mod goal_spec;
