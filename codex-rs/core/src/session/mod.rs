@@ -221,9 +221,19 @@ mod rollout_reconstruction_tests;
 #[derive(Debug, PartialEq)]
 pub enum SteerInputError {
     NoActiveTurn(Vec<UserInput>),
-    ExpectedTurnMismatch { expected: String, actual: String },
-    ActiveTurnNotSteerable { turn_kind: NonSteerableTurnKind },
+    ExpectedTurnMismatch {
+        expected: String,
+        actual: String,
+    },
+    ActiveTurnNotSteerable {
+        turn_kind: NonSteerableTurnKind,
+    },
     EmptyInput,
+    /// `prepare_session_file_inputs` rejected the steered input — for
+    /// example, an attached PDF lives outside the sandbox writable
+    /// roots, or a referenced URL file failed to download. The string
+    /// is the user-facing error from the file-attachment pipeline.
+    InvalidFileInput(String),
 }
 
 impl SteerInputError {
@@ -251,6 +261,10 @@ impl SteerInputError {
             }
             Self::EmptyInput => ErrorEvent {
                 message: "input must not be empty".to_string(),
+                codex_error_info: Some(CodexErrorInfo::BadRequest),
+            },
+            Self::InvalidFileInput(message) => ErrorEvent {
+                message: message.clone(),
                 codex_error_info: Some(CodexErrorInfo::BadRequest),
             },
         }
@@ -2987,12 +3001,45 @@ impl Session {
     )]
     pub async fn steer_input(
         &self,
-        input: Vec<UserInput>,
+        mut input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
+        }
+
+        // Match codex-main's contract: PDF/file mentions in the steered
+        // text must go through the same proactive-injection pipeline as
+        // the run_turn path so the model receives ContentItem::InputFile
+        // / UrlFile blocks instead of the raw text. Run BEFORE we acquire
+        // the active-turn lock so an expensive upload doesn't block other
+        // turn-state operations.
+        let prepare_inputs = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.provider.clone(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .clone(),
+                state.session_configuration.cwd.clone(),
+                state.session_configuration.sandbox_policy(),
+            )
+        };
+        let (provider, config, cwd, sandbox_policy) = prepare_inputs;
+        let warnings = self
+            .prepare_session_file_inputs(
+                &mut input,
+                &provider,
+                config.as_ref(),
+                cwd.as_path(),
+                &sandbox_policy,
+            )
+            .await
+            .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;
+        for warning in &warnings {
+            tracing::warn!("{warning}");
         }
 
         let mut active = self.active_turn.lock().await;
