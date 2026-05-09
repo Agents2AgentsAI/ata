@@ -223,6 +223,9 @@ impl AccountRequestProcessor {
             LoginAccountParams::ChatgptDeviceCode => {
                 self.login_chatgpt_device_code_v2(request_id).await;
             }
+            LoginAccountParams::CopilotDeviceCode => {
+                self.login_copilot_device_code_v2(request_id).await;
+            }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
                 chatgpt_account_id,
@@ -427,6 +430,90 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
         let result = self.login_chatgpt_device_code_response().await;
         self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn login_copilot_device_code_v2(&self, request_id: ConnectionRequestId) {
+        let result = self.login_copilot_device_code_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn login_copilot_device_code_response(
+        &self,
+    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        // Cancel any active login (mirrors the ChatGPT device-code path).
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(existing) = guard.take() {
+                drop(existing);
+            }
+        }
+
+        let device = start_copilot_device_flow().await.map_err(|err| {
+            internal_error(format!("failed to start GitHub device flow: {err}"))
+        })?;
+
+        let login_id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
+
+        {
+            let mut guard = self.active_login.lock().await;
+            *guard = Some(ActiveLogin::DeviceCode {
+                cancel: cancel.clone(),
+                login_id,
+            });
+        }
+
+        let user_code = device.user_code.clone();
+        let verification_uri = device.verification_uri.clone();
+
+        let outgoing_clone = self.outgoing.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let codex_home = self.config.codex_home.clone();
+        let store_mode = self.config.cli_auth_credentials_store_mode;
+        let active_login = self.active_login.clone();
+        let device_for_task = device.clone();
+
+        tokio::spawn(async move {
+            let (success, error_msg) = tokio::select! {
+                _ = cancel.cancelled() => {
+                    (false, Some("Login was not completed".to_string()))
+                }
+                result = async {
+                    let token = poll_copilot_access_token(&device_for_task).await?;
+                    complete_copilot_login(&codex_home, store_mode, token).await
+                } => {
+                    match result {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    }
+                }
+            };
+
+            if success {
+                auth_manager.reload().await;
+            }
+
+            outgoing_clone
+                .send_server_notification(ServerNotification::AccountLoginCompleted(
+                    AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    },
+                ))
+                .await;
+
+            let mut guard = active_login.lock().await;
+            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                *guard = None;
+            }
+        });
+
+        Ok(LoginAccountResponse::CopilotDeviceCode {
+            login_id: login_id.to_string(),
+            verification_uri,
+            user_code,
+        })
     }
 
     async fn login_chatgpt_device_code_response(
