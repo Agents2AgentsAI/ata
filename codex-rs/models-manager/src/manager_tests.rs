@@ -211,6 +211,7 @@ c2ln",
         }),
         last_refresh: Some(Utc::now()),
         agent_identity: None,
+        ..Default::default()
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(

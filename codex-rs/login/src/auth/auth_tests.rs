@@ -241,6 +241,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             }),
             last_refresh: Some(last_refresh),
             agent_identity: None,
+            ..Default::default()
         },
         auth_dot_json
     );
@@ -282,6 +283,7 @@ fn logout_removes_auth_file() -> Result<(), std::io::Error> {
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+        ..Default::default()
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
