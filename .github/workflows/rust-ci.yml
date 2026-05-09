@@ -177,7 +177,18 @@ jobs:
         env:
           ARGUMENT_COMMENT_LINT: ${{ needs.changed.outputs.argument_comment_lint }}
           WORKFLOWS: ${{ needs.changed.outputs.workflows }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
+          # ATA fork: skip Bazel-based argument-comment-lint until the public
+          # repo is provisioned with a BUILDBUDDY_API_KEY secret. The Cargo-side
+          # `argument_comment_lint_package` job runs unconditionally and covers
+          # the same checks via Dylint.
+          if [[ -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+            echo "BUILDBUDDY_API_KEY unavailable; skipping Bazel-based argument-comment-lint."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           if [[ "$ARGUMENT_COMMENT_LINT" == "true" || "$WORKFLOWS" == "true" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             exit 0

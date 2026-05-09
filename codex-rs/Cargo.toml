@@ -519,9 +519,14 @@ ignored = [
     "codex-treesitter",
     "codex-lsp-client",
     "codex-reading-view-server",
+    "codex-data-tools",
+    "codex-scheduler",
+    "cpal",
     "hound",
+    "mdns-sd",
     "pdfium-render",
     "qrcode",
+    "redis",
 ]
 
 [profile.dev]
