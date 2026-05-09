@@ -127,6 +127,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 
 mod anthropic;
+mod gemini;
 mod provider_streaming;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -1594,9 +1595,9 @@ impl ModelClientSession {
             WireApi::AnthropicMessages => {
                 anthropic::stream_anthropic_api(self, prompt, model_info, effort, summary).await
             }
-            WireApi::GeminiGenerate => Err(CodexErr::InvalidRequest(
-                "Gemini wire API is not yet supported in this build".to_string(),
-            )),
+            WireApi::GeminiGenerate => {
+                gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
+            }
         }
     }
 
