@@ -2358,8 +2358,13 @@ mod tests {
             command_execution_request_approval_ts.contains("additionalPermissions"),
             true
         );
+        // Replaces a stale `skillMetadata` assertion: upstream openai/codex#15906
+        // removed `skill_metadata` from CommandExecutionRequestApprovalParams.
+        // `availableDecisions` is the other `#[experimental]` field on the
+        // same struct, so it preserves the intent of this assertion (the
+        // experimental-API exporter retains multiple experimental fields).
         assert_eq!(
-            command_execution_request_approval_ts.contains("skillMetadata"),
+            command_execution_request_approval_ts.contains("availableDecisions"),
             true
         );
 
