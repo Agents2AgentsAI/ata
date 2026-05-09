@@ -1,7 +1,11 @@
 use crate::function_tool::FunctionCallError;
+use crate::provider_transport_capabilities::provider_transport_capabilities;
+use crate::session::file_attachments::UrlAttachmentInjectionError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::file_injection::FileInjectionContext;
+use crate::tools::file_injection::resolve_and_prepare_local_files_for_injection;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -12,6 +16,8 @@ use crate::tools::url_downloader::download_url_files_to_cache;
 use crate::tools::url_validation::ValidatedUrl;
 use crate::tools::url_validation::redact_url_string_for_display;
 use crate::tools::url_validation::validate_url_strict;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
@@ -23,6 +29,7 @@ use std::sync::LazyLock;
 
 const TOOL_NAME: &str = "attach_url_files";
 const MAX_URLS_PER_CALL: usize = 10;
+const MAX_URLS_PER_TURN: usize = 20;
 
 // @agent-facing
 pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
@@ -96,13 +103,6 @@ struct AttachmentFailure {
     reason: String,
 }
 
-#[derive(Debug, Clone)]
-struct AttachmentSuccess {
-    redacted_url: String,
-    filename: String,
-    cached_path: String,
-}
-
 impl ToolHandler for AttachUrlFilesHandler {
     type Output = FunctionToolOutput;
 
@@ -115,7 +115,12 @@ impl ToolHandler for AttachUrlFilesHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { turn, payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -138,58 +143,204 @@ impl ToolHandler for AttachUrlFilesHandler {
             )));
         }
 
-        let (validated_files, mut failures, warnings) = validate_and_dedup(args.files).await;
+        let (mut validated_files, mut failures, mut warnings) =
+            validate_and_dedup(args.files).await;
         if validated_files.is_empty() {
             return Err(FunctionCallError::RespondToModel(
                 render_failure_only_summary(&failures),
             ));
         }
 
-        let requests: Vec<UrlDownloadRequest> = validated_files
-            .iter()
-            .map(|attachment| UrlDownloadRequest {
-                url: attachment.url.clone(),
-                filename_hint: attachment.filename.clone(),
-            })
-            .collect();
-        let download_outcomes = download_url_files_to_cache(
-            &turn.config.codex_home,
-            requests,
-            DEFAULT_MAX_DOWNLOAD_CONCURRENCY,
-        )
-        .await;
+        let remaining_budget = {
+            let mut active = session.active_turn.lock().await;
+            let Some(active_turn) = active.as_mut() else {
+                return Err(map_budget_injection_error(
+                    UrlAttachmentInjectionError::NoActiveTurn,
+                ));
+            };
+            let turn_state = active_turn.turn_state.lock().await;
+            let already_used = turn_state.url_attachments_injected();
+            MAX_URLS_PER_TURN.saturating_sub(already_used)
+        };
 
-        let mut successes = Vec::new();
-        for (outcome, attachment) in download_outcomes.into_iter().zip(&validated_files) {
-            match outcome {
-                UrlDownloadOutcome::Success(success) => {
-                    let filename = attachment
-                        .filename
-                        .clone()
-                        .unwrap_or_else(|| attachment.url.derive_pdf_filename(None));
-                    successes.push(AttachmentSuccess {
-                        redacted_url: attachment.url.redacted_for_display(),
-                        filename,
-                        cached_path: success.path.display().to_string(),
-                    });
-                }
-                UrlDownloadOutcome::Failure(failure) => {
-                    failures.push(AttachmentFailure {
-                        redacted_url: failure.redacted_url,
-                        reason: failure.reason,
-                    });
-                }
+        if remaining_budget == 0 {
+            return Err(map_budget_injection_error(
+                UrlAttachmentInjectionError::PerTurnLimitExceeded {
+                    attempted: validated_files.len(),
+                    current: MAX_URLS_PER_TURN,
+                    limit: MAX_URLS_PER_TURN,
+                },
+            ));
+        }
+
+        if validated_files.len() > remaining_budget {
+            for attachment in validated_files.drain(remaining_budget..) {
+                warnings.push(format!(
+                    "Skipped {} (per-turn attachment budget exceeded)",
+                    attachment.url.redacted_for_display()
+                ));
             }
         }
 
-        if successes.is_empty() {
+        let supports_url_ingestion =
+            provider_transport_capabilities(turn.provider.info()).supports_file_url_ingestion;
+        let mut success_count = 0usize;
+
+        if supports_url_ingestion {
+            // Download + validate each URL before passing to the provider.
+            // This catches non-PDF responses (e.g. HTML bot-protection pages)
+            // before they cause the provider to reject the entire request.
+            let requests: Vec<UrlDownloadRequest> = validated_files
+                .iter()
+                .map(|attachment| UrlDownloadRequest {
+                    url: attachment.url.clone(),
+                    filename_hint: attachment.filename.clone(),
+                })
+                .collect();
+            let download_outcomes = download_url_files_to_cache(
+                &turn.config.codex_home,
+                requests,
+                DEFAULT_MAX_DOWNLOAD_CONCURRENCY,
+            )
+            .await;
+
+            let mut content = Vec::new();
+            for (outcome, attachment) in download_outcomes.into_iter().zip(&validated_files) {
+                match outcome {
+                    UrlDownloadOutcome::Success(_) => {
+                        let filename = attachment
+                            .filename
+                            .clone()
+                            .or_else(|| Some(attachment.url.derive_pdf_filename(None)));
+                        content.push(ContentItem::url_file(
+                            attachment.url.as_str().to_string(),
+                            Some("application/pdf".to_string()),
+                            filename,
+                        ));
+                        success_count += 1;
+                    }
+                    UrlDownloadOutcome::Failure(failure) => {
+                        failures.push(AttachmentFailure {
+                            redacted_url: failure.redacted_url,
+                            reason: failure.reason,
+                        });
+                    }
+                }
+            }
+
+            if success_count > 0 {
+                session
+                    .inject_response_items_with_url_attachment_budget(
+                        vec![user_message_response_input(content)],
+                        success_count,
+                        MAX_URLS_PER_TURN,
+                    )
+                    .await
+                    .map_err(map_budget_injection_error)?;
+            }
+        } else {
+            let requests: Vec<UrlDownloadRequest> = validated_files
+                .iter()
+                .map(|attachment| UrlDownloadRequest {
+                    url: attachment.url.clone(),
+                    filename_hint: attachment.filename.clone(),
+                })
+                .collect();
+            let download_outcomes = download_url_files_to_cache(
+                &turn.config.codex_home,
+                requests,
+                DEFAULT_MAX_DOWNLOAD_CONCURRENCY,
+            )
+            .await;
+
+            let mut prepared_content = Vec::new();
+            let mut downloaded_successes = Vec::new();
+            for outcome in download_outcomes {
+                match outcome {
+                    UrlDownloadOutcome::Success(success) => downloaded_successes.push(success),
+                    UrlDownloadOutcome::Failure(failure) => {
+                        failures.push(AttachmentFailure {
+                            redacted_url: failure.redacted_url,
+                            reason: failure.reason,
+                        });
+                    }
+                }
+            }
+
+            if !downloaded_successes.is_empty() {
+                let downloaded_paths = downloaded_successes
+                    .iter()
+                    .map(|success| success.path.clone())
+                    .collect();
+                let batch_prepared = resolve_and_prepare_local_files_for_injection(
+                    FileInjectionContext {
+                        session: session.as_ref(),
+                        provider: turn.provider.info(),
+                        config: turn.config.as_ref(),
+                        http_client: session.file_upload_http_client(),
+                    },
+                    downloaded_paths,
+                )
+                .await;
+
+                match batch_prepared {
+                    Ok(prepared) => {
+                        success_count = success_count.saturating_add(prepared.attachment_count);
+                        prepared_content.extend(prepared.content_items);
+                        warnings.extend(prepared.warnings);
+                    }
+                    Err(_) => {
+                        for success in downloaded_successes {
+                            match resolve_and_prepare_local_files_for_injection(
+                                FileInjectionContext {
+                                    session: session.as_ref(),
+                                    provider: turn.provider.info(),
+                                    config: turn.config.as_ref(),
+                                    http_client: session.file_upload_http_client(),
+                                },
+                                vec![success.path],
+                            )
+                            .await
+                            {
+                                Ok(prepared) => {
+                                    success_count =
+                                        success_count.saturating_add(prepared.attachment_count);
+                                    prepared_content.extend(prepared.content_items);
+                                    warnings.extend(prepared.warnings);
+                                }
+                                Err(error) => failures.push(AttachmentFailure {
+                                    redacted_url: success.url.redacted_for_display(),
+                                    reason: error.to_string(),
+                                }),
+                            }
+                        }
+                    }
+                }
+            }
+
+            if success_count > 0 {
+                session
+                    .inject_response_items_with_url_attachment_budget(
+                        vec![user_message_response_input(prepared_content)],
+                        success_count,
+                        MAX_URLS_PER_TURN,
+                    )
+                    .await
+                    .map_err(map_budget_injection_error)?;
+            }
+        }
+
+        if success_count == 0 {
             return Err(FunctionCallError::RespondToModel(
                 render_failure_only_summary(&failures),
             ));
         }
 
-        let summary = render_summary(&successes, &failures, &warnings);
-        Ok(FunctionToolOutput::from_text(summary, Some(true)))
+        let summary = render_summary(success_count, &failures, &warnings);
+        Ok(FunctionToolOutput::from_text(
+            summary,
+            Some(success_count > 0),
+        ))
     }
 }
 
@@ -253,23 +404,13 @@ async fn validate_and_dedup(
 }
 
 fn render_summary(
-    successes: &[AttachmentSuccess],
+    success_count: usize,
     failures: &[AttachmentFailure],
     warnings: &[String],
 ) -> String {
     let mut summary = format!(
-        "Attached {} URL file(s) to the local cache. Other tools (document_reader, crop_figure) can now read them by URL or cached path.",
-        successes.len()
+        "Attached {success_count} URL file(s). The file contents have been added to the conversation and are available for you to read and reference directly."
     );
-    if !successes.is_empty() {
-        summary.push_str("\nFiles:");
-        for success in successes {
-            summary.push_str(&format!(
-                "\n- {} ({}) -> {}",
-                success.redacted_url, success.filename, success.cached_path
-            ));
-        }
-    }
     if !warnings.is_empty() {
         summary.push_str("\nWarnings:");
         for warning in warnings {
@@ -302,21 +443,50 @@ fn append_failures(summary: &mut String, failures: &[AttachmentFailure]) {
     }
 }
 
+fn user_message_response_input(content: Vec<ContentItem>) -> ResponseInputItem {
+    ResponseInputItem::Message {
+        role: "user".to_string(),
+        content,
+        phase: None,
+    }
+}
+
+fn map_budget_injection_error(error: UrlAttachmentInjectionError) -> FunctionCallError {
+    match error {
+        UrlAttachmentInjectionError::NoActiveTurn => FunctionCallError::RespondToModel(
+            "unable to attach URL files (no active turn)".to_string(),
+        ),
+        UrlAttachmentInjectionError::PerTurnLimitExceeded {
+            attempted,
+            current,
+            limit,
+        } => FunctionCallError::RespondToModel(format!(
+            "attach_url_files would exceed the per-turn attachment limit ({current} + {attempted} > {limit})"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
+    use crate::state::ActiveTurn;
     use crate::tools::url_downloader::prepopulate_pdf_cache;
     use crate::tools::url_validation::validated_url_for_test;
+    use codex_model_provider::create_model_provider;
+    use codex_model_provider_info::ModelProviderInfo;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
     const VALID_PDF_BYTES: &[u8] = b"%PDF-1.4\ntest content";
 
     #[tokio::test]
-    async fn attaches_cached_pdf_url() {
-        let (session, turn_context) = make_session_and_context().await;
+    async fn provider_path_injects_url_files() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider =
+            create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
         let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
 
         let url = validated_url_for_test("https://example.com/doc.pdf");
         prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
@@ -339,8 +509,14 @@ mod tests {
             .expect("tool call should succeed");
 
         let text = output.into_text();
-        assert!(text.contains("Attached 1 URL file(s)"));
-        assert!(text.contains("https://example.com/doc.pdf"));
+        assert!(text.contains("Attached 1 URL file(s)."));
+
+        let pending = session.get_pending_input().await;
+        assert_eq!(pending.len(), 1);
+        let ResponseInputItem::Message { content, .. } = &pending[0] else {
+            panic!("expected message input");
+        };
+        assert!(matches!(content[0], ContentItem::UrlFile { .. }));
     }
 
     #[tokio::test]
@@ -373,8 +549,11 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_urls_emit_warning_and_attach_once() {
-        let (session, turn_context) = make_session_and_context().await;
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider =
+            create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
         let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
 
         let url = validated_url_for_test("https://example.com/doc.pdf");
         prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
@@ -397,14 +576,56 @@ mod tests {
             .expect("tool call should succeed");
 
         let text = output.into_text();
-        assert!(text.contains("Attached 1 URL file(s)"));
+        assert!(text.contains("Attached 1 URL file(s)."));
         assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
     }
 
     #[tokio::test]
-    async fn all_invalid_urls_produce_failure_only_summary() {
-        let (session, turn_context) = make_session_and_context().await;
+    async fn download_path_fails_fast_when_per_turn_budget_is_exhausted() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider =
+            create_model_provider(ModelProviderInfo::create_gemini_provider(), None);
         let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
+        {
+            let mut active = session.active_turn.lock().await;
+            let active_turn = active.as_mut().expect("active turn");
+            let mut turn_state = active_turn.turn_state.lock().await;
+            // Saturate the per-turn budget.
+            turn_state
+                .reserve_url_attachments(MAX_URLS_PER_TURN, MAX_URLS_PER_TURN)
+                .expect("seed budget");
+        }
+
+        let handler = AttachUrlFilesHandler;
+        let result = handler
+            .handle(ToolInvocation {
+                session,
+                turn: Arc::new(turn_context),
+                tracker: Arc::new(Mutex::new(crate::turn_diff_tracker::TurnDiffTracker::new())),
+                call_id: "call-4".to_string(),
+                tool_name: TOOL_NAME.into(),
+                cancellation_token: tokio_util::sync::CancellationToken::new(),
+                source: crate::tools::context::ToolCallSource::Direct,
+                payload: ToolPayload::Function {
+                    arguments: r#"{"files":[{"url":"https://example.com/doc.pdf"}]}"#.to_string(),
+                },
+            })
+            .await;
+
+        let Err(FunctionCallError::RespondToModel(message)) = result else {
+            panic!("expected per-turn budget error");
+        };
+        assert!(message.contains("per-turn attachment limit"));
+    }
+
+    #[tokio::test]
+    async fn all_invalid_urls_produce_failure_only_summary() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider =
+            create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
+        let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
 
         let handler = AttachUrlFilesHandler;
         let result = handler
@@ -433,12 +654,18 @@ mod tests {
             message.contains("Failures:"),
             "expected failures section, got: {message}"
         );
+
+        let pending = session.get_pending_input().await;
+        assert!(pending.is_empty(), "no pending input for all-invalid URLs");
     }
 
     #[tokio::test]
-    async fn rejects_non_pdf_downloads() {
-        let (session, turn_context) = make_session_and_context().await;
+    async fn url_ingestion_path_rejects_non_pdf_downloads() {
+        let (session, mut turn_context) = make_session_and_context().await;
+        turn_context.provider =
+            create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
         let session = Arc::new(session);
+        *session.active_turn.lock().await = Some(ActiveTurn::default());
 
         // Pre-populate cache with non-PDF content (HTML).
         let url = validated_url_for_test("https://example.com/blocked.pdf");
@@ -478,5 +705,8 @@ mod tests {
             message.contains("https://example.com/blocked.pdf"),
             "expected specific URL in failure, got: {message}"
         );
+
+        let pending = session.get_pending_input().await;
+        assert!(pending.is_empty(), "no pending input for rejected PDF");
     }
 }
