@@ -264,6 +264,14 @@ impl AppServerSession {
             Some(Account::AmazonBedrock {}) => {
                 (None, None, None, None, FeedbackAudience::External, false)
             }
+            Some(Account::Copilot {}) => (
+                None,
+                None,
+                Some(StatusAccountDisplay::Copilot),
+                None,
+                FeedbackAudience::External,
+                false,
+            ),
             None => (None, None, None, None, FeedbackAudience::External, false),
         };
         Ok(AppServerBootstrap {

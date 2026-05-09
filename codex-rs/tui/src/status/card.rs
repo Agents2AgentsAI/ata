@@ -671,6 +671,7 @@ impl HistoryCell for StatusHistoryCell {
                 Some(email) => format!("ata: signed in as {email}"),
                 None => "ata: signed in".to_string(),
             },
+            StatusAccountDisplay::Copilot => "GitHub Copilot".to_string(),
         });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]

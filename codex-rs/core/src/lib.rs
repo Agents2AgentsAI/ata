@@ -14,7 +14,10 @@ pub(crate) mod auth;
 /// purpose: the rest of `auth` stays `pub(crate)`.
 pub mod auth_public {
     pub use crate::auth::CopilotDeviceCodeResponse;
+    pub use crate::auth::PROVIDER_COPILOT;
     pub use crate::auth::complete_copilot_login;
+    pub use crate::auth::copilot_logout;
+    pub use crate::auth::get_provider_oauth_credential;
     pub use crate::auth::poll_copilot_access_token;
     pub use crate::auth::start_copilot_device_flow;
 }

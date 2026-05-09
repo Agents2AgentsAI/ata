@@ -9,4 +9,8 @@ pub(crate) enum StatusAccountDisplay {
     Ata {
         email: Option<String>,
     },
+    /// Authenticated via the GitHub Copilot device-code OAuth flow. The wire
+    /// protocol does not expose the GitHub identity, so we render generic
+    /// "GitHub Copilot" text in the status card.
+    Copilot,
 }

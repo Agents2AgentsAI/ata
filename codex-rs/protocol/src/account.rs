@@ -36,6 +36,10 @@ pub enum ProviderAccount {
     ApiKey,
     Chatgpt { email: String, plan_type: PlanType },
     AmazonBedrock,
+    /// Authenticated via the GitHub Copilot OAuth device-code flow. We do not
+    /// expose the GitHub user identity here because the OAuth token itself is
+    /// the sole credential and we only need to signal "Copilot is active".
+    Copilot,
 }
 
 impl PlanType {

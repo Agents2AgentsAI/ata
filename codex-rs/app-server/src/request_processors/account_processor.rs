@@ -491,6 +491,28 @@ impl AccountRequestProcessor {
 
             if success {
                 auth_manager.reload().await;
+
+                // Persist `model = "gpt-4o"` and `model_provider = "copilot"`
+                // so the next launch defaults to Copilot without manual
+                // `-c model=...` flags. We only set the provider; the model is
+                // a sensible default for Copilot Free (`gpt-4o`) — users can
+                // still switch via `-c model=...` or the /model picker.
+                let codex_home_for_edit = codex_home.clone();
+                let edit_result = tokio::task::spawn_blocking(move || {
+                    ConfigEditsBuilder::new(&codex_home_for_edit)
+                        .set_model(
+                            Some("gpt-4o"),
+                            None,
+                            Some("copilot".to_string()),
+                        )
+                        .apply_blocking()
+                })
+                .await;
+                if let Ok(Err(err)) = edit_result {
+                    warn!(
+                        "failed to persist model_provider=copilot to config.toml after login: {err}"
+                    );
+                }
             }
 
             outgoing_clone
@@ -907,7 +929,26 @@ impl AccountRequestProcessor {
                 ));
             }
         };
-        let account = account_state.account.map(Account::from);
+        let mut account = account_state.account.map(Account::from);
+
+        // The standard ChatGPT/ApiKey/Bedrock account_state path doesn't know
+        // about Copilot. If the active provider is Copilot and the OAuth
+        // credential is present, surface that as the active account so the
+        // TUI's "Signed in with GitHub Copilot" view survives a restart.
+        if account.is_none()
+            && matches!(
+                self.config.model_provider.wire_api,
+                codex_model_provider_info::WireApi::CopilotInline
+            )
+            && get_provider_oauth_credential(
+                &self.config.codex_home,
+                PROVIDER_COPILOT,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .is_some()
+        {
+            account = Some(Account::Copilot {});
+        }
 
         Ok(GetAccountResponse {
             account,

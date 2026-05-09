@@ -1704,6 +1704,11 @@ async fn get_login_status(
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
         Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,
+        // GitHub Copilot OAuth — there's no `AuthMode` variant for it because
+        // Copilot tokens never live as `CodexAuth`. Treat it as authenticated
+        // for the onboarding step gate; the TUI surfaces its own
+        // CopilotSuccess message.
+        Some(AppServerAccount::Copilot {}) => LoginStatus::NotAuthenticated,
         None => LoginStatus::NotAuthenticated,
     })
 }

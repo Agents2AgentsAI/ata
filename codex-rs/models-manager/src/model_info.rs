@@ -5,6 +5,8 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -64,6 +66,48 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     model
 }
 
+/// Returns `(default_reasoning_level, supported_reasoning_levels)` for a
+/// Copilot-served model slug. Anthropic models surfaced through Copilot
+/// support the same extended-thinking effort ladder ATA wires for
+/// `claude-opus-4-7` directly; OpenAI/Gemini Copilot models do not currently
+/// expose a reasoning toggle through Chat Completions.
+fn copilot_reasoning_levels_for_slug(
+    slug: &str,
+) -> (Option<ReasoningEffort>, Vec<ReasoningEffortPreset>) {
+    let preset = |effort: ReasoningEffort, description: &str| ReasoningEffortPreset {
+        effort,
+        description: description.to_string(),
+    };
+
+    match slug {
+        // Claude Opus 4.7 ships the full ladder including the Anthropic-only
+        // `Max` ceiling (~199K thinking-budget tokens).
+        "claude-opus-4.7" => (
+            Some(ReasoningEffort::High),
+            vec![
+                preset(ReasoningEffort::Low, "Lower thinking budget, faster"),
+                preset(ReasoningEffort::Medium, "Balanced"),
+                preset(ReasoningEffort::High, "Deeper thinking"),
+                preset(ReasoningEffort::XHigh, "Extended thinking"),
+                preset(ReasoningEffort::Adaptive, "Model picks per turn"),
+                preset(ReasoningEffort::Max, "Maximum thinking budget (~200K)"),
+            ],
+        ),
+        // Sonnet/Haiku get the standard low/medium/high/xhigh + adaptive ladder.
+        "claude-sonnet-4.6" | "claude-haiku-4.5" => (
+            Some(ReasoningEffort::Medium),
+            vec![
+                preset(ReasoningEffort::Low, "Lower thinking budget, faster"),
+                preset(ReasoningEffort::Medium, "Balanced"),
+                preset(ReasoningEffort::High, "Deeper thinking"),
+                preset(ReasoningEffort::XHigh, "Extended thinking"),
+                preset(ReasoningEffort::Adaptive, "Model picks per turn"),
+            ],
+        ),
+        _ => (None, Vec::new()),
+    }
+}
+
 /// Built-in metadata for the Copilot-served models we know about.
 ///
 /// Returns `None` for slugs we do not recognize so callers fall through to
@@ -88,12 +132,15 @@ pub(crate) fn copilot_model_info(slug: &str) -> Option<ModelInfo> {
         _ => return None,
     };
 
+    let (default_reasoning_level, supported_reasoning_levels) =
+        copilot_reasoning_levels_for_slug(slug);
+
     Some(ModelInfo {
         slug: slug.to_string(),
         display_name: display_name.to_string(),
         description: None,
-        default_reasoning_level: None,
-        supported_reasoning_levels: Vec::new(),
+        default_reasoning_level,
+        supported_reasoning_levels,
         shell_type: ConfigShellToolType::Default,
         visibility: ModelVisibility::None,
         supported_in_api: true,
