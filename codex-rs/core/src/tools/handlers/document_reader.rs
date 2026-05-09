@@ -29,13 +29,6 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 
-/// Process-wide document cache.  Replaces the per-session cache that used to
-/// live on `Session::document_cache` (which no longer exists in the current
-/// `core::session::Session`).  All reading-view tools share this cache, which
-/// matches the previous behavior since reading-view state is intentionally
-/// shared across turns within a process.
-static GLOBAL_DOCUMENT_CACHE: LazyLock<DocumentCache> = LazyLock::new(DocumentCache::default);
-
 /// Strip web-browsing citation markers like `citeturn5view0`,
 /// `citeturn1view0turn2view3`, or `citeturn5search0` that the model
 /// sometimes injects into reading-view content. These are internal
@@ -394,17 +387,39 @@ impl DocumentCache {
     }
 }
 
-pub(crate) fn reading_view_display_mode_from_config(_config: &Config) -> ReadingViewDisplayMode {
-    // The `ReadingViewToml` config type does not exist in the current core; the
-    // display mode defaults to TUI and is changed at runtime via
-    // `DocumentCache::set_display_mode`.
-    ReadingViewDisplayMode::Tui
+pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
+    match config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|t| t.get("reading_view"))
+        .and_then(|v| {
+            v.clone()
+                .try_into::<crate::config::types::ReadingViewToml>()
+                .ok()
+        })
+        .and_then(|rv| rv.mode)
+        .as_deref()
+    {
+        Some("browser") => ReadingViewDisplayMode::Browser,
+        _ => ReadingViewDisplayMode::Tui,
+    }
 }
 
-pub(crate) fn reading_view_tools_enabled(_config: &Config) -> bool {
-    // Reading-view tools are gated at registration time elsewhere; if this
-    // handler is being invoked, the tools are enabled.
-    true
+pub(crate) fn reading_view_tools_enabled(config: &Config) -> bool {
+    config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|t| t.get("reading_view"))
+        .and_then(|v| {
+            v.clone()
+                .try_into::<crate::config::types::ReadingViewToml>()
+                .ok()
+        })
+        .and_then(|rv| rv.mode)
+        .as_deref()
+        != Some("disabled")
 }
 
 // ---------------------------------------------------------------------------
@@ -831,7 +846,7 @@ impl ToolHandler for DocumentReaderHandler {
             }
         };
 
-        let doc_cache: &DocumentCache = &GLOBAL_DOCUMENT_CACHE;
+        let doc_cache: &DocumentCache = &session.document_cache;
         if !reading_view_tools_enabled(turn.config.as_ref()) {
             return Err(FunctionCallError::RespondToModel(
                 "Reading view tools are disabled for this session.".to_string(),

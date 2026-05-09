@@ -142,6 +142,22 @@ mod schema;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+
+/// Reading view display mode configuration parsed from `[reading_view]` in
+/// config.toml. Drives `crate::tools::handlers::document_reader`'s
+/// display-mode selection (`tui` | `browser` | `disabled`).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReadingViewToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// ATA-side `crate::config::types::*` re-exports. Upstream's
+/// `codex_config::types::*` items are not affected.
+pub mod types {
+    pub use super::ReadingViewToml;
+}
+
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;

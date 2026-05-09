@@ -33,6 +33,12 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    /// Per-session reading view document cache. Populated by
+    /// `tools::handlers::document_reader::DocumentReaderHandler` when the
+    /// model presents a document; consumed by subsequent reading-view tool
+    /// calls so the model can refer to a document by id without re-sending
+    /// its full body.
+    pub(crate) document_cache: crate::tools::handlers::document_reader::DocumentCache,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -898,7 +904,8 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
-                next_internal_sub_id: AtomicU64::new(0),
+                document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+            next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;

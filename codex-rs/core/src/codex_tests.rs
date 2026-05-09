@@ -2467,7 +2467,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         document_cache: crate::tools::handlers::DocumentCache::with_display_mode(Default::default()),
-        next_internal_sub_id: AtomicU64::new(0),
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+            next_internal_sub_id: AtomicU64::new(0),
     };
 
     (session, turn_context)
@@ -3270,7 +3271,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         document_cache: crate::tools::handlers::DocumentCache::with_display_mode(Default::default()),
-        next_internal_sub_id: AtomicU64::new(0),
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+            next_internal_sub_id: AtomicU64::new(0),
     });
 
     (session, turn_context, rx_event)

@@ -60,7 +60,9 @@ use codex_protocol::protocol::AskForApproval;
 pub use crop_figure::CropFigureHandler;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
+pub use document_reader::DocumentCache;
 pub use document_reader::DocumentReaderHandler;
+pub use document_reader::ReadingViewDisplayMode;
 pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
