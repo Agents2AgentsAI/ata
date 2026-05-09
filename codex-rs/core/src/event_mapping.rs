@@ -98,6 +98,10 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
             ContentItem::OutputText { text } => {
                 warn!("Output text in user message: {}", text);
             }
+            ContentItem::InputFile { .. } | ContentItem::UrlFile { .. } => {
+                // File attachments are handled by the file_injection pipeline
+                // before user-input mapping, so they do not surface here.
+            }
         }
     }
 
