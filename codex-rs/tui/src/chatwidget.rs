@@ -7086,6 +7086,7 @@ impl ChatWidget {
             Some(ReasoningEffortConfig::High) => "high",
             Some(ReasoningEffortConfig::XHigh) => "xhigh",
             Some(ReasoningEffortConfig::Adaptive) => "adaptive",
+            Some(ReasoningEffortConfig::Max) => "max",
             None | Some(ReasoningEffortConfig::None) => "default",
         }
     }
@@ -8193,6 +8194,7 @@ impl ChatWidget {
             ReasoningEffortConfig::High => "High",
             ReasoningEffortConfig::XHigh => "Extra high",
             ReasoningEffortConfig::Adaptive => "Adaptive",
+            ReasoningEffortConfig::Max => "Max",
         }
     }
 
@@ -9812,6 +9814,7 @@ impl ChatWidget {
                     Some(ReasoningEffortConfig::High) => "high",
                     Some(ReasoningEffortConfig::XHigh) => "xhigh",
                     Some(ReasoningEffortConfig::Adaptive) => "adaptive",
+                    Some(ReasoningEffortConfig::Max) => "max",
                     None | Some(ReasoningEffortConfig::None) => "default",
                 };
                 message.push(' ');

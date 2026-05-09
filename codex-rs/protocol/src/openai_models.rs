@@ -49,6 +49,9 @@ pub enum ReasoningEffort {
     High,
     XHigh,
     Adaptive,
+    /// Anthropic Opus 4.7-only: maximum thinking budget. Falls back to
+    /// XHigh on providers that don't expose a dedicated Max tier.
+    Max,
 }
 
 impl FromStr for ReasoningEffort {
@@ -543,6 +546,7 @@ fn effort_rank(effort: ReasoningEffort) -> i32 {
         ReasoningEffort::High => 4,
         ReasoningEffort::XHigh => 5,
         ReasoningEffort::Adaptive => 6,
+        ReasoningEffort::Max => 7,
     }
 }
 
@@ -609,6 +613,8 @@ mod tests {
     fn reasoning_effort_from_str_accepts_known_values() {
         assert_eq!("high".parse(), Ok(ReasoningEffort::High));
         assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
+        assert_eq!("max".parse(), Ok(ReasoningEffort::Max));
+        assert_eq!("adaptive".parse(), Ok(ReasoningEffort::Adaptive));
     }
 
     #[test]

@@ -168,8 +168,15 @@ fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
         ReasoningEffortConfig::Medium => 3,
         ReasoningEffortConfig::High => 4,
         ReasoningEffortConfig::XHigh => 5,
-        // TODO(ata): Adaptive ordering will be added when adaptive reasoning is wired up.
-        ReasoningEffortConfig::Adaptive => 3,
+        // Mirror `codex_protocol::openai_models::effort_rank`: Adaptive
+        // sits at the top of the ladder, reachable by raising past XHigh.
+        // The model picks how much budget to spend dynamically per turn.
+        ReasoningEffortConfig::Adaptive => 6,
+        // Max is the Anthropic Opus-4.7-only ceiling. Place it above
+        // Adaptive so raising from XHigh still reaches Adaptive first
+        // (preserves the existing OpenAI-side cycle); Max is selectable
+        // when the active provider supports it.
+        ReasoningEffortConfig::Max => 7,
     }
 }
 

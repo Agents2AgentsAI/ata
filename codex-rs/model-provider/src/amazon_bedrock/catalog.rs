@@ -133,6 +133,7 @@ fn reasoning_effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
             ReasoningEffort::High => "Greater reasoning depth for complex problems",
             ReasoningEffort::XHigh => "Extra high reasoning depth for complex problems",
             ReasoningEffort::Adaptive => "Adaptive reasoning",
+            ReasoningEffort::Max => "Maximum reasoning depth (Opus 4.7 only)",
         }
         .to_string(),
     }
