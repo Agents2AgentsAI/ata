@@ -152,10 +152,32 @@ pub struct ReadingViewToml {
     pub mode: Option<String>,
 }
 
+/// Research tools configuration parsed from `[research]` in config.toml.
+/// Layered on top of env-var-resolved `ResearchConfig` defaults; any field
+/// left as `None` falls back to the env-var value or codex-home secret.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchToolsToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openalex_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_library_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_storage_dir: Option<String>,
+}
+
 /// ATA-side `crate::config::types::*` re-exports. Upstream's
 /// `codex_config::types::*` items are not affected.
 pub mod types {
     pub use super::ReadingViewToml;
+    pub use super::ResearchToolsToml;
 }
 
 pub use codex_network_proxy::NetworkProxyAuditMetadata;
