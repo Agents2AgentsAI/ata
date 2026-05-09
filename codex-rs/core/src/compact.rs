@@ -377,6 +377,11 @@ pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
                 }
             }
             ContentItem::InputImage { .. } => {}
+            ContentItem::InputFile { filename, .. } | ContentItem::UrlFile { filename, .. } => {
+                if let Some(name) = filename.as_deref() {
+                    pieces.push(name);
+                }
+            }
         }
     }
     if pieces.is_empty() {

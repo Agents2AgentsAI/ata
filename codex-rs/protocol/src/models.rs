@@ -695,7 +695,11 @@ pub enum ResponseInputItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    try_from = "UncheckedContentItem"
+)]
 pub enum ContentItem {
     InputText {
         text: String,
@@ -706,9 +710,175 @@ pub enum ContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    InputFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        /// MIME type for the file. Stored internally for provider adapters
+        /// (Anthropic, Gemini) that need it when converting to their native
+        /// format. Skipped during serialization because the OpenAI Responses
+        /// API does not accept this field on `input_file` blocks; the MIME
+        /// type is already embedded in the `file_data` data-URI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
     OutputText {
         text: String,
     },
+    UrlFile {
+        url: String,
+        /// MIME type for provider adapters or tools that need a type hint.
+        /// Not part of the stable public wire shape.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum UncheckedContentItem {
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+        #[serde(default)]
+        detail: Option<ImageDetail>,
+    },
+    InputFile {
+        file_data: Option<String>,
+        file_id: Option<String>,
+        file_url: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
+    },
+    OutputText {
+        text: String,
+    },
+    UrlFile {
+        url: Option<String>,
+        mime_type: Option<String>,
+        filename: Option<String>,
+    },
+}
+
+const MAX_URL_FILE_URL_LENGTH: usize = 8192;
+
+fn validated_http_url(
+    url: Option<String>,
+    missing_error: &'static str,
+) -> Result<String, &'static str> {
+    let url = url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or(missing_error)?;
+    if url.len() > MAX_URL_FILE_URL_LENGTH {
+        return Err("url_file `url` exceeds max length of 8192 characters");
+    }
+    let parsed =
+        reqwest::Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("url_file `url` must use http or https");
+    }
+    Ok(url)
+}
+
+impl TryFrom<UncheckedContentItem> for ContentItem {
+    type Error = &'static str;
+
+    fn try_from(value: UncheckedContentItem) -> Result<Self, Self::Error> {
+        match value {
+            UncheckedContentItem::InputText { text } => Ok(Self::InputText { text }),
+            UncheckedContentItem::InputImage { image_url, detail } => {
+                Ok(Self::InputImage { image_url, detail })
+            }
+            UncheckedContentItem::InputFile {
+                file_data,
+                file_id,
+                file_url,
+                mime_type,
+                filename,
+            } => {
+                let file_data = file_data.filter(|value| !value.trim().is_empty());
+                let file_id = file_id.filter(|value| !value.trim().is_empty());
+                let file_url = file_url.filter(|value| !value.trim().is_empty());
+                let has_file_data = file_data.is_some();
+                let has_file_id = file_id.is_some();
+                let has_file_url = file_url.is_some();
+                if has_file_url {
+                    if has_file_data || has_file_id {
+                        return Err(
+                            "input_file with `file_url` cannot include `file_data` or `file_id`",
+                        );
+                    }
+                    let url = validated_http_url(file_url, "url_file requires a non-empty `url`")?;
+                    return Ok(Self::UrlFile {
+                        url,
+                        mime_type,
+                        filename,
+                    });
+                }
+                if has_file_data == has_file_id {
+                    return Err("input_file must include exactly one of `file_data` or `file_id`");
+                }
+
+                Ok(Self::InputFile {
+                    file_data,
+                    file_id,
+                    mime_type,
+                    filename,
+                })
+            }
+            UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
+            UncheckedContentItem::UrlFile {
+                url,
+                mime_type,
+                filename,
+            } => {
+                let url = validated_http_url(url, "url_file requires a non-empty `url`")?;
+                Ok(Self::UrlFile {
+                    url,
+                    mime_type,
+                    filename,
+                })
+            }
+        }
+    }
+}
+
+impl ContentItem {
+    pub fn inline_file(base64_data: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: Some(base64_data),
+            file_id: None,
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn file_ref(file_id: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: None,
+            file_id: Some(file_id),
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn url_file(url: String, mime_type: Option<String>, filename: Option<String>) -> Self {
+        Self::UrlFile {
+            url,
+            mime_type,
+            filename,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
