@@ -1,7 +1,6 @@
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
-use codex_workspace::Cli as WorkspaceCli;
 use clap_complete::Shell;
 use clap_complete::generate;
 use codex_arg0::Arg0DispatchPaths;
@@ -35,6 +34,7 @@ use codex_tui::ExitReason;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
+use codex_workspace::Cli as WorkspaceCli;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
