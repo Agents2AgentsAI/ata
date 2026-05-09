@@ -2,6 +2,7 @@ pub(crate) mod agent_jobs;
 pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
+pub(crate) mod attach_url_files;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;
@@ -52,6 +53,7 @@ use crate::session::turn_context::TurnEnvironment;
 pub(crate) use crate::tools::code_mode::CodeModeExecuteHandler;
 pub(crate) use crate::tools::code_mode::CodeModeWaitHandler;
 pub use apply_patch::ApplyPatchHandler;
+pub use attach_url_files::AttachUrlFilesHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 #[cfg(feature = "data")]
