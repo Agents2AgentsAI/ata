@@ -2471,6 +2471,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-elevenlabs",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",

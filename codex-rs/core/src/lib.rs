@@ -21,6 +21,15 @@ pub mod auth_public {
     pub use crate::auth::poll_copilot_access_token;
     pub use crate::auth::start_copilot_device_flow;
 }
+
+/// Re-export of the ElevenLabs TTS/STT crate. Surfaced through `codex-core`
+/// so consumers (TUI realtime mode, future voice modules) don't need a
+/// direct workspace dep on `codex-elevenlabs`. The crate provides
+/// `TtsStream`/`TtsChunk` (PCM 24kHz mono i16 streaming output with optional
+/// per-chunk char alignment) and an HTTP STT client; integration with the
+/// realtime audio output pipeline is a follow-up — at this layer it is
+/// available as a building block.
+pub use codex_elevenlabs as elevenlabs;
 mod client;
 mod client_common;
 mod realtime_context;

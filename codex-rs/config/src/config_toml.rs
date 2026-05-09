@@ -332,6 +332,11 @@ pub struct ConfigToml {
     /// `version` controls v1/v2 and `type` controls conversational/transcription.
     #[serde(default)]
     pub realtime: Option<RealtimeToml>,
+    /// Configuration for the ElevenLabs TTS/STT API. Surfaced today as a
+    /// config-only entry so users can populate the key/voice ahead of the
+    /// realtime audio backend swap landing in a follow-up.
+    #[serde(default)]
+    pub elevenlabs: Option<ElevenLabsToml>,
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport instructions (the `Op::RealtimeConversation`
     /// `/ws` session.update instructions) without changing normal prompts.
@@ -595,6 +600,30 @@ pub struct RealtimeToml {
 pub struct RealtimeAudioToml {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+}
+
+/// ElevenLabs TTS/STT configuration. Surfaced today as a config schema
+/// entry so users can populate `[elevenlabs]` in `~/.codex/config.toml` and
+/// future voice integrations can pick it up without a config-file
+/// migration. The actual realtime-audio swap (using ElevenLabs as the TTS
+/// backend instead of OpenAI realtime) is a follow-up — populating these
+/// fields today does not yet change runtime behavior.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ElevenLabsToml {
+    /// ElevenLabs API key. Read directly from config.toml; if you prefer to
+    /// avoid storing the key on disk, leave this unset and rely on a
+    /// future env-var fallback (`ELEVENLABS_API_KEY`).
+    pub api_key: Option<String>,
+    /// Voice ID to use for TTS. Defaults to ElevenLabs' built-in "Sarah"
+    /// when unset.
+    pub voice_id: Option<String>,
+    /// TTS model ID. Defaults to `eleven_flash_v2_5` when unset.
+    pub model_id: Option<String>,
+    /// ISO 639-1 language code. None = auto-detect.
+    pub language_code: Option<String>,
+    /// Speech speed (0.7–1.2). None = 1.0.
+    pub speed: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
