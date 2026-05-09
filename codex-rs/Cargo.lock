@@ -3436,6 +3436,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-network-proxy",
  "codex-utils-absolute-path",
+ "codex-utils-file",
  "codex-utils-image",
  "codex-utils-string",
  "codex-utils-template",
