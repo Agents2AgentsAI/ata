@@ -12,6 +12,7 @@ chrono = { workspace = true, features = ["serde"] }
 dashmap = "6"
 futures = { workspace = true }
 lru = { workspace = true }
+md-5 = "0.10"
 rand = { workspace = true }
 bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }

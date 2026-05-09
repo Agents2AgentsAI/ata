@@ -3,6 +3,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::rate_limiter::ApiRateLimit;
+use crate::rate_limiter::RateLimitBucket;
 use crate::rate_limiter::ResearchApi;
 
 pub const DEFAULT_REMOTE_ZOTERO_BASE_URL: &str = "https://api.zotero.org";
@@ -53,8 +54,6 @@ pub struct CacheTtls {
     pub paper_search: Duration,
     pub citations: Duration,
     pub zotero_items: Duration,
-    pub repo_analysis: Duration,
-    pub repo_health: Duration,
     pub hn_search: Duration,
     pub patent_search: Duration,
     pub negative: Duration,
@@ -84,8 +83,6 @@ impl Default for CacheTtls {
             paper_search: Duration::from_secs(5 * 60),
             citations: Duration::from_secs(10 * 60),
             zotero_items: Duration::from_secs(2 * 60),
-            repo_analysis: Duration::from_secs(60 * 60),
-            repo_health: Duration::from_secs(15 * 60),
             hn_search: Duration::from_secs(5 * 60),
             patent_search: Duration::from_secs(10 * 60),
             negative: Duration::from_secs(30),
@@ -207,33 +204,40 @@ impl ResearchConfig {
     }
 
     #[must_use]
-    pub fn rate_limits(&self) -> HashMap<ResearchApi, ApiRateLimit> {
+    pub fn rate_limits(&self) -> HashMap<RateLimitBucket, ApiRateLimit> {
         let mut limits = HashMap::from([
-            // Semantic Scholar: /paper/search is always 1 RPS even with an API
-            // key (older keys allow 10 RPS on non-search endpoints, but search is
-            // capped at 1 RPS). Use 1 concurrent to avoid queuing behind the limiter.
+            // Ata keeps Semantic Scholar search at 1 RPS and single concurrency
+            // because search is the most rate-sensitive path.
             (
-                ResearchApi::SemanticScholar,
+                RateLimitBucket::SemanticScholarSearch,
                 ApiRateLimit::new(1, Duration::from_secs(1), 1),
+            ),
+            (
+                RateLimitBucket::SemanticScholarGraph,
+                if self.semantic_scholar_api_key.is_some() {
+                    ApiRateLimit::new(10, Duration::from_secs(1), 3)
+                } else {
+                    ApiRateLimit::new(1, Duration::from_secs(1), 1)
+                },
             ),
             // arXiv: official guideline is 1 request per 3 seconds, single connection.
             (
-                ResearchApi::Arxiv,
+                RateLimitBucket::Arxiv,
                 ApiRateLimit::new(1, Duration::from_secs(3), 1),
             ),
             // OpenAlex: 100 req/sec hard cap, credit-based system (search costs 100
             // credits, free tier has 100k credits/day ≈ 1000 searches/day). 10 req/sec
             // with 5 concurrent is well within limits.
             (
-                ResearchApi::OpenAlex,
+                RateLimitBucket::OpenAlex,
                 ApiRateLimit::new(10, Duration::from_secs(1), 5),
             ),
             (
-                ResearchApi::Zotero,
+                RateLimitBucket::Zotero,
                 ApiRateLimit::new(10, Duration::from_secs(1), 3),
             ),
             (
-                ResearchApi::GitHub,
+                RateLimitBucket::GitHub,
                 if self.github_token.is_some() {
                     ApiRateLimit::new(5_000, Duration::from_secs(60 * 60), 3)
                 } else {
@@ -241,11 +245,11 @@ impl ResearchConfig {
                 },
             ),
             (
-                ResearchApi::HackerNews,
+                RateLimitBucket::HackerNews,
                 ApiRateLimit::new(10, Duration::from_secs(1), 3),
             ),
             (
-                ResearchApi::Patents,
+                RateLimitBucket::Patents,
                 ApiRateLimit::new(25, Duration::from_secs(60), 2),
             ),
         ]);
@@ -266,7 +270,15 @@ impl ResearchConfig {
             (ResearchApi::Patents, self.rate_limit_overrides.patents),
         ] {
             if let Some(rule) = override_limit {
-                limits.insert(api, rule);
+                match api {
+                    ResearchApi::SemanticScholar => {
+                        limits.insert(RateLimitBucket::SemanticScholarSearch, rule);
+                        limits.insert(RateLimitBucket::SemanticScholarGraph, rule);
+                    }
+                    other => {
+                        limits.insert(RateLimitBucket::from(other), rule);
+                    }
+                }
             }
         }
 
@@ -319,8 +331,13 @@ fn redact(value: &Option<String>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::DEFAULT_LOCAL_ZOTERO_BASE_URL;
+    use super::RateLimitOverrides;
     use super::ResearchConfig;
+    use crate::rate_limiter::ApiRateLimit;
+    use crate::rate_limiter::RateLimitBucket;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -342,5 +359,59 @@ mod tests {
         };
 
         assert_eq!(config.uses_local_zotero_api(), true);
+    }
+
+    #[test]
+    fn semantic_scholar_rate_limits_split_search_and_graph_buckets() {
+        let limits = ResearchConfig::default().rate_limits();
+
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarSearch),
+            Some(&ApiRateLimit::new(1, Duration::from_secs(1), 1))
+        );
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarGraph),
+            Some(&ApiRateLimit::new(1, Duration::from_secs(1), 1))
+        );
+    }
+
+    #[test]
+    fn semantic_scholar_graph_bucket_relaxes_when_api_key_is_configured() {
+        let config = ResearchConfig {
+            semantic_scholar_api_key: Some("test-key".to_string()),
+            ..ResearchConfig::default()
+        };
+        let limits = config.rate_limits();
+
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarSearch),
+            Some(&ApiRateLimit::new(1, Duration::from_secs(1), 1))
+        );
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarGraph),
+            Some(&ApiRateLimit::new(10, Duration::from_secs(1), 3))
+        );
+    }
+
+    #[test]
+    fn semantic_scholar_override_applies_to_both_buckets() {
+        let override_limit = ApiRateLimit::new(7, Duration::from_secs(2), 4);
+        let config = ResearchConfig {
+            rate_limit_overrides: RateLimitOverrides {
+                semantic_scholar: Some(override_limit),
+                ..RateLimitOverrides::default()
+            },
+            ..ResearchConfig::default()
+        };
+        let limits = config.rate_limits();
+
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarSearch),
+            Some(&override_limit)
+        );
+        assert_eq!(
+            limits.get(&RateLimitBucket::SemanticScholarGraph),
+            Some(&override_limit)
+        );
     }
 }

@@ -48,6 +48,8 @@ mod marketplace_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
+mod zotero_cmd;
+use crate::zotero_cmd::ZoteroCli;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
@@ -174,6 +176,9 @@ enum Subcommand {
     /// Manage workspaces (repos, runs, artifacts, audit).
     #[clap(visible_alias = "ws")]
     Workspace(WorkspaceCli),
+
+    /// Manage Zotero libraries, collections, items, and attachments.
+    Zotero(ZoteroCli),
 
     /// Internal: run the responses API proxy.
     #[clap(hide = true)]
@@ -1101,6 +1106,18 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             if code != 0 {
                 std::process::exit(code);
             }
+        }
+        Some(Subcommand::Zotero(mut zotero_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "zotero",
+            )?;
+            prepend_config_flags(
+                &mut zotero_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            zotero_cmd::run_zotero_command(zotero_cli).await?;
         }
         Some(Subcommand::Sandbox(sandbox_args)) => match sandbox_args.cmd {
             SandboxCommand::Macos(mut seatbelt_cli) => {

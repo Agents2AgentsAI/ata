@@ -2219,6 +2219,7 @@ dependencies = [
  "codex-memories-write",
  "codex-models-manager",
  "codex-protocol",
+ "codex-research-tools",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-rollout-trace",
@@ -2239,6 +2240,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "regex-lite",
+ "serde",
  "serde_json",
  "sqlx",
  "supports-color 3.0.2",
@@ -2248,6 +2250,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
@@ -3489,6 +3492,7 @@ dependencies = [
  "dashmap",
  "futures",
  "lru 0.16.4",
+ "md-5",
  "pretty_assertions",
  "quick-xml 0.38.4",
  "rand 0.9.4",

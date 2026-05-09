@@ -20,13 +20,12 @@ use http_client::HttpClient;
 use paper_id::PaperIdResolver;
 use rate_limiter::RateLimiter;
 use types::CitationResult;
-use types::ConfigSchema;
 use types::HnGetThreadParams;
 use types::HnSearchParams;
 use types::HnSearchResult;
 use types::HnThread;
-use types::ModelDefinition;
 use types::PaginationParams;
+use types::Paper;
 use types::PaperDetail;
 use types::PaperRecommendationParams;
 use types::PaperSearchParams;
@@ -35,13 +34,6 @@ use types::PatentGetParams;
 use types::PatentSearchParams;
 use types::PatentSearchResult;
 use types::RecommendationResult;
-use types::RepoEntrypoint;
-use types::RepoExportPath;
-use types::RepoHealth;
-use types::RepoIoShape;
-use types::RepoRequirements;
-use types::RepoSummary;
-use types::RequirementsDiff;
 use types::SearchResult;
 use types::ZoteroAddItemsToCollectionParams;
 use types::ZoteroAdvancedSearchParams;
@@ -54,6 +46,7 @@ use types::ZoteroCitationResult;
 use types::ZoteroCollectionItemsParams;
 use types::ZoteroCollectionsParams;
 use types::ZoteroCollectionsResult;
+use types::ZoteroCreateAttachmentImportUrlParams;
 use types::ZoteroCreateAttachmentLinkParams;
 use types::ZoteroCreateCollectionParams;
 use types::ZoteroCreateCollectionResult;
@@ -174,18 +167,12 @@ impl ResearchToolkit {
             return self.config.has_zotero_api_key() || self.config.uses_local_zotero_api();
         }
 
-        if tool_id == "repo_get_health" {
-            // Unauthenticated GitHub access is still viable; a token only raises
-            // the rate limit tier for better throughput.
-            return true;
-        }
-
         if tool_id == "patent_search" || tool_id == "patent_get" {
             return self.config.epo_consumer_key.is_some()
                 && self.config.epo_consumer_secret.is_some();
         }
 
-        // Paper + repo analysis tools intentionally remain available without API keys.
+        // Paper tools intentionally remain available without API keys.
         true
     }
 
@@ -195,6 +182,10 @@ impl ResearchToolkit {
 
     pub async fn paper_get(&self, id: &str) -> Result<PaperDetail> {
         tools::paper_search::paper_get(self, id).await
+    }
+
+    pub async fn paper_get_metadata(&self, id: &str) -> Result<Paper> {
+        tools::paper_search::paper_get_metadata(self, id).await
     }
 
     pub async fn paper_citations(
@@ -359,60 +350,11 @@ impl ResearchToolkit {
         tools::zotero::zotero_create_attachment_link(self, params).await
     }
 
-    pub async fn repo_clone_and_summarize(
+    pub async fn zotero_create_attachment_import_url(
         &self,
-        repo_url: &str,
-        branch: Option<&str>,
-    ) -> Result<RepoSummary> {
-        tools::repo_analysis::repo_clone_and_summarize(self, repo_url, branch).await
-    }
-
-    pub async fn repo_find_models(
-        &self,
-        repo_url: &str,
-        framework: Option<&str>,
-    ) -> Result<Vec<ModelDefinition>> {
-        tools::repo_analysis::repo_find_models(self, repo_url, framework).await
-    }
-
-    pub async fn repo_extract_requirements(&self, repo_url: &str) -> Result<RepoRequirements> {
-        tools::repo_analysis::repo_extract_requirements(self, repo_url).await
-    }
-
-    pub async fn repo_find_entrypoints(
-        &self,
-        repo_url: &str,
-        task_hint: Option<&str>,
-    ) -> Result<Vec<RepoEntrypoint>> {
-        tools::repo_analysis::repo_find_entrypoints(self, repo_url, task_hint).await
-    }
-
-    pub async fn repo_extract_io_shapes(
-        &self,
-        repo_url: &str,
-        model_class: Option<&str>,
-    ) -> Result<Vec<RepoIoShape>> {
-        tools::repo_analysis::repo_extract_io_shapes(self, repo_url, model_class).await
-    }
-
-    pub async fn repo_get_health(&self, repo_url: &str) -> Result<RepoHealth> {
-        tools::repo_analysis::repo_get_health(self, repo_url).await
-    }
-
-    pub async fn repo_find_export_paths(&self, repo_url: &str) -> Result<Vec<RepoExportPath>> {
-        tools::repo_analysis::repo_find_export_paths(self, repo_url).await
-    }
-
-    pub async fn repo_extract_config_schema(&self, repo_url: &str) -> Result<Vec<ConfigSchema>> {
-        tools::repo_analysis::repo_extract_config_schema(self, repo_url).await
-    }
-
-    pub async fn repo_diff_requirements(
-        &self,
-        repo_url: &str,
-        local_requirements_path: &str,
-    ) -> Result<RequirementsDiff> {
-        tools::repo_analysis::repo_diff_requirements(self, repo_url, local_requirements_path).await
+        params: ZoteroCreateAttachmentImportUrlParams,
+    ) -> Result<ZoteroMutationResult> {
+        tools::zotero::zotero_create_attachment_import_url(self, params).await
     }
 
     pub async fn hn_search(&self, params: HnSearchParams) -> Result<HnSearchResult> {

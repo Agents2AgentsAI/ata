@@ -1,9 +1,3 @@
-use std::path::Path;
-
-use crate::config::ResearchToolsToml;
-use crate::features::Feature;
-use crate::features::Features;
-
 use rmcp::model::Tool;
 use std::collections::BTreeMap;
 
@@ -43,6 +37,15 @@ pub struct ResearchToolAvailability {
 pub struct ResearchToolContext {
     pub names: ResearchToolNames,
     pub availability: ResearchToolAvailability,
+}
+
+impl Default for ResearchToolContext {
+    fn default() -> Self {
+        Self {
+            names: ResearchToolNames::default(),
+            availability: native_tool_availability(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,49 +146,6 @@ pub fn native_tool_availability() -> ResearchToolAvailability {
     }
 }
 
-#[must_use]
-pub fn configured_native_tool_context(
-    research_toml: Option<&ResearchToolsToml>,
-    codex_home: &Path,
-    cwd: &Path,
-    features: &Features,
-) -> ResearchToolContext {
-    let defs = codex_research_tools::tool_specs::all_tool_defs();
-    let research_config =
-        crate::tools::handlers::research::build_research_config(research_toml, codex_home, cwd);
-    let toolkit =
-        codex_research_tools::ResearchToolkit::new(reqwest::Client::new(), research_config);
-
-    let mut names = ResearchToolNames::default();
-    let mut availability = ResearchToolAvailability::default();
-
-    if features.enabled(Feature::ResearchZotero) && toolkit.is_tool_configured("zotero_search") {
-        availability.has_zotero = true;
-    }
-
-    for def in defs {
-        if !toolkit.is_tool_configured(def.id) {
-            continue;
-        }
-        if !features.is_research_tool_enabled(def.id) {
-            continue;
-        }
-
-        names.set_name_for_id(def.id, def.native_name.to_string());
-        match def.id {
-            "paper_search" => availability.has_paper_search = true,
-            "repo_find_entrypoints" => availability.has_repo_analysis = true,
-            "hn_search" => availability.has_hackernews = true,
-            _ => {}
-        }
-    }
-
-    ResearchToolContext {
-        names,
-        availability,
-    }
-}
-
 pub(crate) fn find_mcp_tool_matches(
     mcp_name: &str,
     mcp_tools: &BTreeMap<String, Tool>,
@@ -199,47 +159,11 @@ pub(crate) fn find_mcp_tool_matches(
         .collect()
 }
 
-#[must_use]
-#[allow(dead_code)]
-pub(crate) fn should_suppress_research_mcp_tool(qualified_name: &str, features: &Features) -> bool {
-    let tool_name = qualified_name.rsplit("__").next().unwrap_or(qualified_name);
-    if tool_name.starts_with("zotero_") {
-        return true;
-    }
-    let tool_id = match tool_name {
-        _ if tool_name.starts_with("paper_") => Some("paper_search"),
-        _ if tool_name.starts_with("hn_") => Some("hn_search"),
-        _ if tool_name.starts_with("patent_") => Some("patent_search"),
-        _ if tool_name.starts_with("repo_") => Some("repo_clone_and_summarize"),
-        "search_papers"
-        | "get_paper"
-        | "get_citations"
-        | "get_references"
-        | "get_recommendations" => Some("paper_search"),
-        "search_hackernews" | "get_hackernews_thread" => Some("hn_search"),
-        "search_patents" | "get_patent" => Some("patent_search"),
-        "clone_and_summarize"
-        | "find_model_definitions"
-        | "extract_requirements"
-        | "find_entrypoints"
-        | "extract_io_shapes"
-        | "get_repo_health"
-        | "find_export_paths"
-        | "extract_config_schema"
-        | "diff_requirements" => Some("repo_clone_and_summarize"),
-        _ => None,
-    };
-
-    tool_id.is_some_and(|id| !features.is_research_tool_enabled(id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::features::Feature;
     use codex_research_tools::tool_specs::all_tool_defs;
     use pretty_assertions::assert_eq;
-    use tempfile::TempDir;
 
     fn mcp_tool(name: &str) -> Tool {
         Tool {
@@ -310,109 +234,6 @@ mod tests {
             names.paper_search,
             "mcp__very_long_server9f8e7d6c5b4a32100112233445566778899aabb"
         );
-    }
-
-    #[test]
-    fn should_suppress_research_mcp_tool_follows_feature_flags_for_all_categories() {
-        let cases = [
-            (
-                "mcp__paper_server__paper_search",
-                "mcp__paper_server__search_papers",
-                Feature::ResearchPaperSearch,
-            ),
-            (
-                "mcp__hn_server__hn_search",
-                "mcp__hn_server__search_hackernews",
-                Feature::ResearchHackerNews,
-            ),
-            (
-                "mcp__patent_server__patent_search",
-                "mcp__patent_server__search_patents",
-                Feature::ResearchPatents,
-            ),
-            (
-                "mcp__repo_server__repo_clone_and_summarize",
-                "mcp__repo_server__clone_and_summarize",
-                Feature::ResearchRepoAnalysis,
-            ),
-        ];
-
-        for (prefix_name, alias_name, feature) in cases {
-            let mut features = Features::with_defaults();
-
-            features.disable(feature);
-            assert!(
-                should_suppress_research_mcp_tool(prefix_name, &features),
-                "{prefix_name} should be suppressed when {feature:?} is disabled"
-            );
-            assert!(
-                should_suppress_research_mcp_tool(alias_name, &features),
-                "{alias_name} should be suppressed when {feature:?} is disabled"
-            );
-
-            features.enable(feature);
-            assert!(
-                !should_suppress_research_mcp_tool(prefix_name, &features),
-                "{prefix_name} should be allowed when {feature:?} is enabled"
-            );
-            assert!(
-                !should_suppress_research_mcp_tool(alias_name, &features),
-                "{alias_name} should be allowed when {feature:?} is enabled"
-            );
-        }
-    }
-
-    #[test]
-    fn should_suppress_zotero_mcp_tools_even_when_feature_is_enabled() {
-        let mut features = Features::with_defaults();
-        features.enable(Feature::ResearchZotero);
-        features.enable(Feature::Research);
-        assert!(should_suppress_research_mcp_tool(
-            "mcp__zotero_server__zotero_search",
-            &features
-        ));
-    }
-
-    #[test]
-    fn should_suppress_research_mcp_tool_leaves_unknown_names_unsuppressed() {
-        let features = Features::with_defaults();
-        assert!(!should_suppress_research_mcp_tool(
-            "mcp__server__custom_tool",
-            &features
-        ));
-    }
-
-    #[test]
-    fn should_suppress_research_mcp_tool_respects_master_research_toggle() {
-        let cases = [
-            "mcp__paper_server__search_papers",
-            "mcp__hn_server__search_hackernews",
-            "mcp__patent_server__search_patents",
-            "mcp__repo_server__clone_and_summarize",
-        ];
-        let mut features = Features::with_defaults();
-        features.enable(Feature::Research);
-
-        for name in cases {
-            assert!(
-                !should_suppress_research_mcp_tool(name, &features),
-                "{name} should be allowed when Research is enabled"
-            );
-        }
-    }
-
-    #[test]
-    fn configured_native_tool_context_marks_zotero_available_when_feature_enabled() {
-        let codex_home = TempDir::new().expect("temp dir");
-        let cwd = TempDir::new().expect("temp dir");
-        let mut features = Features::with_defaults();
-        features.enable(Feature::Research);
-        features.enable(Feature::ResearchZotero);
-
-        let context =
-            configured_native_tool_context(None, codex_home.path(), cwd.path(), &features);
-
-        assert!(context.availability.has_zotero);
     }
 }
 
