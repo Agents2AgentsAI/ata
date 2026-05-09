@@ -11,7 +11,7 @@ Total fork-only commits: **592** (since merge base `926b2f19e8c`, span 2026-02-0
 ### Cluster 2 — Research Agent / Research Tools Crate
 - **Volume:** ~22 commits, 2026-02-07 → 2026-03-05.
 - **Type:** Local-only crate (`codex-research-tools`).
-- **Reps:** `eb42737b9e research tools: crate skeleton`, `effc73893f research: reserach scout, pdf figures, latex`.
+- **Reps:** `eb42737b9e research tools: crate skeleton`, `effc73893f research: research scout, pdf figures, latex`.
 - **Plan:** Preserve. Cargo features `research-all`, `research-zotero`, etc.
 
 ### Cluster 3 — Zotero Integration (CLI tools, not MCP)
@@ -75,7 +75,7 @@ Total fork-only commits: **592** (since merge base `926b2f19e8c`, span 2026-02-0
 
 ### Cluster 14 — KB / Paper-Synthesis / Skills (research-flag-gated)
 - **Volume:** ~10 commits, 2026-02-12 → 2026-03-10.
-- **Reps:** `394760658d kb`, `90d8b10fa8 rm kb tools, add kb skills, improve document reader`, `3c893c5be4 kb and paper syntehsis skkills to depend on research flag`.
+- **Reps:** `394760658d kb`, `90d8b10fa8 rm kb tools, add kb skills, improve document reader`, `3c893c5be4 kb and paper synthesis skkills to depend on research flag`.
 - **Plan:** Preserve. Don't bring back the tool form.
 
 ### Cluster 15 — Telemetry Disable / OpenAI Endpoint Removal
