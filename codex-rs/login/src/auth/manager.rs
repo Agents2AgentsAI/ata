@@ -412,7 +412,6 @@ impl CodexAuth {
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
             auth_mode: Some(ApiAuthMode::Chatgpt),
-            openai_api_key: None,
             tokens: Some(TokenData {
                 id_token: Default::default(),
                 access_token: "Access Token".to_string(),
@@ -420,7 +419,7 @@ impl CodexAuth {
                 account_id: Some("account_id".to_string()),
             }),
             last_refresh: Some(Utc::now()),
-            agent_identity: None,
+            ..Default::default()
         };
 
         let client = create_client();
@@ -534,9 +533,7 @@ pub fn login_with_api_key(
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
-        tokens: None,
-        last_refresh: None,
-        agent_identity: None,
+        ..Default::default()
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -555,10 +552,8 @@ pub async fn login_with_access_token(
     verified_agent_identity_record(access_token, &base_url).await?;
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::AgentIdentity),
-        openai_api_key: None,
-        tokens: None,
-        last_refresh: None,
         agent_identity: Some(access_token.to_string()),
+        ..Default::default()
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -950,10 +945,9 @@ impl AuthDotJson {
 
         Ok(Self {
             auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
-            openai_api_key: None,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
-            agent_identity: None,
+            ..Default::default()
         })
     }
 

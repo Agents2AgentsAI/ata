@@ -1311,6 +1311,7 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            ..Default::default()
         }
     }
 

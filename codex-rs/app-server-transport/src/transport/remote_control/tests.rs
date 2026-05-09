@@ -102,6 +102,7 @@ fn remote_control_auth_dot_json(account_id: Option<&str>) -> AuthDotJson {
         }),
         last_refresh: Some(chrono::Utc::now()),
         agent_identity: None,
+        ..Default::default()
     }
 }
 

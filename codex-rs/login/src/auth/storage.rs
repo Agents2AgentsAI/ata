@@ -28,9 +28,24 @@ use codex_keyring_store::KeyringStore;
 use codex_protocol::account::PlanType as AccountPlanType;
 use once_cell::sync::Lazy;
 
+/// Schema version for auth.json. Bumped by ATA additions (multi-provider
+/// credentials, agent-identity records). Optional on the wire — older files
+/// without `version` are treated as v1.
+pub const AUTH_JSON_VERSION: u32 = 2;
+
 /// Expected structure for $CODEX_HOME/auth.json.
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+///
+/// All fields are `Option`-shaped so `Default` is derivable. Existing call
+/// sites that previously enumerated every field can now use
+/// `..Default::default()` and survive future field additions without code
+/// changes.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct AuthDotJson {
+    /// Schema version for ATA-side migrations. Absent in upstream-written
+    /// files; ATA's provider-credential migrations write `Some(AUTH_JSON_VERSION)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_mode: Option<AuthMode>,
 
@@ -81,11 +96,11 @@ impl From<AgentIdentityJwtClaims> for AgentIdentityAuthRecord {
     }
 }
 
-pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
+pub fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
-pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
+pub fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
     let auth_file = get_auth_file(codex_home);
     match std::fs::remove_file(&auth_file) {
         Ok(()) => Ok(true),
@@ -94,25 +109,25 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
     }
 }
 
-pub(super) trait AuthStorageBackend: Debug + Send + Sync {
+pub trait AuthStorageBackend: Debug + Send + Sync {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
     fn delete(&self) -> std::io::Result<bool>;
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct FileAuthStorage {
+pub struct FileAuthStorage {
     codex_home: PathBuf,
 }
 
 impl FileAuthStorage {
-    pub(super) fn new(codex_home: PathBuf) -> Self {
+    pub fn new(codex_home: PathBuf) -> Self {
         Self { codex_home }
     }
 
     /// Attempt to read and parse the `auth.json` file in the given `CODEX_HOME` directory.
     /// Returns the full AuthDotJson structure.
-    pub(super) fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
+    pub fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
         let mut file = File::open(auth_file)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
@@ -333,7 +348,7 @@ impl AuthStorageBackend for EphemeralAuthStorage {
     }
 }
 
-pub(super) fn create_auth_storage(
+pub fn create_auth_storage(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
 ) -> Arc<dyn AuthStorageBackend> {
