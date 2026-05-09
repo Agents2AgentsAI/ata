@@ -1,9 +1,9 @@
-use crate::default_client::default_headers;
-use crate::default_client::get_codex_user_agent;
 use crate::tools::url_validation::UrlValidationError;
 use crate::tools::url_validation::UrlValidationOptions;
 use crate::tools::url_validation::ValidatedUrl;
 use crate::tools::url_validation::validate_parsed_url;
+use codex_login::default_client::default_headers;
+use codex_login::default_client::get_codex_user_agent;
 use codex_utils_file::FileMetadata;
 use codex_utils_file::MAX_FILE_SIZE;
 use codex_utils_file::analyze_file;
