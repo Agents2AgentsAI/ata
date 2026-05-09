@@ -3809,6 +3809,13 @@
             "gemini_generate"
           ],
           "type": "string"
+        },
+        {
+          "description": "GitHub Copilot inline completions at `https://api.github.com/copilot/inline`.",
+          "enum": [
+            "copilot_inline"
+          ],
+          "type": "string"
         }
       ]
     }

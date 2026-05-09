@@ -774,6 +774,11 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
+        // Copilot's per-request bearer-token resolution is handled by
+        // `client/copilot::stream_copilot_chat_completions`, which patches a
+        // clone of the provider info before constructing api_provider/api_auth.
+        // Keeping this path provider-agnostic preserves the v0.129.0
+        // SharedModelProvider abstraction.
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
         let api_auth = self.state.provider.api_auth().await?;

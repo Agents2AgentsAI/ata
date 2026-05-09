@@ -1103,6 +1103,12 @@ impl UnifiedExecProcessManager {
                 exit_signal_received |= cancellation_token.is_cancelled();
                 if exit_signal_received && output_closed.load(std::sync::atomic::Ordering::Acquire)
                 {
+                    // Final drain to catch any chunks pushed between our last
+                    // drain and the output_closed signal (race window).
+                    let mut guard = output_buffer.lock().await;
+                    for chunk in guard.drain_chunks() {
+                        collected.extend_from_slice(&chunk);
+                    }
                     break;
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());

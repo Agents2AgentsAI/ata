@@ -1391,6 +1391,12 @@ impl AuthManager {
                 .map(|failure| failure.error.clone())
         })
     }
+    // NOTE: `get_copilot_token` is intentionally NOT exposed on AuthManager.
+    // The Copilot OAuth helpers live in `codex-core::auth::copilot_oauth` and
+    // adding a method that calls them here would create a circular dep
+    // (codex-login -> codex-core -> codex-login). The bearer-token resolution
+    // path lives in `codex-core::client::copilot::stream_copilot_chat_completions`
+    // which has access to both `codex_home` and the OAuth helpers.
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
     /// For stale managed ChatGPT auth, first performs a guarded reload and then

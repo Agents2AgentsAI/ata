@@ -12,7 +12,7 @@ expression: terminal.backend()
      Sign in from another device with a one-time code
 
   3. Configure providers
-     Set up API keys for providers (OpenAI, Anthropic, Gemini)
+     Set up API keys for providers (OpenAI, Anthropic, Gemini, GitHub Copilot)
 
   4. Sign in with A2A account
      Sign in for shared keys and platform features

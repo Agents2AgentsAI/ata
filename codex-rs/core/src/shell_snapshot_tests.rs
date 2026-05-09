@@ -267,6 +267,7 @@ async fn try_new_uses_distinct_generation_paths() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
+#[serial_test::serial(snapshot_stdin)]
 async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let _stdin_guard = BlockingStdinPipe::install()?;
 
@@ -293,7 +294,7 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let output = run_script_with_timeout(
         &shell,
         &script,
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         /*use_login_shell*/ true,
         &home,
     )

@@ -36,5 +36,5 @@ jobs:
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
         with:
-          rust-version: 1.93.0
+          rust-version: "1.93.0"
           manifest-path: ./codex-rs/Cargo.toml
