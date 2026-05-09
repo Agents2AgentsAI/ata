@@ -126,6 +126,7 @@ use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 
+mod anthropic;
 mod provider_streaming;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -163,7 +164,7 @@ pub(crate) struct CompactConversationRequestSettings {
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
-struct ModelClientState {
+pub(super) struct ModelClientState {
     session_id: SessionId,
     thread_id: ThreadId,
     window_generation: AtomicU64,
@@ -233,6 +234,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
+    #[allow(dead_code)]
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
@@ -366,6 +368,13 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
+    }
+
+    /// Visible to client/* sub-modules so they can read provider info,
+    /// codex_home, and credential-store mode without the public surface
+    /// growing.
+    pub(super) fn state(&self) -> &Arc<ModelClientState> {
+        &self.state
     }
 
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
@@ -906,6 +915,12 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    /// Sub-modules in `client/*` use this to read provider info, codex_home,
+    /// and credential-store mode without exposing `ModelClient`'s state field.
+    pub(super) fn client(&self) -> &ModelClient {
+        &self.client
+    }
+
     pub(crate) fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -1576,8 +1591,11 @@ impl ModelClientSession {
                 )
                 .await
             }
-            WireApi::AnthropicMessages | WireApi::GeminiGenerate => Err(CodexErr::InvalidRequest(
-                "Anthropic and Gemini wire APIs are not supported in this build".to_string(),
+            WireApi::AnthropicMessages => {
+                anthropic::stream_anthropic_api(self, prompt, model_info, effort, summary).await
+            }
+            WireApi::GeminiGenerate => Err(CodexErr::InvalidRequest(
+                "Gemini wire API is not yet supported in this build".to_string(),
             )),
         }
     }
