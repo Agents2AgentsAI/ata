@@ -18,21 +18,21 @@
 [[entries]]
 name        = "DEFAULT_PERSONALITY_HEADER"
 category    = "system-prompts"
-file        = "core/src/models_manager/model_info.rs"
+file        = "models-manager/src/model_info.rs"
 pattern     = "DEFAULT_PERSONALITY_HEADER"
 description = "Base personality header injected into all model system prompts"
 
 [[entries]]
 name        = "LOCAL_FRIENDLY_TEMPLATE"
 category    = "system-prompts"
-file        = "core/src/models_manager/model_info.rs"
+file        = "models-manager/src/model_info.rs"
 pattern     = "LOCAL_FRIENDLY_TEMPLATE"
 description = "Friendly personality template for local models"
 
 [[entries]]
 name        = "LOCAL_PRAGMATIC_TEMPLATE"
 category    = "system-prompts"
-file        = "core/src/models_manager/model_info.rs"
+file        = "models-manager/src/model_info.rs"
 pattern     = "LOCAL_PRAGMATIC_TEMPLATE"
 description = "Pragmatic personality template for local models"
 
@@ -85,16 +85,24 @@ pattern     = "ATTACH_URL_FILES_TOOL"
 description = "Attach PDF files from URLs for reading and analysis"
 
 [[entries]]
-name        = "update_plan (PLAN_TOOL)"
+name        = "crop_figure (CROP_FIGURE_TOOL)"
 category    = "tool-descriptions"
-file        = "core/src/tools/handlers/plan.rs"
-pattern     = "PLAN_TOOL"
+file        = "core/src/tools/handlers/crop_figure.rs"
+pattern     = "CROP_FIGURE_TOOL"
+description = "Crop a region from a PDF page and store as a figure"
+
+[[entries]]
+name        = "update_plan (create_update_plan_tool)"
+category    = "tool-descriptions"
+file        = "core/src/tools/handlers/plan_spec.rs"
+pattern     = "create_update_plan_tool"
+type        = "function"
 description = "Record and update a structured task plan"
 
 [[entries]]
 name        = "shell (create_shell_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/handlers/shell_spec.rs"
 pattern     = "create_shell_tool"
 type        = "function"
 description = "Run commands in a bash/zsh shell"
@@ -102,7 +110,7 @@ description = "Run commands in a bash/zsh shell"
 [[entries]]
 name        = "shell_command (create_shell_command_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/handlers/shell_spec.rs"
 pattern     = "create_shell_command_tool"
 type        = "function"
 description = "Run commands via argv exec (no shell interpolation)"
@@ -110,7 +118,7 @@ description = "Run commands via argv exec (no shell interpolation)"
 [[entries]]
 name        = "exec_command (create_exec_command_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/handlers/shell_spec.rs"
 pattern     = "create_exec_command_tool"
 type        = "function"
 description = "Run commands in a PTY (exec/MCP mode)"
@@ -118,31 +126,39 @@ description = "Run commands in a PTY (exec/MCP mode)"
 [[entries]]
 name        = "write_stdin (create_write_stdin_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/handlers/shell_spec.rs"
 pattern     = "create_write_stdin_tool"
 type        = "function"
 description = "Send input to a running process session"
 
 [[entries]]
-name        = "spawn_agent (create_spawn_agent_tool)"
+name        = "spawn_agent v1 (create_spawn_agent_tool_v1)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
-pattern     = "create_spawn_agent_tool"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
+pattern     = "create_spawn_agent_tool_v1"
 type        = "function"
-description = "Launch a sub-agent for delegated work"
+description = "Launch a sub-agent for delegated work (v1)"
 
 [[entries]]
-name        = "send_input (create_send_input_tool)"
+name        = "spawn_agent v2 (create_spawn_agent_tool_v2)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
-pattern     = "create_send_input_tool"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
+pattern     = "create_spawn_agent_tool_v2"
+type        = "function"
+description = "Launch a sub-agent for delegated work (v2)"
+
+[[entries]]
+name        = "send_input v1 (create_send_input_tool_v1)"
+category    = "tool-descriptions"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
+pattern     = "create_send_input_tool_v1"
 type        = "function"
 description = "Send a message to a running agent"
 
 [[entries]]
 name        = "resume_agent (create_resume_agent_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
 pattern     = "create_resume_agent_tool"
 type        = "function"
 description = "Resume a suspended agent"
@@ -150,31 +166,31 @@ description = "Resume a suspended agent"
 [[entries]]
 name        = "wait (create_wait_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
+file        = "core/src/tools/code_mode/wait_spec.rs"
 pattern     = "create_wait_tool"
 type        = "function"
 description = "Block until agent(s) reach a final status"
 
 [[entries]]
-name        = "close_agent (create_close_agent_tool)"
+name        = "close_agent v1 (create_close_agent_tool_v1)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
-pattern     = "create_close_agent_tool"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
+pattern     = "create_close_agent_tool_v1"
 type        = "function"
-description = "Terminate a running agent"
+description = "Terminate a running agent (v1)"
 
 [[entries]]
-name        = "team_post (create_plus_tool)"
+name        = "close_agent v2 (create_close_agent_tool_v2)"
 category    = "tool-descriptions"
-file        = "core/src/tools/spec.rs"
-pattern     = "create_plus_tool"
+file        = "core/src/tools/handlers/multi_agents_spec.rs"
+pattern     = "create_close_agent_tool_v2"
 type        = "function"
-description = "Post a message to the agent coordination channel"
+description = "Terminate a running agent (v2)"
 
 [[entries]]
 name        = "request_user_input (request_user_input_tool_description)"
 category    = "tool-descriptions"
-file        = "core/src/tools/handlers/request_user_input.rs"
+file        = "core/src/tools/handlers/request_user_input_spec.rs"
 pattern     = "request_user_input_tool_description"
 type        = "function"
 description = "Ask the user short questions and wait for response"
@@ -246,7 +262,7 @@ description = "Fan out one agent per CSV row"
 [[entries]]
 name        = "apply_patch (freeform) (create_apply_patch_freeform_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/handlers/apply_patch.rs"
+file        = "core/src/tools/handlers/apply_patch_spec.rs"
 pattern     = "create_apply_patch_freeform_tool"
 type        = "function"
 description = "Apply a freeform unified diff patch to files"
@@ -254,7 +270,7 @@ description = "Apply a freeform unified diff patch to files"
 [[entries]]
 name        = "apply_patch (json) (create_apply_patch_json_tool)"
 category    = "tool-descriptions"
-file        = "core/src/tools/handlers/apply_patch.rs"
+file        = "core/src/tools/handlers/apply_patch_spec.rs"
 pattern     = "create_apply_patch_json_tool"
 type        = "function"
 description = "Apply a structured JSON patch to files"
@@ -264,26 +280,12 @@ description = "Apply a structured JSON patch to files"
 # ---------------------------------------------------------------------------
 
 [[entries]]
-name        = "forked agent start message (FORKED_SPAWN_AGENT_OUTPUT_MESSAGE)"
-category    = "agent-messages"
-file        = "core/src/agent/control.rs"
-pattern     = "FORKED_SPAWN_AGENT_OUTPUT_MESSAGE"
-description = "Message injected as assistant turn when a forked agent starts"
-
-[[entries]]
 name        = "csv worker prompt (build_worker_prompt)"
 category    = "agent-messages"
 file        = "core/src/tools/handlers/agent_jobs.rs"
 pattern     = "build_worker_prompt"
 type        = "function"
 description = "Initial user prompt sent to each CSV-worker sub-agent"
-
-[[entries]]
-name        = "realtime voice prompt (REALTIME_CONVERSATION_PROMPT)"
-category    = "agent-messages"
-file        = "tui/src/chatwidget/realtime.rs"
-pattern     = "REALTIME_CONVERSATION_PROMPT"
-description = "System prompt for realtime voice conversation mode"
 
 # ---------------------------------------------------------------------------
 # Context injection
@@ -298,22 +300,6 @@ type        = "function"
 description = "Instruction to add Co-Authored-By trailer to git commits"
 
 [[entries]]
-name        = "JS REPL instructions (render_js_repl_instructions)"
-category    = "context-injection"
-file        = "core/src/project_doc.rs"
-pattern     = "render_js_repl_instructions"
-type        = "function"
-description = "JavaScript REPL usage instructions injected when JS REPL is enabled"
-
-[[entries]]
-name        = "skills listing (render_skills_section)"
-category    = "context-injection"
-file        = "core/src/skills/render.rs"
-pattern     = "render_skills_section"
-type        = "function"
-description = "Skills section listing available skills with names and descriptions"
-
-[[entries]]
 name        = "apps listing (render_apps_section)"
 category    = "context-injection"
 file        = "core/src/apps/render.rs"
@@ -322,17 +308,9 @@ type        = "function"
 description = "Apps section listing available local app integrations"
 
 [[entries]]
-name        = "question asking guidance (asking_questions_guidance_message)"
+name        = "skills listing (render_available_skills_body)"
 category    = "context-injection"
-file        = "core/src/models_manager/collaboration_mode_presets.rs"
-pattern     = "asking_questions_guidance_message"
+file        = "core-skills/src/render.rs"
+pattern     = "render_available_skills_body"
 type        = "function"
-description = "Guidance on when/how the agent should ask clarifying questions"
-
-[[entries]]
-name        = "environment context XML (serialize_to_xml)"
-category    = "context-injection"
-file        = "core/src/environment_context.rs"
-pattern     = "serialize_to_xml"
-type        = "function"
-description = "Serializes cwd, platform, shell, date/time to XML injected every turn"
+description = "Skills section listing available skills with names and descriptions"
