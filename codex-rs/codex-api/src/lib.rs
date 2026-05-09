@@ -11,6 +11,7 @@ pub(crate) mod rate_limits;
 pub(crate) mod requests;
 pub(crate) mod sse;
 pub(crate) mod telemetry;
+pub mod tools;
 
 pub use crate::requests::headers::build_session_headers;
 pub use codex_client::RequestTelemetry;
