@@ -107,6 +107,7 @@ mod tests {
             openai_api_key: Some("sk-legacy".to_string()),
             tokens: None,
             last_refresh: None,
+            agent_identity: None,
             providers: HashMap::new(),
         };
 
@@ -137,6 +138,7 @@ mod tests {
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
+            agent_identity: None,
             providers,
         };
 
@@ -328,7 +330,13 @@ mod tests {
         std::fs::write(&auth_file, serde_json::to_string_pretty(&legacy_json)?)?;
 
         let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-        let loaded = storage.load()?.expect("should load auth");
+        // The storage backend itself preserves the on-disk schema; ATA's
+        // multi-provider migration is applied at the public entry points
+        // (e.g. `get_provider_api_key`). Mirror that here.
+        let loaded = storage
+            .load()?
+            .expect("should load auth")
+            .migrate_if_needed();
 
         assert_eq!(loaded.version, Some(AUTH_JSON_VERSION));
         assert_eq!(

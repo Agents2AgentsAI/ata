@@ -3,6 +3,7 @@ use std::path::Path;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
 
 use crate::auth::storage::AuthCredentialsStoreMode;
+use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::create_auth_storage;
 
 use super::env::read_api_key_from_env;
@@ -51,6 +52,7 @@ pub fn get_provider_api_key(
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     match storage.load() {
         Ok(Some(auth)) => auth
+            .migrate_if_needed()
             .get_provider_api_key(provider_id)
             .map(std::string::ToString::to_string),
         Ok(None) => None,
@@ -72,7 +74,9 @@ pub fn get_provider_oauth_credential(
 ) -> Option<ProviderOauthCredential> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     match storage.load() {
-        Ok(Some(auth)) => auth.get_provider_oauth_credential(provider_id),
+        Ok(Some(auth)) => auth
+            .migrate_if_needed()
+            .get_provider_oauth_credential(provider_id),
         Ok(None) => None,
         Err(err) => {
             tracing::warn!(
@@ -91,7 +95,7 @@ pub(crate) fn remove_provider(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let Some(mut auth) = storage.load()? else {
+    let Some(mut auth) = storage.load()?.map(AuthDotJson::migrate_if_needed) else {
         return Ok(false);
     };
 
@@ -112,7 +116,7 @@ pub fn clear_provider_oauth_credential(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let Some(mut auth) = storage.load()? else {
+    let Some(mut auth) = storage.load()?.map(AuthDotJson::migrate_if_needed) else {
         return Ok(false);
     };
 
@@ -134,7 +138,10 @@ fn set_provider_credential(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let mut auth_dot_json = storage.load()?.unwrap_or_default();
+    let mut auth_dot_json = storage
+        .load()?
+        .map(AuthDotJson::migrate_if_needed)
+        .unwrap_or_default();
     let is_api_credential = matches!(
         &credential,
         ProviderCredential::Api { .. } | ProviderCredential::ApiAndOauth { .. }
