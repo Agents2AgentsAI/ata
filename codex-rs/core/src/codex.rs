@@ -232,8 +232,6 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-#[cfg(feature = "ata-plus")]
-use crate::plus_context;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -1853,28 +1851,8 @@ impl Session {
                 (None, None)
             };
 
-        let plus: Box<dyn crate::plus_provider::PlusProvider> = {
-            #[cfg(feature = "ata-plus")]
-            {
-                if config.features.enabled(Feature::Coordination) {
-                    Box::new(
-                        plus_context::Handle::init(
-                            &config.codex_home,
-                            &session_configuration.cwd,
-                            &conversation_id.to_string(),
-                            config.coordination.as_ref(),
-                        )
-                        .await,
-                    )
-                } else {
-                    Box::new(crate::plus_provider::NoopPlusProvider)
-                }
-            }
-            #[cfg(not(feature = "ata-plus"))]
-            {
-                Box::new(crate::plus_provider::NoopPlusProvider)
-            }
-        };
+        let plus: Box<dyn crate::plus_provider::PlusProvider> =
+            Box::new(crate::plus_provider::NoopPlusProvider);
 
         let mut hook_shell_argv = default_shell.derive_exec_args("", false);
         let hook_shell_program = hook_shell_argv.remove(0);

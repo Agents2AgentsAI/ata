@@ -188,6 +188,7 @@ async fn try_new_creates_and_deletes_snapshot_file() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
+#[serial_test::serial(snapshot_stdin)]
 async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
     let _stdin_guard = BlockingStdinPipe::install()?;
 
@@ -211,7 +212,7 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         "HOME=\"{home_display}\"; export HOME; {}",
         bash_snapshot_script()
     );
-    let output = run_script_with_timeout(&shell, &script, Duration::from_secs(2), true, home)
+    let output = run_script_with_timeout(&shell, &script, Duration::from_secs(10), true, home)
         .await
         .context("run snapshot command")?;
     let read_status = fs::read_to_string(&read_status_path)

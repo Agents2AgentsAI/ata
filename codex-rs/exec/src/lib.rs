@@ -375,9 +375,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .build()
         .await?;
 
-    #[cfg(feature = "ata-plus")]
-    ata_plus::extend_config(&mut config);
-
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
         Ok(None) => {}

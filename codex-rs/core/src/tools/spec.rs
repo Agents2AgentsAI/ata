@@ -983,49 +983,6 @@ Examples of valid command strings:
     })
 }
 
-// @agent-facing
-#[cfg(feature = "ata-plus")]
-fn create_plus_tool() -> ToolSpec {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "message".to_string(),
-        JsonSchema::String {
-            description: Some("The message to post to the coordination channel.".to_string()),
-        },
-    );
-    properties.insert(
-        "message_type".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Category: intent, progress, conflict, or info (default: info).".to_string(),
-            ),
-        },
-    );
-    properties.insert(
-        "recipient".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Agent name or session ID of the recipient. Omit to broadcast to all agents."
-                    .to_string(),
-            ),
-        },
-    );
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "team_post".to_string(),
-        description: "Post a natural-language message to the agent coordination channel. Other agents working on the same repo will see it. Use to announce intent, flag conflicts, or share progress. Set recipient to direct a message to a single agent."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["message".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: None,
-    })
-}
-
 fn create_collab_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
@@ -2577,14 +2534,6 @@ pub(crate) fn build_specs_with_toolkits(
     );
 
     let mcp_handler = Arc::new(McpHandler);
-
-    #[cfg(feature = "ata-plus")]
-    if config.features.enabled(Feature::Coordination) {
-        use crate::tools::handlers::plus_tool::PlusToolHandler;
-        let handler = Arc::new(PlusToolHandler::new());
-        builder.push_spec(create_plus_tool());
-        builder.register_handler("team_post", handler);
-    }
 
     let mut suppressed_mcp_research_tool_names: BTreeSet<String> = BTreeSet::new();
 

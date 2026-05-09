@@ -169,9 +169,6 @@ enum Subcommand {
 
     /// Manage Zotero libraries, collections, items, and attachments.
     Zotero(ZoteroCli),
-
-    #[cfg(feature = "ata-plus")]
-    Plus(ata_plus::SubcommandCli),
 }
 
 #[derive(Debug, Parser)]
@@ -824,10 +821,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
         }
-        #[cfg(feature = "ata-plus")]
-        Some(Subcommand::Plus(cli)) => {
-            ata_plus::run_subcommand(cli).await?;
-        }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
                 // Respect root-level `-c` overrides plus top-level flags like `--profile`.
@@ -930,8 +923,6 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     println!("Disabled feature `{feature}` in config.toml.");
     Ok(())
 }
-
-// run_team_command and coordination_agent_name have been moved to ata_plus::team_command
 
 fn maybe_print_under_development_feature_warning(
     codex_home: &std::path::Path,
