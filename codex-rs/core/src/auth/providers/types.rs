@@ -10,6 +10,7 @@ pub use crate::auth::storage::ProviderOauthCredential;
 pub const PROVIDER_OPENAI: &str = "openai";
 pub const PROVIDER_ANTHROPIC: &str = "anthropic";
 pub const PROVIDER_GEMINI: &str = "gemini";
+pub const PROVIDER_COPILOT: &str = "copilot";
 pub const ANTHROPIC_API_KEY_ENV_VAR: &str = "ANTHROPIC_API_KEY";
 pub const GOOGLE_API_KEY_ENV_VAR: &str = "GOOGLE_API_KEY";
 
