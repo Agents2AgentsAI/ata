@@ -2465,16 +2465,13 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
- "codex-data-tools",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
  "codex-feedback",
- "codex-git",
  "codex-git-utils",
  "codex-hooks",
  "codex-login",
- "codex-lsp-client",
  "codex-mcp",
  "codex-memories-read",
  "codex-model-provider",
@@ -2497,11 +2494,11 @@ dependencies = [
  "codex-test-binary-support",
  "codex-thread-store",
  "codex-tools",
- "codex-treesitter",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
  "codex-utils-file",
+ "codex-utils-git",
  "codex-utils-home-dir",
  "codex-utils-image",
  "codex-utils-output-truncation",
@@ -2927,22 +2924,6 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "serde",
-]
-
-[[package]]
-name = "codex-git"
-version = "0.129.0"
-dependencies = [
- "assert_matches",
- "once_cell",
- "pretty_assertions",
- "regex",
- "schemars 0.8.22",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
- "ts-rs",
- "walkdir",
 ]
 
 [[package]]
@@ -4068,6 +4049,22 @@ dependencies = [
 [[package]]
 name = "codex-utils-fuzzy-match"
 version = "0.129.0"
+
+[[package]]
+name = "codex-utils-git"
+version = "0.129.0"
+dependencies = [
+ "assert_matches",
+ "once_cell",
+ "pretty_assertions",
+ "regex",
+ "schemars 0.8.22",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+ "ts-rs",
+ "walkdir",
+]
 
 [[package]]
 name = "codex-utils-home-dir"
