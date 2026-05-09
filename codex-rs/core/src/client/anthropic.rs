@@ -26,11 +26,12 @@ use super::provider_streaming::build_reasoning_value;
 use super::provider_streaming::map_api_err_to_codex_err;
 use super::provider_streaming::serialize_input_items;
 use super::provider_streaming::spawn_provider_sse_stream;
+use crate::auth::ANTHROPIC_API_KEY_ENV_VAR;
+use crate::auth::ModelProviderApiKeyExt;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseStream;
 
 const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
-const ANTHROPIC_API_KEY_ENV_VAR: &str = "ANTHROPIC_API_KEY";
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Streams a turn via the Anthropic Messages API.
@@ -41,20 +42,16 @@ pub(super) async fn stream_anthropic_api(
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Result<ResponseStream> {
-    let provider_info = session.client().state().provider.info().clone();
+    let state = session.client().state();
+    let provider_info = state.provider.info().clone();
 
-    // API key resolution: env var first, then provider's configured env_key, then provider api_key.
-    let api_key = std::env::var(ANTHROPIC_API_KEY_ENV_VAR)
-        .ok()
-        .or_else(|| {
-            provider_info
-                .env_key
-                .as_deref()
-                .and_then(|key| std::env::var(key).ok())
-        })
+    // API key resolution: env var first, then provider's configured env_key, then per-provider
+    // stored credential (file or keyring) keyed by provider id.
+    let api_key = provider_info
+        .api_key_with_auth(&state.codex_home, state.cli_auth_credentials_store_mode)?
         .ok_or_else(|| {
             CodexErr::Api(format!(
-                "Missing {ANTHROPIC_API_KEY_ENV_VAR} env var (and no fallback provider key)"
+                "Missing {ANTHROPIC_API_KEY_ENV_VAR} env var (and no stored Anthropic credential found)"
             ))
         })?;
 
