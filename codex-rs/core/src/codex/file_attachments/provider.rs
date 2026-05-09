@@ -8,6 +8,7 @@ pub(crate) fn file_capabilities_for_provider(
         WireApi::Responses => "openai",
         WireApi::AnthropicMessages => "anthropic",
         WireApi::GeminiGenerate => "gemini",
+        WireApi::CopilotInline => "openai",
     };
     (
         provider_id.to_string(),

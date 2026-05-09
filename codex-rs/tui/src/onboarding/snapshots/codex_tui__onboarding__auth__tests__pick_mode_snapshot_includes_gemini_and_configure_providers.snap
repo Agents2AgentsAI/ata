@@ -15,6 +15,6 @@ expression: terminal.backend()
      Use your Google account with Gemini Code Assist
 
   4. Configure providers
-     Set up API keys for providers (OpenAI, Anthropic, Gemini)
+     Set up API keys for providers (OpenAI, Anthropic, Gemini, GitHub Copilot)
 
   Press Enter to continue

@@ -576,11 +576,24 @@ impl ModelClient {
             Some(manager) => manager.auth().await,
             None => None,
         };
-        let api_provider = self
-            .state
-            .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
-        let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
+        let resolved_provider = if matches!(self.state.provider.wire_api, WireApi::CopilotInline) {
+            let manager = self
+                .state
+                .auth_manager
+                .as_ref()
+                .ok_or_else(|| crate::error::CodexErr::Api(
+                    "GitHub Copilot requires an auth manager. Run `ata login` and choose GitHub Copilot.".into(),
+                ))?;
+            let copilot_token = manager.get_copilot_token().await?;
+            let mut provider = self.state.provider.clone();
+            provider.experimental_bearer_token = Some(copilot_token);
+            provider
+        } else {
+            self.state.provider.clone()
+        };
+        let api_provider =
+            resolved_provider.to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+        let api_auth = auth_provider_from_auth(auth.clone(), &resolved_provider)?;
         Ok(CurrentClientSetup {
             auth,
             api_provider,
@@ -1115,6 +1128,61 @@ impl ModelClientSession {
         }
     }
 
+    /// Streams a turn via the Chat Completions API. Used today only by the
+    /// GitHub Copilot provider, which does not accept Responses-API requests.
+    /// The streamed Chat Completions deltas are translated back to
+    /// `ResponseEvent`s by the SSE parser, so the rest of Ata sees the same
+    /// event shape it expects from the Responses API.
+    async fn stream_copilot_chat_completions(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+    ) -> Result<ResponseStream> {
+        let client_setup = self.client.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+
+        let adapter = codex_api::CopilotAdapter::new();
+        let instructions = prompt.base_instructions.text.clone();
+        let input_items = prompt.get_formatted_input();
+        let input_value = serde_json::to_value(&input_items).map_err(|e| {
+            crate::error::CodexErr::Api(format!(
+                "failed to serialize prompt input for Copilot: {e}"
+            ))
+        })?;
+        let input_array = input_value.as_array().cloned().unwrap_or_default();
+        let tools = create_tools_json_for_responses_api(&prompt.tools)?;
+
+        let options = codex_api::RequestOptions {
+            parallel_tool_calls: prompt.parallel_tool_calls,
+            ..Default::default()
+        };
+        use codex_api::ProviderAdapter;
+        let body = adapter
+            .build_request_body(
+                &model_info.slug,
+                &instructions,
+                &input_array,
+                &tools,
+                &options,
+            )
+            .map_err(map_api_error)?;
+        let extra_headers = adapter.extra_headers();
+
+        let client = codex_api::ChatCompletionsClient::new(
+            transport,
+            client_setup.api_provider,
+            client_setup.api_auth,
+        );
+
+        let stream = client
+            .stream(body, extra_headers)
+            .await
+            .map_err(map_api_error)?;
+        let (stream, _) = map_response_stream(stream, session_telemetry.clone());
+        Ok(stream)
+    }
+
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
@@ -1371,6 +1439,10 @@ impl ModelClientSession {
             }
             WireApi::GeminiGenerate => {
                 gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
+            }
+            WireApi::CopilotInline => {
+                self.stream_copilot_chat_completions(prompt, model_info, session_telemetry)
+                    .await
             }
         }
     }

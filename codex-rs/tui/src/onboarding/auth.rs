@@ -4,8 +4,11 @@ use codex_core::AuthManager;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::PROVIDER_OPENAI;
+use codex_core::auth::complete_copilot_login;
 use codex_core::auth::login_with_provider_api_key;
+use codex_core::auth::poll_copilot_access_token;
 use codex_core::auth::read_openai_api_key_from_env;
+use codex_core::auth::start_copilot_device_flow;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::edit::default_model_for_provider;
 use codex_core::config::types::AtaAccountConfig;
@@ -109,6 +112,7 @@ pub(crate) enum SignInState {
     ProviderOauthContinueInBrowser(ProviderOauthContinueInBrowserState),
     ProviderOauthSuccessMessage(ProviderOption),
     ProviderConfigured,
+    CopilotDeviceCode(CopilotDeviceCodeUiState),
     AtaEmailInput(AtaEmailInputState),
     AtaSendingOtp { email: String },
     AtaOtpInput(AtaOtpInputState),
@@ -163,6 +167,13 @@ pub(crate) struct ProviderOauthContinueInBrowserState {
     provider: ProviderOption,
     auth_url: String,
     shutdown_flag: Option<ShutdownHandle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CopilotDeviceCodeUiState {
+    pub(crate) user_code: String,
+    pub(crate) verification_uri: String,
+    pub(crate) error: Option<String>,
 }
 
 #[derive(Clone)]
@@ -316,6 +327,11 @@ impl KeyboardHandler for AuthModeWidget {
                         self.request_frame.schedule_frame();
                     }
                     SignInState::ProviderOauthContinueInBrowser(_) => {
+                        *sign_in_state = SignInState::PickProvider;
+                        drop(sign_in_state);
+                        self.request_frame.schedule_frame();
+                    }
+                    SignInState::CopilotDeviceCode(_) => {
                         *sign_in_state = SignInState::PickProvider;
                         drop(sign_in_state);
                         self.request_frame.schedule_frame();
@@ -535,7 +551,7 @@ impl AuthModeWidget {
                         idx,
                         option,
                         "Configure providers",
-                        "Set up API keys for providers (OpenAI, Anthropic, Gemini)",
+                        "Set up API keys for providers (OpenAI, Anthropic, Gemini, GitHub Copilot)",
                     ));
                 }
                 SignInOption::AtaAccount => {
@@ -1211,6 +1227,146 @@ impl AuthModeWidget {
         }
     }
 
+    pub(super) fn start_copilot_oauth_login(&mut self) {
+        self.error = None;
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        let auth_manager = self.auth_manager.clone();
+        let codex_home = self.codex_home.clone();
+        let store_mode = self.cli_auth_credentials_store_mode;
+
+        tokio::spawn(async move {
+            let device = match start_copilot_device_flow().await {
+                Ok(device) => device,
+                Err(err) => {
+                    let mut guard = sign_in_state.write().unwrap();
+                    *guard = SignInState::CopilotDeviceCode(CopilotDeviceCodeUiState {
+                        user_code: String::new(),
+                        verification_uri: String::new(),
+                        error: Some(format!("Failed to start GitHub login: {err}")),
+                    });
+                    drop(guard);
+                    request_frame.schedule_frame();
+                    return;
+                }
+            };
+
+            {
+                let mut guard = sign_in_state.write().unwrap();
+                *guard = SignInState::CopilotDeviceCode(CopilotDeviceCodeUiState {
+                    user_code: device.user_code.clone(),
+                    verification_uri: device.verification_uri.clone(),
+                    error: None,
+                });
+            }
+            request_frame.schedule_frame();
+
+            let device_for_poll = device.clone();
+            let oauth_token = match poll_copilot_access_token(&device_for_poll).await {
+                Ok(token) => token,
+                Err(err) => {
+                    let mut guard = sign_in_state.write().unwrap();
+                    if matches!(&*guard, SignInState::CopilotDeviceCode(_)) {
+                        *guard = SignInState::CopilotDeviceCode(CopilotDeviceCodeUiState {
+                            user_code: device.user_code,
+                            verification_uri: device.verification_uri,
+                            error: Some(format!("Authorization failed: {err}")),
+                        });
+                        drop(guard);
+                        request_frame.schedule_frame();
+                    }
+                    return;
+                }
+            };
+
+            if let Err(err) = complete_copilot_login(&codex_home, store_mode, oauth_token).await {
+                let mut guard = sign_in_state.write().unwrap();
+                if matches!(&*guard, SignInState::CopilotDeviceCode(_)) {
+                    *guard = SignInState::CopilotDeviceCode(CopilotDeviceCodeUiState {
+                        user_code: device.user_code,
+                        verification_uri: device.verification_uri,
+                        error: Some(format!("Token exchange failed: {err}")),
+                    });
+                    drop(guard);
+                    request_frame.schedule_frame();
+                }
+                return;
+            }
+
+            auth_manager.reload();
+            let provider_id = ProviderOption::Copilot.provider_id();
+            let default_model = default_model_for_provider(provider_id);
+            if let Err(err) = ConfigEditsBuilder::new(&codex_home)
+                .set_model(default_model, None, Some(provider_id.to_string()))
+                .apply_blocking()
+            {
+                tracing::error!("failed to set default model for copilot: {err}");
+            }
+
+            let mut guard = sign_in_state.write().unwrap();
+            *guard = SignInState::ProviderOauthSuccessMessage(ProviderOption::Copilot);
+            drop(guard);
+            request_frame.schedule_frame();
+        });
+
+        let mut guard = self.sign_in_state.write().unwrap();
+        *guard = SignInState::CopilotDeviceCode(CopilotDeviceCodeUiState {
+            user_code: String::new(),
+            verification_uri: String::new(),
+            error: None,
+        });
+        drop(guard);
+        self.request_frame.schedule_frame();
+    }
+
+    fn render_copilot_device_code(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &CopilotDeviceCodeUiState,
+    ) {
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec!["> ".into(), "Sign in with GitHub Copilot".bold()]),
+            "".into(),
+        ];
+
+        if let Some(err) = &state.error {
+            lines.push(err.as_str().red().into());
+            lines.push("".into());
+            lines.push("  Press Esc to go back".dim().into());
+        } else if state.user_code.is_empty() {
+            lines.extend(
+                shimmer_spans("Contacting GitHub...")
+                    .into_iter()
+                    .map(Line::from),
+            );
+        } else {
+            lines.push("  1. Open this URL in your browser:".into());
+            lines.push("".into());
+            lines.push(state.verification_uri.as_str().cyan().underlined().into());
+            lines.push("".into());
+            lines.push("  2. Enter this code:".into());
+            lines.push("".into());
+            lines.push(format!("     {}", state.user_code).bold().into());
+            lines.push("".into());
+            lines.extend(
+                shimmer_spans("Waiting for authorization...")
+                    .into_iter()
+                    .map(Line::from),
+            );
+            lines.push("".into());
+            lines.push("  Press Esc to cancel".dim().into());
+        }
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+
+        if !state.verification_uri.is_empty() {
+            mark_url_hyperlink(buf, area, &state.verification_uri);
+        }
+    }
+
     fn start_ata_email_login(&mut self) {
         self.error = None;
         *self.sign_in_state.write().unwrap() = SignInState::AtaEmailInput(AtaEmailInputState {
@@ -1487,6 +1643,7 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ProviderList
             | SignInState::ProviderOauthContinueInBrowser(_)
             | SignInState::ProviderOauthSuccessMessage(_)
+            | SignInState::CopilotDeviceCode(_)
             | SignInState::AtaEmailInput(_)
             | SignInState::AtaSendingOtp { .. }
             | SignInState::AtaOtpInput(_)
@@ -1512,6 +1669,9 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ChatGptDeviceCode(state) => {
                 headless_chatgpt_login::render_device_code_login(self, area, buf, state);
+            }
+            SignInState::CopilotDeviceCode(state) => {
+                self.render_copilot_device_code(area, buf, state);
             }
             SignInState::ChatGptSuccessMessage => {
                 self.render_chatgpt_success_message(area, buf);

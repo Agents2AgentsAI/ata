@@ -145,10 +145,6 @@ fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_system_to
                 SkillScope::System,
                 user_folder.join("skills").join(".system-adapt-environment")
             ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-remote-exec")
-            ),
             (SkillScope::Admin, system_folder.join("skills")),
         ]
     );
@@ -219,10 +215,6 @@ fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyhow::Re
             (
                 SkillScope::System,
                 user_folder.join("skills").join(".system-adapt-environment")
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-remote-exec")
             ),
         ]
     );
@@ -2057,7 +2049,6 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     .collect();
     let mut expected = vec![
         SkillScope::User,
-        SkillScope::System,
         SkillScope::System,
         SkillScope::System,
         SkillScope::System,

@@ -44,6 +44,8 @@ pub enum WireApi {
     AnthropicMessages,
     /// Google Gemini GenerateContent API.
     GeminiGenerate,
+    /// GitHub Copilot inline completions at `https://api.github.com/copilot/inline`.
+    CopilotInline,
 }
 
 impl fmt::Display for WireApi {
@@ -52,6 +54,7 @@ impl fmt::Display for WireApi {
             Self::Responses => "responses",
             Self::AnthropicMessages => "anthropic_messages",
             Self::GeminiGenerate => "gemini_generate",
+            Self::CopilotInline => "copilot_inline",
         };
         f.write_str(value)
     }
@@ -67,10 +70,16 @@ impl<'de> Deserialize<'de> for WireApi {
             "responses" => Ok(Self::Responses),
             "anthropic_messages" => Ok(Self::AnthropicMessages),
             "gemini_generate" => Ok(Self::GeminiGenerate),
+            "copilot_inline" => Ok(Self::CopilotInline),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(
                 &value,
-                &["responses", "anthropic_messages", "gemini_generate"],
+                &[
+                    "responses",
+                    "anthropic_messages",
+                    "gemini_generate",
+                    "copilot_inline",
+                ],
             )),
         }
     }
@@ -255,6 +264,7 @@ impl ModelProviderInfo {
             "openai" => Some(crate::auth::PROVIDER_OPENAI),
             "anthropic" => Some(crate::auth::PROVIDER_ANTHROPIC),
             "google gemini" | "gemini" => Some(crate::auth::PROVIDER_GEMINI),
+            "github copilot" | "copilot" => Some(crate::auth::PROVIDER_COPILOT),
             _ => None,
         }
     }
@@ -314,6 +324,28 @@ impl ModelProviderInfo {
             stream_idle_timeout_ms: None,
             requires_openai_auth: true,
             supports_websockets: true,
+        }
+    }
+
+    /// Creates the built-in GitHub Copilot provider configuration.
+    pub fn create_copilot_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "GitHub Copilot".into(),
+            base_url: Some("https://api.githubcopilot.com".into()),
+            env_key: None,
+            env_key_instructions: Some(
+                "Sign in with GitHub Copilot from the login screen to authenticate.".into(),
+            ),
+            experimental_bearer_token: None,
+            wire_api: WireApi::CopilotInline,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
         }
     }
 
@@ -386,6 +418,7 @@ pub fn built_in_model_providers(
         (OPENAI_PROVIDER_ID, openai_provider),
         ("anthropic", P::create_anthropic_provider()),
         ("gemini", P::create_gemini_provider()),
+        ("copilot", P::create_copilot_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

@@ -20,8 +20,6 @@ mod mcp;
 mod mcp_resource;
 pub(crate) mod multi_agents;
 mod plan;
-#[cfg(feature = "ata-plus")]
-pub(crate) mod plus_tool;
 mod read_file;
 mod request_permissions;
 mod request_user_input;

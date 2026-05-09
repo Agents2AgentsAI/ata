@@ -1,3 +1,4 @@
+mod copilot_oauth;
 mod gemini_oauth;
 mod gemini_revoke;
 mod providers;
@@ -24,6 +25,18 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+pub use crate::auth::copilot_oauth::COPILOT_EDITOR_PLUGIN_VERSION;
+pub use crate::auth::copilot_oauth::COPILOT_EDITOR_VERSION;
+pub use crate::auth::copilot_oauth::COPILOT_INTEGRATION_ID;
+pub use crate::auth::copilot_oauth::COPILOT_OAUTH_CLIENT_ID;
+pub use crate::auth::copilot_oauth::COPILOT_USER_AGENT;
+pub use crate::auth::copilot_oauth::DeviceCodeResponse as CopilotDeviceCodeResponse;
+pub use crate::auth::copilot_oauth::complete_login as complete_copilot_login;
+pub use crate::auth::copilot_oauth::get_or_refresh_copilot_token;
+pub use crate::auth::copilot_oauth::logout as copilot_logout;
+pub use crate::auth::copilot_oauth::poll_for_access_token as poll_copilot_access_token;
+pub use crate::auth::copilot_oauth::save_credentials as save_copilot_credentials;
+pub use crate::auth::copilot_oauth::start_device_flow as start_copilot_device_flow;
 pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_CLIENT_ID;
 pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_CLIENT_SECRET;
 pub use crate::auth::gemini_oauth::DEFAULT_GEMINI_OAUTH_TOKEN_URL;
@@ -38,6 +51,7 @@ pub use crate::auth::providers::ANTHROPIC_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GOOGLE_API_KEY_ENV_VAR;
 pub use crate::auth::providers::GeminiAuthSource;
 pub use crate::auth::providers::PROVIDER_ANTHROPIC;
+pub use crate::auth::providers::PROVIDER_COPILOT;
 pub use crate::auth::providers::PROVIDER_GEMINI;
 pub use crate::auth::providers::PROVIDER_OPENAI;
 pub use crate::auth::providers::ProviderAuthMethod;
@@ -1117,6 +1131,16 @@ impl AuthManager {
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
+    }
+
+    /// Resolve a fresh Copilot bearer token, refreshing from the long-lived
+    /// GitHub OAuth token if the previous Copilot token has expired.
+    pub async fn get_copilot_token(&self) -> crate::error::Result<String> {
+        crate::auth::copilot_oauth::get_or_refresh_copilot_token(
+            &self.codex_home,
+            self.auth_credentials_store_mode,
+        )
+        .await
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
