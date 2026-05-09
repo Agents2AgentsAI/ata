@@ -1406,6 +1406,21 @@ pub enum EventMsg {
 
     PlanUpdate(UpdatePlanArgs),
 
+    /// Agent presented a long document in sectioned reading mode.
+    PresentDocument(crate::document_reader::PresentDocumentEvent),
+
+    /// Agent updated a section of a document currently in reading mode.
+    UpdateDocumentSection(crate::document_reader::UpdateDocumentSectionEvent),
+
+    /// Agent appended content to a section of a document in reading mode.
+    AppendDocumentSection(crate::document_reader::AppendDocumentSectionEvent),
+
+    /// Agent added a new section to a document in reading mode.
+    AddDocumentSection(crate::document_reader::AddDocumentSectionEvent),
+
+    /// Agent patched (find-and-replace) a section of a document in reading mode.
+    PatchDocumentSection(crate::document_reader::PatchDocumentSectionEvent),
+
     TurnAborted(TurnAbortedEvent),
 
     /// Notification that the agent is shutting down.

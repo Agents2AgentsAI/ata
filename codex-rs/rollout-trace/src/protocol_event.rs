@@ -276,7 +276,12 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
         | EventMsg::ReasoningContentDelta(_)
         | EventMsg::ReasoningRawContentDelta(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => None,
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::PresentDocument(_)
+        | EventMsg::UpdateDocumentSection(_)
+        | EventMsg::AppendDocumentSection(_)
+        | EventMsg::AddDocumentSection(_)
+        | EventMsg::PatchDocumentSection(_) => None,
     }
 }
 
@@ -355,7 +360,12 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => None,
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::PresentDocument(_)
+        | EventMsg::UpdateDocumentSection(_)
+        | EventMsg::AppendDocumentSection(_)
+        | EventMsg::AddDocumentSection(_)
+        | EventMsg::PatchDocumentSection(_) => None,
     }
 }
 
