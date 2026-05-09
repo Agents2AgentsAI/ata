@@ -220,6 +220,25 @@ async fn find_cached_pdf(codex_home: &std::path::Path, pdf_url: &str) -> Result<
     ))
 }
 
+/// Interpret `pdf_reference` as a path for `FileReferenceCache::lookup_source_path`.
+/// Accepts `file://` URLs and absolute / multi-component relative paths. Returns
+/// `None` for bare URL-like strings (http/https/etc.) so the caller surfaces the
+/// original cache-miss error.
+fn pdf_reference_path(pdf_reference: &str) -> Option<PathBuf> {
+    if let Ok(url) = url::Url::parse(pdf_reference)
+        && url.scheme() == "file"
+    {
+        return url.to_file_path().ok();
+    }
+
+    let path = PathBuf::from(pdf_reference);
+    if path.is_absolute() || path.components().count() > 1 {
+        return Some(path);
+    }
+
+    None
+}
+
 /// Compute a short hash of the PDF URL for use as a directory name.
 fn pdf_url_hash(pdf_url: &str) -> String {
     let mut hasher = Sha256::new();
@@ -256,7 +275,12 @@ impl ToolHandler for CropFigureHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { turn, payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -297,9 +321,23 @@ impl ToolHandler for CropFigureHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
 
-        let pdf_path = find_cached_pdf(&codex_home, &args.pdf_url)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        // Resolver fallback chain:
+        //   (a) URL-cache lookup via attach_url_files cache directory.
+        //   (b) On miss, consult the per-session `file_reference_cache` so
+        //       crop_figure can still locate a PDF that the agent attached as
+        //       a path (e.g. uploaded LocalFile) instead of via attach_url_files.
+        let pdf_path = match find_cached_pdf(&codex_home, &args.pdf_url).await {
+            Ok(path) => path,
+            Err(cache_err) => {
+                let Some(reference_path) = pdf_reference_path(&args.pdf_url) else {
+                    return Err(FunctionCallError::RespondToModel(cache_err));
+                };
+                let cache = session.services.file_reference_cache.lock().await;
+                cache
+                    .lookup_source_path(&reference_path)
+                    .ok_or(FunctionCallError::RespondToModel(cache_err))?
+            }
+        };
 
         // 2. Render the page and crop the region (blocking work on spawn_blocking).
         let page_0indexed = args.page - 1;
