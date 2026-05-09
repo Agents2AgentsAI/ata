@@ -7,6 +7,8 @@ pub mod file_support;
 pub(crate) mod files;
 pub(crate) mod provider;
 pub mod provider_adapter;
+pub mod provider_factory;
+pub mod providers;
 pub(crate) mod rate_limits;
 pub(crate) mod requests;
 pub(crate) mod sse;
