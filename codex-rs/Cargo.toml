@@ -516,6 +516,8 @@ ignored = [
     # ATA crates kept available for follow-up PRs that re-enable disabled features:
     "codex-workspace",
     "hound",
+    "pdfium-render",
+    "qrcode",
 ]
 
 [profile.dev]
