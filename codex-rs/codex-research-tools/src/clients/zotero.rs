@@ -1,4 +1,5 @@
 use chrono::Utc;
+use md5::Digest;
 use reqwest::Method;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -123,6 +124,36 @@ pub(crate) struct ZoteroCollectionItemsRequest<'a> {
     pub item_type: Option<&'a str>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ZoteroFileUploadRequest<'a> {
+    pub item_key: &'a str,
+    pub filename: &'a str,
+    pub content_type: &'a str,
+    pub file_bytes: bytes::Bytes,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZoteroFileUploadAuthorizationRequest<'a> {
+    file_endpoint: &'a str,
+    filename: &'a str,
+    content_type: &'a str,
+    filesize: usize,
+    mtime_ms: &'a str,
+    md5_hex: &'a str,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ZoteroFileUploadAuthorization {
+    Exists,
+    Upload {
+        url: String,
+        content_type: String,
+        prefix: String,
+        suffix: String,
+        upload_key: String,
+    },
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ZoteroLibraryAnnotationsRequest {
     pub offset: u32,
@@ -192,11 +223,9 @@ pub(crate) async fn search_items(
     }
 
     if let Some(sort) = request.sort {
+        // Preserve server defaults unless the caller requested a specific sort.
+        // Some Zotero API deployments reject sort=relevance for keyword search.
         url.push_str(&format!("&sort={}", urlencoding::encode(sort)));
-    } else if request.query.is_some() && config.api_key.is_some_and(|key| !key.trim().is_empty()) {
-        // The remote Zotero API supports sort=relevance for keyword
-        // searches, but the local Zotero API rejects it with 400.
-        url.push_str("&sort=relevance");
     }
 
     if let Some(direction) = request.direction {
@@ -703,6 +732,74 @@ pub(crate) async fn create_item(
     Ok(record)
 }
 
+pub(crate) async fn download_attachment_url(http: &HttpClient, url: &str) -> Result<bytes::Bytes> {
+    http.execute_bytes(ResearchApi::Zotero, || http.client().get(url))
+        .await
+}
+
+pub(crate) async fn upload_attachment_file(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    scope: &ZoteroLibraryScope,
+    request: &ZoteroFileUploadRequest<'_>,
+) -> Result<()> {
+    let md5_hex = format!("{:x}", md5::Md5::digest(request.file_bytes.as_ref()));
+    let mtime_ms = Utc::now().timestamp_millis().to_string();
+    let file_endpoint = format!(
+        "{root}/items/{item_key}/file",
+        root = scope.root_url(config.base_url),
+        item_key = urlencoding::encode(request.item_key),
+    );
+
+    let authorization = authorize_file_upload(
+        http,
+        config,
+        ZoteroFileUploadAuthorizationRequest {
+            file_endpoint: &file_endpoint,
+            filename: request.filename,
+            content_type: request.content_type,
+            filesize: request.file_bytes.len(),
+            mtime_ms: &mtime_ms,
+            md5_hex: &md5_hex,
+        },
+    )
+    .await?;
+
+    let ZoteroFileUploadAuthorization::Upload {
+        url,
+        content_type,
+        prefix,
+        suffix,
+        upload_key,
+    } = authorization
+    else {
+        return Ok(());
+    };
+
+    let mut body = Vec::with_capacity(prefix.len() + request.file_bytes.len() + suffix.len());
+    body.extend_from_slice(prefix.as_bytes());
+    body.extend_from_slice(request.file_bytes.as_ref());
+    body.extend_from_slice(suffix.as_bytes());
+    let body = bytes::Bytes::from(body);
+
+    http.execute_response(ResearchApi::Zotero, || {
+        http.client()
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, content_type.clone())
+            .body(body.clone())
+    })
+    .await?;
+
+    let params = [("upload", upload_key)];
+    http.execute_response(ResearchApi::Zotero, || {
+        zotero_request_with_method(http, config, Method::POST, &file_endpoint)
+            .header("If-None-Match", "*")
+            .form(&params)
+    })
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn update_item_data(
     http: &HttpClient,
     config: ZoteroConfig<'_>,
@@ -728,6 +825,67 @@ pub(crate) async fn update_item_data(
         .get("Last-Modified-Version")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok()))
+}
+
+async fn authorize_file_upload(
+    http: &HttpClient,
+    config: ZoteroConfig<'_>,
+    request: ZoteroFileUploadAuthorizationRequest<'_>,
+) -> Result<ZoteroFileUploadAuthorization> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum UploadAuthorizationResponse {
+        Exists {
+            exists: u8,
+        },
+        Upload {
+            url: String,
+            #[serde(rename = "contentType")]
+            content_type: String,
+            prefix: String,
+            suffix: String,
+            #[serde(rename = "uploadKey")]
+            upload_key: String,
+        },
+    }
+
+    let params = [
+        ("md5", request.md5_hex.to_string()),
+        ("filename", request.filename.to_string()),
+        ("filesize", request.filesize.to_string()),
+        ("mtime", request.mtime_ms.to_string()),
+        ("contentType", request.content_type.to_string()),
+    ];
+    let response: UploadAuthorizationResponse = http
+        .execute_json(ResearchApi::Zotero, || {
+            zotero_request_with_method(http, config, Method::POST, request.file_endpoint)
+                .header("If-None-Match", "*")
+                .form(&params)
+        })
+        .await?;
+
+    Ok(match response {
+        UploadAuthorizationResponse::Exists { exists: 1 } => ZoteroFileUploadAuthorization::Exists,
+        UploadAuthorizationResponse::Upload {
+            url,
+            content_type,
+            prefix,
+            suffix,
+            upload_key,
+        } => ZoteroFileUploadAuthorization::Upload {
+            url,
+            content_type,
+            prefix,
+            suffix,
+            upload_key,
+        },
+        UploadAuthorizationResponse::Exists { exists } => {
+            return Err(ResearchError::Parse {
+                api: ResearchApi::Zotero,
+                message: format!("unexpected upload authorization exists={exists}"),
+            });
+        }
+    })
 }
 
 fn zotero_request(
@@ -782,14 +940,33 @@ where
         .execute_response(ResearchApi::Zotero, || zotero_request(http, config, url))
         .await?;
     let total_available = parse_total_results_header(&response);
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("<missing>")
+        .to_string();
+    let bytes = response.bytes().await.map_err(|err| ResearchError::Parse {
+        api: ResearchApi::Zotero,
+        message: err.to_string(),
+    })?;
 
-    let payload = response
-        .json::<T>()
-        .await
-        .map_err(|err| ResearchError::Parse {
+    let payload = serde_json::from_slice(&bytes).map_err(|err| {
+        const MAX_PREVIEW_BYTES: usize = 512;
+        let (slice, suffix) = if bytes.len() <= MAX_PREVIEW_BYTES {
+            (bytes.as_ref(), "")
+        } else {
+            (&bytes.as_ref()[..MAX_PREVIEW_BYTES], "...")
+        };
+        let body_preview = format!("{}{}", String::from_utf8_lossy(slice), suffix);
+        ResearchError::Parse {
             api: ResearchApi::Zotero,
-            message: err.to_string(),
-        })?;
+            message: format!(
+                "{err} (status {status}, content-type {content_type}): {body_preview}"
+            ),
+        }
+    })?;
     Ok((payload, total_available))
 }
 
@@ -1261,7 +1438,7 @@ struct ZoteroApiItemData {
     publication_title: Option<String>,
     #[serde(default)]
     tags: Vec<ZoteroApiTag>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_relations")]
     relations: HashMap<String, Vec<String>>,
     extra: Option<String>,
     note: Option<String>,
@@ -1301,8 +1478,50 @@ struct ZoteroApiTag {
     tag: String,
 }
 
+/// Zotero's remote and local APIs disagree on `relations`: remote can emit a
+/// single string while local normalizes the same field to an array of strings.
+/// Accept both so downstream code can always work with `Vec<String>`.
+fn deserialize_relations<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw_relations = HashMap::<String, serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw_relations
+        .into_iter()
+        .filter_map(|(relation, value)| {
+            let values = match value {
+                serde_json::Value::String(raw) => {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![trimmed.to_string()]
+                    }
+                }
+                serde_json::Value::Array(entries) => entries
+                    .into_iter()
+                    .filter_map(|entry| {
+                        entry
+                            .as_str()
+                            .map(str::trim)
+                            .filter(|entry| !entry.is_empty())
+                            .map(ToString::to_string)
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+            (!values.is_empty()).then_some((relation, values))
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::ZoteroApiItemData;
+    use super::extract_linked_items;
     use super::link_rel_exists;
     use super::year_from_date;
     use pretty_assertions::assert_eq;
@@ -1341,6 +1560,48 @@ mod tests {
             r#"<https://api.zotero.org/users/1/tags?start=0&limit=100>; rel="first""#,
             "next"
         ));
+    }
+
+    #[test]
+    fn zotero_item_relations_accept_remote_string_shape() {
+        let item: ZoteroApiItemData = serde_json::from_value(serde_json::json!({
+            "itemType": "computerProgram",
+            "title": "GAIR-NLP/SR-Scientist",
+            "relations": {
+                "dc:relation": "http://zotero.org/groups/6416955/items/9P75JGZZ"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            item.relations.get("dc:relation"),
+            Some(&vec![
+                "http://zotero.org/groups/6416955/items/9P75JGZZ".to_string()
+            ])
+        );
+
+        let linked_items = extract_linked_items(&item.relations);
+        assert_eq!(linked_items.len(), 1);
+        assert_eq!(linked_items[0].item_key.as_deref(), Some("9P75JGZZ"));
+    }
+
+    #[test]
+    fn zotero_item_relations_accept_local_array_shape() {
+        let item: ZoteroApiItemData = serde_json::from_value(serde_json::json!({
+            "itemType": "computerProgram",
+            "title": "GAIR-NLP/SR-Scientist",
+            "relations": {
+                "dc:relation": ["http://zotero.org/groups/6416955/items/9P75JGZZ"]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            item.relations.get("dc:relation"),
+            Some(&vec![
+                "http://zotero.org/groups/6416955/items/9P75JGZZ".to_string()
+            ])
+        );
     }
 }
 

@@ -13,6 +13,7 @@ use crate::error::ResearchError;
 use crate::error::Result;
 use crate::error::is_retryable_http_error;
 use crate::error::is_retryable_upstream_status;
+use crate::rate_limiter::RateLimitBucket;
 use crate::rate_limiter::RateLimiter;
 use crate::rate_limiter::ResearchApi;
 
@@ -53,7 +54,23 @@ impl HttpClient {
         T: DeserializeOwned,
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let response = self.execute_response(api, build_request).await?;
+        self.execute_json_with_bucket(api, api.into(), build_request)
+            .await
+    }
+
+    pub async fn execute_json_with_bucket<T, F>(
+        &self,
+        api: ResearchApi,
+        bucket: RateLimitBucket,
+        build_request: F,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned,
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let response = self
+            .execute_response_with_bucket(api, bucket, build_request)
+            .await?;
         let status = response.status();
         let content_type = response
             .headers()
@@ -87,7 +104,22 @@ impl HttpClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let response = self.execute_response(api, build_request).await?;
+        self.execute_text_with_bucket(api, api.into(), build_request)
+            .await
+    }
+
+    pub async fn execute_text_with_bucket<F>(
+        &self,
+        api: ResearchApi,
+        bucket: RateLimitBucket,
+        build_request: F,
+    ) -> Result<String>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let response = self
+            .execute_response_with_bucket(api, bucket, build_request)
+            .await?;
         response.text().await.map_err(|err| ResearchError::Parse {
             api,
             message: err.to_string(),
@@ -98,7 +130,22 @@ impl HttpClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
-        let response = self.execute_response(api, build_request).await?;
+        self.execute_bytes_with_bucket(api, api.into(), build_request)
+            .await
+    }
+
+    pub async fn execute_bytes_with_bucket<F>(
+        &self,
+        api: ResearchApi,
+        bucket: RateLimitBucket,
+        build_request: F,
+    ) -> Result<bytes::Bytes>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
+        let response = self
+            .execute_response_with_bucket(api, bucket, build_request)
+            .await?;
         response.bytes().await.map_err(|err| ResearchError::Parse {
             api,
             message: err.to_string(),
@@ -113,6 +160,19 @@ impl HttpClient {
     where
         F: Fn() -> reqwest::RequestBuilder,
     {
+        self.execute_response_with_bucket(api, api.into(), build_request)
+            .await
+    }
+
+    pub(crate) async fn execute_response_with_bucket<F>(
+        &self,
+        api: ResearchApi,
+        bucket: RateLimitBucket,
+        build_request: F,
+    ) -> Result<Response>
+    where
+        F: Fn() -> reqwest::RequestBuilder,
+    {
         let started_at = tokio::time::Instant::now();
 
         for attempt in 0..=self.retry_config.max_retries {
@@ -120,7 +180,7 @@ impl HttpClient {
                 return Err(tool_timeout_error(api, self.tool_timeout));
             };
             let _permit =
-                match tokio::time::timeout(remaining, self.rate_limiter.acquire(api)).await {
+                match tokio::time::timeout(remaining, self.rate_limiter.acquire(bucket)).await {
                     Ok(acquire_result) => acquire_result?,
                     Err(_) => return Err(tool_timeout_error(api, self.tool_timeout)),
                 };
@@ -284,6 +344,7 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
+    use crate::rate_limiter::RateLimitBucket;
     use crate::rate_limiter::ResearchApi;
 
     #[test]
@@ -450,6 +511,48 @@ mod tests {
             ResearchError::Timeout { api, timeout_ms } => {
                 assert_eq!(api, ResearchApi::OpenAlex);
                 assert_eq!(timeout_ms, 30);
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bucketed_request_timeout_reports_original_api() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_millis(100)))
+            .mount(&server)
+            .await;
+
+        let request_timeout = Duration::from_millis(25);
+        let client = reqwest::Client::builder().build().expect("reqwest client");
+        let rate_limiter = Arc::new(RateLimiter::new(HashMap::new()));
+        let http = HttpClient::new(
+            client,
+            rate_limiter,
+            RetryConfig {
+                max_retries: 0,
+                base_delay: Duration::from_millis(1),
+                max_delay: Duration::from_secs(30),
+            },
+            request_timeout,
+            Duration::from_secs(2),
+        );
+
+        let err = http
+            .execute_text_with_bucket(
+                ResearchApi::SemanticScholar,
+                RateLimitBucket::SemanticScholarSearch,
+                || http.client().get(format!("{}/slow", server.uri())),
+            )
+            .await
+            .expect_err("request should time out");
+
+        match err {
+            ResearchError::Timeout { api, timeout_ms } => {
+                assert_eq!(api, ResearchApi::SemanticScholar);
+                assert_eq!(timeout_ms, 25);
             }
             other => panic!("unexpected error: {other}"),
         }

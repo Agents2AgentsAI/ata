@@ -521,6 +521,7 @@ ignored = [
     "codex-reading-view-server",
     "codex-data-tools",
     "codex-test-macros",
+    "md-5",
     "cpal",
     "hound",
     "mdns-sd",

@@ -5,6 +5,7 @@ use crate::clients::SearchPage;
 use crate::error::Result;
 use crate::http_client::HttpClient;
 use crate::paper_id::PaperIdResolver;
+use crate::rate_limiter::RateLimitBucket;
 use crate::rate_limiter::ResearchApi;
 use crate::types::Paper;
 use crate::types::SourceMeta;
@@ -81,13 +82,17 @@ pub(crate) async fn search(
     }
 
     let response: SemanticScholarSearchResponse = http
-        .execute_json(ResearchApi::SemanticScholar, || {
-            let mut request = http.client().get(&url);
-            if let Some(api_key) = config.api_key {
-                request = request.header("x-api-key", api_key);
-            }
-            request
-        })
+        .execute_json_with_bucket(
+            ResearchApi::SemanticScholar,
+            RateLimitBucket::SemanticScholarSearch,
+            || {
+                let mut request = http.client().get(&url);
+                if let Some(api_key) = config.api_key {
+                    request = request.header("x-api-key", api_key);
+                }
+                request
+            },
+        )
         .await?;
 
     let papers = response
@@ -124,13 +129,17 @@ pub(crate) async fn get_paper(
     );
 
     let response: SemanticScholarPaper = http
-        .execute_json(ResearchApi::SemanticScholar, || {
-            let mut request = http.client().get(&url);
-            if let Some(api_key) = config.api_key {
-                request = request.header("x-api-key", api_key);
-            }
-            request
-        })
+        .execute_json_with_bucket(
+            ResearchApi::SemanticScholar,
+            RateLimitBucket::SemanticScholarGraph,
+            || {
+                let mut request = http.client().get(&url);
+                if let Some(api_key) = config.api_key {
+                    request = request.header("x-api-key", api_key);
+                }
+                request
+            },
+        )
         .await?;
 
     Ok(map_paper(response, &url, SOURCE_SEMANTIC_SCHOLAR))
@@ -158,13 +167,17 @@ pub(crate) async fn get_relations(
     );
 
     let response: SemanticScholarRelationResponse = http
-        .execute_json(ResearchApi::SemanticScholar, || {
-            let mut request = http.client().get(&url);
-            if let Some(api_key) = config.api_key {
-                request = request.header("x-api-key", api_key);
-            }
-            request
-        })
+        .execute_json_with_bucket(
+            ResearchApi::SemanticScholar,
+            RateLimitBucket::SemanticScholarGraph,
+            || {
+                let mut request = http.client().get(&url);
+                if let Some(api_key) = config.api_key {
+                    request = request.header("x-api-key", api_key);
+                }
+                request
+            },
+        )
         .await?;
 
     let papers = response
@@ -218,13 +231,17 @@ pub(crate) async fn get_recommendations(
     });
 
     let response: SemanticScholarRecommendationResponse = http
-        .execute_json(ResearchApi::SemanticScholar, || {
-            let mut req = http.client().post(&url).json(&body);
-            if let Some(api_key) = config.api_key {
-                req = req.header("x-api-key", api_key);
-            }
-            req
-        })
+        .execute_json_with_bucket(
+            ResearchApi::SemanticScholar,
+            RateLimitBucket::SemanticScholarGraph,
+            || {
+                let mut req = http.client().post(&url).json(&body);
+                if let Some(api_key) = config.api_key {
+                    req = req.header("x-api-key", api_key);
+                }
+                req
+            },
+        )
         .await?;
 
     let papers = response
