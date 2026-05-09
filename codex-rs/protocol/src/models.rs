@@ -3,6 +3,8 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use codex_utils_file::encode_inline_cached;
+use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
@@ -1162,6 +1164,10 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+const FILE_OPEN_TAG_BARE: &str = "<file_start>";
+const FILE_OPEN_TAG_PREFIX: &str = "<file_start";
+const FILE_OPEN_TAG_SUFFIX: &str = "</file_start>";
+const FILE_CLOSE_TAG: &str = "<file_end></file_end>";
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -1175,9 +1181,33 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
+pub fn local_file_label_text(label_number: usize) -> String {
+    format!("[File #{label_number}]")
+}
+
 pub fn local_image_open_tag_text(label_number: usize) -> String {
     let label = local_image_label_text(label_number);
     format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+}
+
+pub fn local_file_open_tag_text(label_number: usize) -> String {
+    local_file_open_tag_text_with_filename(label_number, None)
+}
+
+pub fn local_file_open_tag_text_with_filename(
+    label_number: usize,
+    filename: Option<&str>,
+) -> String {
+    let label = local_file_label_text(label_number);
+    match filename.filter(|name| !name.is_empty()) {
+        Some(filename) => {
+            let escaped_filename = escape_tag_attribute_value(filename);
+            format!(
+                r#"{FILE_OPEN_TAG_PREFIX} name="{escaped_filename}">{label}{FILE_OPEN_TAG_SUFFIX}"#
+            )
+        }
+        None => format!("{FILE_OPEN_TAG_BARE}{label}{FILE_OPEN_TAG_SUFFIX}"),
+    }
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -1185,16 +1215,49 @@ pub fn is_local_image_open_tag_text(text: &str) -> bool {
         .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
 }
 
+pub fn is_local_file_open_tag_text(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix(FILE_OPEN_TAG_PREFIX) else {
+        return false;
+    };
+    let Some((attributes, tail)) = rest.split_once('>') else {
+        return false;
+    };
+    if !attributes.is_empty() && !attributes.starts_with(' ') {
+        return false;
+    }
+    tail.ends_with(FILE_OPEN_TAG_SUFFIX)
+}
+
 pub fn is_local_image_close_tag_text(text: &str) -> bool {
     is_image_close_tag_text(text)
+}
+
+pub fn is_local_file_close_tag_text(text: &str) -> bool {
+    is_file_close_tag_text(text)
 }
 
 pub fn is_image_open_tag_text(text: &str) -> bool {
     text == IMAGE_OPEN_TAG
 }
 
+pub fn is_file_open_tag_text(text: &str) -> bool {
+    text == FILE_OPEN_TAG_BARE || is_local_file_open_tag_text(text)
+}
+
 pub fn is_image_close_tag_text(text: &str) -> bool {
     text == IMAGE_CLOSE_TAG
+}
+
+pub fn is_file_close_tag_text(text: &str) -> bool {
+    text == FILE_CLOSE_TAG
+}
+
+fn escape_tag_attribute_value(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn invalid_image_error_placeholder(
@@ -1260,6 +1323,54 @@ pub fn local_image_content_items_with_label_number(
             }
         },
     }
+}
+
+pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
+    match encode_inline_cached(path) {
+        Ok(processed) => {
+            let processed = into_owned_processed_file(processed);
+            let filename = processed.filename.clone();
+            let file_item = ContentItem::inline_file(
+                processed.base64,
+                processed.mime_type,
+                Some(filename.clone()),
+            );
+            wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "local file encoding failed; inserting error placeholder"
+            );
+            vec![ContentItem::InputText {
+                text: format!(
+                    "ATA could not read the local file at `{}`: {error}",
+                    path.display()
+                ),
+            }]
+        }
+    }
+}
+
+fn wrap_file_content_items(
+    file_item: ContentItem,
+    label_number: Option<usize>,
+    filename: Option<&str>,
+) -> Vec<ContentItem> {
+    let mut items = Vec::with_capacity(if label_number.is_some() { 3 } else { 1 });
+    if let Some(label_number) = label_number {
+        items.push(ContentItem::InputText {
+            text: local_file_open_tag_text_with_filename(label_number, filename),
+        });
+    }
+    items.push(file_item);
+    if label_number.is_some() {
+        items.push(ContentItem::InputText {
+            text: FILE_CLOSE_TAG.to_string(),
+        });
+    }
+    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -1374,7 +1485,9 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
+        // Use a single attachment counter so images and files share the same
+        // numbering sequence, matching the composer's combined label counter.
+        let mut attachment_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
@@ -1382,7 +1495,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
                     UserInput::Image { image_url } => {
-                        image_index += 1;
+                        attachment_index += 1;
                         vec![
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
@@ -1397,19 +1510,37 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                         ]
                     }
                     UserInput::LocalImage { path } => {
-                        image_index += 1;
+                        attachment_index += 1;
                         match std::fs::read(&path) {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,
                                 file_bytes,
-                                Some(image_index),
+                                Some(attachment_index),
                                 PromptImageMode::ResizeToFit,
                             ),
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
                     }
+                    UserInput::LocalFile { path } => {
+                        attachment_index += 1;
+                        local_file_content_items(&path, Some(attachment_index))
+                    }
+                    UserInput::UploadedFile {
+                        file_id,
+                        mime_type,
+                        filename,
+                        ..
+                    } => {
+                        attachment_index += 1;
+                        let file_item =
+                            ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
+                        wrap_file_content_items(
+                            file_item,
+                            Some(attachment_index),
+                            Some(filename.as_str()),
+                        )
+                    }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
-                    UserInput::LocalFile { .. } | UserInput::UploadedFile { .. } => Vec::new(), // ATA file attachments injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
             phase: None,

@@ -4,6 +4,7 @@ use crate::common::ResponseProcessedWsRequest;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::ResponsesStreamEvent;
@@ -258,9 +259,17 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
-        let request_body = serde_json::to_value(&request).map_err(|err| {
+        let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        // Normalize file blocks for the OpenAI Responses wire shape: wrap inline
+        // base64 `file_data` into data-URIs, strip `mime_type` (not accepted by
+        // the API), and rewrite `url_file` blocks into `input_file.file_url`.
+        // The websocket envelope wraps the request payload (`response.create`,
+        // etc.), so the actual `input` array lives nested in the body. The
+        // recursive rewriter walks the whole tree and rewrites any `message`
+        // content blocks it finds, regardless of nesting depth.
+        rewrite_openai_url_file_blocks_in_payload(&mut request_body);
 
         let current_span = Span::current();
         tokio::spawn(

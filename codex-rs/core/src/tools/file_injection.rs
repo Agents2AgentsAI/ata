@@ -113,14 +113,36 @@ mod tests {
         assert_eq!(prepared.attachment_count, 1);
         assert_eq!(prepared.warnings, Vec::<String>::new());
         // `content_items` reflects the immediate `ResponseInputItem::from(inputs)` projection.
-        // `LocalFile` entries are intentionally collapsed to nothing by that conversion in this
-        // build; the inline encoding is materialized later by the per-provider request path. We
-        // just verify there are no spurious items leaked into the projection.
-        assert!(
-            prepared
-                .content_items
-                .iter()
-                .all(|item| !matches!(item, ContentItem::InputText { .. }))
-        );
+        // For a `LocalFile`, that projection should emit a wrapped sequence:
+        //   InputText (open tag) + InputFile (inline base64) + InputText (close tag).
+        assert_eq!(prepared.content_items.len(), 3);
+        match &prepared.content_items[0] {
+            ContentItem::InputText { text } => {
+                assert!(
+                    text.starts_with("<file_start"),
+                    "expected file_start open tag, got {text:?}"
+                );
+            }
+            other => panic!("expected open InputText, got {other:?}"),
+        }
+        match &prepared.content_items[1] {
+            ContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                ..
+            } => {
+                assert!(file_data.is_some(), "expected inline base64 file_data");
+                assert!(file_id.is_none(), "expected no file_id for inline file");
+                assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+            }
+            other => panic!("expected InputFile, got {other:?}"),
+        }
+        match &prepared.content_items[2] {
+            ContentItem::InputText { text } => {
+                assert_eq!(text, "<file_end></file_end>");
+            }
+            other => panic!("expected close InputText, got {other:?}"),
+        }
     }
 }
