@@ -1,4 +1,5 @@
 pub mod anthropic;
+pub mod chat_completions;
 pub mod gemini;
 pub(crate) mod responses;
 
