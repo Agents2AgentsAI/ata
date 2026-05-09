@@ -15,8 +15,8 @@ pub struct WorkspaceManifest {
     pub manifest_version: u64,
     pub repos: Vec<RepoEntry>,
     pub runs: Vec<RunEntry>,
-    #[serde(default)]
-    pub papers: Vec<Value>,
+    #[serde(default, deserialize_with = "deserialize_papers")]
+    pub papers: Vec<PaperEntry>,
     #[serde(default)]
     pub datasets: Vec<Value>,
     #[serde(default)]
@@ -52,6 +52,46 @@ impl WorkspaceManifest {
             .find(|repo| repo.alias == alias)
             .ok_or_else(|| crate::error::WorkspaceError::EntryNotFound(alias.to_string()))
     }
+
+    pub fn paper_by_alias(&self, alias: &str) -> Result<&PaperEntry, crate::error::WorkspaceError> {
+        self.papers
+            .iter()
+            .find(|paper| paper.alias == alias)
+            .ok_or_else(|| crate::error::WorkspaceError::EntryNotFound(alias.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperEntry {
+    pub id: String,
+    pub alias: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doi: Option<String>,
+    pub source: PaperSource,
+    pub text_md_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_path: Option<String>,
+    pub content_hash: String,
+    pub added_at: i64,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PaperSource {
+    LocalFile {
+        original_path: String,
+    },
+    Zotero {
+        library_type: String,
+        library_id: String,
+        item_key: String,
+    },
 }
 
 /// Repository entry in the manifest.
@@ -330,18 +370,6 @@ pub const SCHEMA_VERSION: u32 = 2;
 macro_rules! manifest_collections {
     ($( $name:literal => $field:ident ),+ $(,)?) => {
         pub const MANIFEST_COLLECTIONS: &[&str] = &[$($name),+];
-
-        pub fn manifest_collection_mut<'a>(
-            manifest: &'a mut WorkspaceManifest,
-            collection: &str,
-        ) -> Result<&'a mut Vec<Value>, crate::error::WorkspaceError> {
-            match collection {
-                $( $name => Ok(&mut manifest.$field), )+
-                _ => Err(crate::error::WorkspaceError::UnknownCollection(
-                    collection.to_string(),
-                )),
-            }
-        }
     };
 }
 
@@ -380,6 +408,139 @@ pub fn new_manifest(workspace_id: &str, name: &str) -> WorkspaceManifest {
         labels: Map::new(),
         extra: Map::new(),
     }
+}
+
+pub fn append_manifest_collection_entry(
+    manifest: &mut WorkspaceManifest,
+    collection: &str,
+    entry: Value,
+) -> Result<(), crate::error::WorkspaceError> {
+    match collection {
+        "papers" => {
+            manifest
+                .papers
+                .push(serde_json::from_value(entry).map_err(crate::error::WorkspaceError::from)?);
+            Ok(())
+        }
+        "datasets" => {
+            manifest.datasets.push(entry);
+            Ok(())
+        }
+        "artifacts" => {
+            manifest.artifacts.push(entry);
+            Ok(())
+        }
+        "links" => {
+            manifest.links.push(entry);
+            Ok(())
+        }
+        "snapshots" => {
+            manifest.snapshots.push(entry);
+            Ok(())
+        }
+        "indexes" => {
+            manifest.indexes.push(entry);
+            Ok(())
+        }
+        _ => Err(crate::error::WorkspaceError::UnknownCollection(
+            collection.to_string(),
+        )),
+    }
+}
+
+pub fn remove_manifest_collection_entry(
+    manifest: &mut WorkspaceManifest,
+    collection: &str,
+    entry_id: &str,
+) -> Result<bool, crate::error::WorkspaceError> {
+    let before_len = match collection {
+        "papers" => {
+            let before_len = manifest.papers.len();
+            manifest.papers.retain(|entry| entry.id != entry_id);
+            before_len
+        }
+        "datasets" => {
+            let before_len = manifest.datasets.len();
+            manifest.datasets.retain(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id != entry_id)
+                    .unwrap_or(true)
+            });
+            before_len
+        }
+        "artifacts" => {
+            let before_len = manifest.artifacts.len();
+            manifest.artifacts.retain(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id != entry_id)
+                    .unwrap_or(true)
+            });
+            before_len
+        }
+        "links" => {
+            let before_len = manifest.links.len();
+            manifest.links.retain(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id != entry_id)
+                    .unwrap_or(true)
+            });
+            before_len
+        }
+        "snapshots" => {
+            let before_len = manifest.snapshots.len();
+            manifest.snapshots.retain(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id != entry_id)
+                    .unwrap_or(true)
+            });
+            before_len
+        }
+        "indexes" => {
+            let before_len = manifest.indexes.len();
+            manifest.indexes.retain(|entry| {
+                entry
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id != entry_id)
+                    .unwrap_or(true)
+            });
+            before_len
+        }
+        _ => {
+            return Err(crate::error::WorkspaceError::UnknownCollection(
+                collection.to_string(),
+            ));
+        }
+    };
+    let after_len = match collection {
+        "papers" => manifest.papers.len(),
+        "datasets" => manifest.datasets.len(),
+        "artifacts" => manifest.artifacts.len(),
+        "links" => manifest.links.len(),
+        "snapshots" => manifest.snapshots.len(),
+        "indexes" => manifest.indexes.len(),
+        _ => before_len,
+    };
+    Ok(before_len != after_len)
+}
+
+fn deserialize_papers<'de, D>(deserializer: D) -> Result<Vec<PaperEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries = Vec::<Value>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value::<PaperEntry>(entry).ok())
+        .collect())
 }
 
 #[cfg(test)]

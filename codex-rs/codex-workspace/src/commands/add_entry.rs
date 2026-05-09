@@ -1,7 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::manifest::with_locked_manifest;
 use crate::types::WorkspaceManifest;
-use crate::types::manifest_collection_mut;
+use crate::types::append_manifest_collection_entry;
 use serde_json::Value;
 
 /// Append a JSON object to a named collection in the manifest.
@@ -16,9 +16,7 @@ pub fn run(
     let collection = collection.to_string();
 
     with_locked_manifest(workspace_id, None, move |m| {
-        let vec = manifest_collection_mut(m, &collection)?;
-        vec.push(entry);
-        Ok(())
+        append_manifest_collection_entry(m, &collection, entry)
     })
 }
 

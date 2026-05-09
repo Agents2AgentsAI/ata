@@ -1,7 +1,7 @@
 use crate::error::WorkspaceError;
 use crate::manifest::with_locked_manifest;
 use crate::types::WorkspaceManifest;
-use crate::types::manifest_collection_mut;
+use crate::types::remove_manifest_collection_entry;
 
 /// Remove an entry by ID from a named collection in the manifest.
 pub fn run(
@@ -13,15 +13,7 @@ pub fn run(
     let entry_id = entry_id.to_string();
 
     with_locked_manifest(workspace_id, None, move |m| {
-        let vec = manifest_collection_mut(m, &collection)?;
-        let before_len = vec.len();
-        vec.retain(|v| {
-            v.get("id")
-                .and_then(|id| id.as_str())
-                .map(|id| id != entry_id)
-                .unwrap_or(true)
-        });
-        if vec.len() == before_len {
+        if !remove_manifest_collection_entry(m, &collection, &entry_id)? {
             return Err(WorkspaceError::EntryNotFound(entry_id));
         }
         Ok(())

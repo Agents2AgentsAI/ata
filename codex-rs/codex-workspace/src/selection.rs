@@ -158,14 +158,34 @@ fn cleanup_selection_files(
     cleanup_selection_path(&paths::global_selection_path_for(codex_home), should_remove)?;
 
     let sessions_root = codex_home.join("sessions");
-    if sessions_root.is_dir() {
-        for entry in std::fs::read_dir(&sessions_root)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            cleanup_selection_path(&entry.path().join("workspace.json"), should_remove)?;
+    if !sessions_root.is_dir() {
+        return Ok(());
+    }
+    // Snapshot directory entries up-front and tolerate ENOENT on every
+    // operation. Concurrent codex sessions create/delete entries here
+    // continuously; without race-tolerance this loop's `?` propagation
+    // surfaces a bare io::Error::NotFound to anyhow with no path context,
+    // crashing the run.
+    let entries = match std::fs::read_dir(&sessions_root) {
+        Ok(iter) => iter.collect::<Vec<_>>(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        match entry.file_type() {
+            Ok(file_type) if !file_type.is_dir() => continue,
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
         }
+        // The session directory may vanish between read_dir and here;
+        // cleanup_selection_path itself tolerates ENOENT below.
+        cleanup_selection_path(&entry.path().join("workspace.json"), should_remove)?;
     }
 
     Ok(())
@@ -178,7 +198,14 @@ fn cleanup_selection_path(
     if let Some(wid) = read_workspace_selection_id(path)
         && should_remove(&wid)
     {
-        std::fs::remove_file(path)?;
+        // Tolerate the file vanishing between read and remove (another
+        // codex session won the race and already removed it). NotFound is
+        // benign — the cleanup is already accomplished.
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
     }
     Ok(())
 }
@@ -201,7 +228,7 @@ pub fn discover_project_pin_for(codex_home: &Path, cwd: &std::path::Path) -> Opt
             return Some(wid);
         }
         // Stop at .git boundary
-        if current.join(".git").is_dir() {
+        if current.join(".git").exists() {
             break;
         }
         match current.parent() {

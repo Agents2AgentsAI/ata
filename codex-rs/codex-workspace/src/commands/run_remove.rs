@@ -22,7 +22,6 @@ pub fn run(workspace_id: &str, run_id: &str) -> Result<(), WorkspaceError> {
         Ok(())
     })?;
 
-    // Clean up worktree if applicable
     if code_root.is_dir() && !git::worktree_remove(&code_root) {
         eprintln!(
             "warning: failed to remove git worktree cleanly for run {run_id_owned}: {}",
@@ -30,7 +29,6 @@ pub fn run(workspace_id: &str, run_id: &str) -> Result<(), WorkspaceError> {
         );
     }
 
-    // Remove directory
     if run_root.is_dir() {
         std::fs::remove_dir_all(&run_root)?;
     }

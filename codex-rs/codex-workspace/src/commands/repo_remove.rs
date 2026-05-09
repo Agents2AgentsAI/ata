@@ -7,6 +7,9 @@ use serde_json::json;
 /// Remove a repo: delete directory, remove from manifest, audit.
 pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
     let alias_owned = alias.to_string();
+    let root = paths::workspace_root(workspace_id);
+    let repo_dir = root.join("repos").join(alias);
+
     let alias_for_closure = alias_owned.clone();
     let mut removed_id = None;
     with_locked_manifest(workspace_id, None, |m| {
@@ -15,8 +18,6 @@ pub fn run(workspace_id: &str, alias: &str) -> Result<(), WorkspaceError> {
         Ok(())
     })?;
 
-    let root = paths::workspace_root(workspace_id);
-    let repo_dir = root.join("repos").join(alias);
     if repo_dir.is_dir() {
         std::fs::remove_dir_all(&repo_dir)?;
     }
