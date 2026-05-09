@@ -138,12 +138,42 @@ use tracing::warn;
 pub(crate) async fn run_turn(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    input: Vec<UserInput>,
+    mut input: Vec<UserInput>,
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
     if input.is_empty() && !sess.has_pending_input().await {
         return None;
+    }
+
+    // Proactive file injection: rewrite local-PDF text mentions into
+    // UserInput::LocalFile, dedup via the per-session file_reference_cache,
+    // and (for providers that do uploads) push files to the provider's
+    // file API + record file_id mappings. Errors are logged but don't
+    // abort the turn — the user message still goes through.
+    if !input.is_empty() {
+        let provider_info = turn_context.provider.info().clone();
+        let cwd = turn_context.cwd.as_path().to_path_buf();
+        let sandbox_policy = turn_context.sandbox_policy();
+        match sess
+            .prepare_session_file_inputs(
+                &mut input,
+                &provider_info,
+                turn_context.config.as_ref(),
+                &cwd,
+                &sandbox_policy,
+            )
+            .await
+        {
+            Ok(warnings) => {
+                for w in warnings {
+                    warn!(target: "file_attachments", "{w}");
+                }
+            }
+            Err(err) => {
+                warn!(target: "file_attachments", "prepare_session_file_inputs failed: {err}");
+            }
+        }
     }
 
     let model_info = turn_context.model_info.clone();
@@ -1037,6 +1067,7 @@ async fn run_sampling_request(
         .await;
     let mut retries = 0;
     let mut initial_input = Some(input);
+    let mut recovery_state = crate::session::url_file_recovery::UrlFileRecoveryState::default();
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -1068,7 +1099,23 @@ async fn run_sampling_request(
             }
             Err(CodexErr::ContextWindowExceeded) => {
                 sess.set_total_tokens_full(&turn_context).await;
+                if recovery_state
+                    .maybe_recover_context_window_exceeded(&sess, &turn_context)
+                    .await
+                {
+                    continue;
+                }
                 return Err(CodexErr::ContextWindowExceeded);
+            }
+            Err(err @ CodexErr::InvalidRequest(_)) | Err(err @ CodexErr::Api(_)) => {
+                let msg = err.to_string();
+                if recovery_state
+                    .maybe_recover_file_related_invalid_request(&sess, &turn_context, &msg)
+                    .await
+                {
+                    continue;
+                }
+                return Err(err);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
                 let rate_limits = e.rate_limits.clone();
