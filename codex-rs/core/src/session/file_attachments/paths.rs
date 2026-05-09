@@ -1,7 +1,5 @@
-// Local-PDF inference helpers consumed by the proactive-injection path
-// that's not wired yet (`prepare_session_file_inputs`). Allow dead_code at
-// module level until that hookup lands.
-#![allow(dead_code)]
+// Local-PDF inference helpers consumed by `prepare_session_file_inputs`,
+// which `session::turn::run_turn` calls before each user message turn.
 
 use super::*;
 

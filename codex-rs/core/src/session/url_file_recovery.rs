@@ -1,8 +1,6 @@
-// `UrlFileRecoveryState` and the `maybe_recover_*` entry points are the
-// public recovery surface; they're invoked from `core/src/client.rs`'s
-// turn-error handler in a follow-up. Allow dead_code at module level until
-// that hookup lands so cargo build stays clean.
-#![allow(dead_code)]
+// `UrlFileRecoveryState` and the `maybe_recover_*` entry points are
+// invoked from `session::turn::run_turn`'s sampling-retry loop on
+// ContextWindowExceeded / file-related InvalidRequest errors.
 
 use std::path::Path;
 use std::sync::Arc;

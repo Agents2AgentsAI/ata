@@ -1,9 +1,8 @@
-// Several functions, structs, and methods in this module are part of the
-// file-attachment public surface but are only consumed by the
-// proactive-refresh and recovery paths that aren't yet wired (see TODOs in
-// session/url_file_recovery.rs and tools/handlers/attach_url_files.rs).
-// Allow dead_code at the module level so cargo build stays clean while the
-// integration follow-ups land.
+// `FileReferenceRefreshError`, `collect_referenced_upload_file_ids`,
+// `rewrite_uploaded_file_ids`, and `refresh_uploaded_file_references` are
+// invoked by the future "force-refresh on stale-file_id 4xx response"
+// retry path that's still TODO; gate them on dead_code allow until that
+// hookup lands. Everything else in this module is now consumed.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
