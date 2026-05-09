@@ -462,8 +462,16 @@ hound = "3.5"
 qrcode = "0.14"
 
 
-[workspace.lints]
-rust = {}
+[workspace.lints.rust]
+# Declare ATA-private feature names so `#[cfg(feature = "...")]` gates
+# on this branch are not flagged as `unexpected_cfgs`. The features
+# themselves are NOT declared in any per-crate `[features]` block (the
+# workspace manifest verifier forbids those) — this only teaches rustc
+# that these cfg names are intentional, so the gated code stays inactive
+# on the public branch without warnings.
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("ata-plus", "data", "lsp", "treesitter", "relay"))',
+] }
 
 [workspace.lints.clippy]
 await_holding_invalid_type = "deny"
