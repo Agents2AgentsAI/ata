@@ -420,9 +420,6 @@ impl ChatWidget {
             SlashCommand::Research => {
                 self.add_research_summary();
             }
-            SlashCommand::Undo => {
-                self.add_undo_summary();
-            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -921,7 +918,6 @@ impl ChatWidget {
             | SlashCommand::Workspace
             | SlashCommand::Jobs
             | SlashCommand::Research
-            | SlashCommand::Undo
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw

@@ -55,7 +55,6 @@ pub enum SlashCommand {
     Workspace,
     Jobs,
     Research,
-    Undo,
     Logout,
     Quit,
     Exit,
@@ -142,7 +141,6 @@ impl SlashCommand {
             SlashCommand::Research => {
                 "summarize research toolkit status; run one-off via `ata research`"
             }
-            SlashCommand::Undo => "show the most recent ghost snapshot and how to revert to it",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -229,7 +227,6 @@ impl SlashCommand {
             | SlashCommand::Workspace
             | SlashCommand::Jobs
             | SlashCommand::Research
-            | SlashCommand::Undo
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::AutoReview

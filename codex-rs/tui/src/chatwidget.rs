@@ -10009,28 +10009,6 @@ impl ChatWidget {
         );
     }
 
-    /// /undo summary. Ghost snapshots are recorded automatically by the
-    /// `GhostSnapshotTask` session task — every turn that mutates the
-    /// workspace gets its own ghost commit. The full one-button revert path
-    /// (`UndoTask`) is implemented in `core::tasks::undo` but not yet exposed
-    /// through the app-server protocol; until that lands, surface the
-    /// manual workaround so users can still recover.
-    pub(crate) fn add_undo_summary(&mut self) {
-        self.add_info_message(
-            "Each turn records a ghost commit before any workspace edits. To \
-             roll back the last turn, find the most recent ghost commit with \
-             `git log --all --oneline | head` (look for the auto-generated \
-             snapshot subject) and run `git reset --hard <commit>` from the \
-             repo root."
-                .to_string(),
-            Some(
-                "A one-button /undo flow (UndoTask) is implemented in core but \
-                 not yet wired through app-server protocol; coming in a follow-up."
-                    .to_string(),
-            ),
-        );
-    }
-
     pub(crate) fn add_connectors_output(&mut self) {
         if !self.connectors_enabled() {
             self.add_info_message(
