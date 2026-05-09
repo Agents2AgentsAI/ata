@@ -8,14 +8,6 @@ description = "Data tools for Codex - dataset discovery, download, and managemen
 [lints]
 workspace = true
 
-[features]
-default = ["huggingface", "kaggle"]
-huggingface = []
-kaggle = []
-isaac_sim = []
-cosmos = []
-all = ["huggingface", "kaggle", "isaac_sim", "cosmos"]
-
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 dashmap = "6"

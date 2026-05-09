@@ -112,7 +112,6 @@ members = [
     "codex-experimental-api-macros",
     "plugin",
     "model-provider",
-    "git-utils",
     # ATA-only crates (kept on top of upstream)
     "codex-research-tools",
     "codex-data-tools",
@@ -258,7 +257,7 @@ codex-scheduler = { path = "scheduler" }
 codex-package-manager = { path = "package-manager" }
 codex-artifacts = { path = "artifacts" }
 codex-test-macros = { path = "test-macros" }
-codex-git = { path = "utils/git" }
+codex-utils-git = { path = "utils/git" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 

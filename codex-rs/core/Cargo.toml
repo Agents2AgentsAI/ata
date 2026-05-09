@@ -57,10 +57,7 @@ codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-research-tools = { workspace = true }
-codex-data-tools = { workspace = true, optional = true }
-codex-lsp-client = { workspace = true, optional = true }
-codex-treesitter = { workspace = true, optional = true }
-codex-git = { workspace = true }
+codex-utils-git = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
@@ -168,16 +165,6 @@ tracing-test = { workspace = true, features = ["no-env-filter"] }
 walkdir = { workspace = true }
 wiremock = { workspace = true }
 zstd = { workspace = true }
-
-[features]
-default = ["code-intel"]
-deterministic_process_ids = []
-data = ["dep:codex-data-tools"]
-lsp = ["dep:codex-lsp-client"]
-treesitter = ["dep:codex-treesitter"]
-code-intel = ["lsp", "treesitter"]
-research = []
-test-support = []
 
 [package.metadata.cargo-shear]
 ignored = ["openssl-sys"]
