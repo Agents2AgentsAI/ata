@@ -21,7 +21,7 @@ pub async fn run_windows_app_open_or_install(
         return Ok(());
     }
 
-    eprintln!("Codex Desktop not found; opening Windows installer...");
+    eprintln!("ATA Desktop not found; opening Windows installer...");
     let download_url = download_url_override
         .as_deref()
         .unwrap_or(CODEX_WINDOWS_INSTALLER_URL);

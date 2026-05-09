@@ -256,6 +256,21 @@ pub enum UserInput {
         name: String,
         path: String,
     },
+    /// Local PDF or other file the user attached, either explicitly via the
+    /// composer or implicitly via the proactive-injection pipeline that
+    /// detects PDF mentions in turn text. Sent through to the model as a
+    /// `ContentItem::InputFile` block once the file is read or uploaded.
+    LocalFile {
+        path: PathBuf,
+    },
+    /// File previously uploaded to the provider's file API and reused by
+    /// `file_id` (avoids re-uploading on subsequent turns).
+    UploadedFile {
+        source_path: PathBuf,
+        file_id: String,
+        mime_type: String,
+        filename: String,
+    },
 }
 
 impl UserInput {
@@ -272,6 +287,18 @@ impl UserInput {
             UserInput::LocalImage { path } => CoreUserInput::LocalImage { path },
             UserInput::Skill { name, path } => CoreUserInput::Skill { name, path },
             UserInput::Mention { name, path } => CoreUserInput::Mention { name, path },
+            UserInput::LocalFile { path } => CoreUserInput::LocalFile { path },
+            UserInput::UploadedFile {
+                source_path,
+                file_id,
+                mime_type,
+                filename,
+            } => CoreUserInput::UploadedFile {
+                file_id,
+                mime_type,
+                filename,
+                source_path,
+            },
         }
     }
 }
@@ -290,7 +317,19 @@ impl From<CoreUserInput> for UserInput {
             CoreUserInput::LocalImage { path } => UserInput::LocalImage { path },
             CoreUserInput::Skill { name, path } => UserInput::Skill { name, path },
             CoreUserInput::Mention { name, path } => UserInput::Mention { name, path },
-            _ => unreachable!("unsupported user input variant"),
+            CoreUserInput::LocalFile { path } => UserInput::LocalFile { path },
+            CoreUserInput::UploadedFile {
+                file_id,
+                mime_type,
+                filename,
+                source_path,
+            } => UserInput::UploadedFile {
+                source_path,
+                file_id,
+                mime_type,
+                filename,
+            },
+            other => unreachable!("unsupported user input variant: {other:?}"),
         }
     }
 }
@@ -302,7 +341,9 @@ impl UserInput {
             UserInput::Image { .. }
             | UserInput::LocalImage { .. }
             | UserInput::Skill { .. }
-            | UserInput::Mention { .. } => 0,
+            | UserInput::Mention { .. }
+            | UserInput::LocalFile { .. }
+            | UserInput::UploadedFile { .. } => 0,
         }
     }
 }
