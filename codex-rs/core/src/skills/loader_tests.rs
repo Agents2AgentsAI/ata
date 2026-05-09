@@ -2053,7 +2053,6 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         SkillScope::System,
         SkillScope::System,
         SkillScope::System,
-        SkillScope::System,
     ];
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
