@@ -149,8 +149,10 @@ pub(crate) async fn run_turn(
     // Proactive file injection: rewrite local-PDF text mentions into
     // UserInput::LocalFile, dedup via the per-session file_reference_cache,
     // and (for providers that do uploads) push files to the provider's
-    // file API + record file_id mappings. Errors are logged but don't
-    // abort the turn — the user message still goes through.
+    // file API + record file_id mappings. Mirrors codex-main's run_turn
+    // contract: errors abort the turn with a user-visible BadRequest,
+    // warnings are surfaced via EventMsg::Warning so the chat surface
+    // shows them instead of dropping them into the log.
     if !input.is_empty() {
         let provider_info = turn_context.provider.info().clone();
         let cwd = turn_context.cwd.as_path().to_path_buf();
@@ -166,12 +168,18 @@ pub(crate) async fn run_turn(
             .await
         {
             Ok(warnings) => {
-                for w in warnings {
-                    warn!(target: "file_attachments", "{w}");
+                for message in warnings {
+                    sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                        .await;
                 }
             }
-            Err(err) => {
-                warn!(target: "file_attachments", "prepare_session_file_inputs failed: {err}");
+            Err(error) => {
+                let event = EventMsg::Error(ErrorEvent {
+                    message: error.to_string(),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                });
+                sess.send_event(&turn_context, event).await;
+                return None;
             }
         }
     }

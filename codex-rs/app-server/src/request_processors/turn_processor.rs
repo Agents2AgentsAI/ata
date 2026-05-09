@@ -654,6 +654,11 @@ impl TurnRequestProcessor {
                         None,
                         Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
                     ),
+                    SteerInputError::InvalidFileInput(message) => (
+                        message,
+                        None,
+                        Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
+                    ),
                 };
                 let mut error = invalid_request(message);
                 error.data = data;
