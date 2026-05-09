@@ -60,3 +60,34 @@ pub use providers::login_with_provider_oauth;
 pub use providers::provider_env_var;
 pub use providers::read_api_key_from_env;
 pub use providers::resolve_gemini_auth_source;
+
+/// Extension trait that resolves an API key for a `ModelProviderInfo` using
+/// both the env-var path (`api_key()`) and the per-provider auth storage path
+/// (`get_provider_api_key`). Returned `Ok(None)` means "no credential
+/// configured" — callers should treat that as a soft skip rather than a fatal
+/// error so that providers without API keys (e.g., OAuth-only) still work.
+pub trait ModelProviderApiKeyExt {
+    fn api_key_with_auth(
+        &self,
+        codex_home: &std::path::Path,
+        store_mode: AuthCredentialsStoreMode,
+    ) -> codex_protocol::error::Result<Option<String>>;
+}
+
+impl ModelProviderApiKeyExt for codex_model_provider_info::ModelProviderInfo {
+    fn api_key_with_auth(
+        &self,
+        codex_home: &std::path::Path,
+        store_mode: AuthCredentialsStoreMode,
+    ) -> codex_protocol::error::Result<Option<String>> {
+        if let Some(key) = self.api_key()? {
+            return Ok(Some(key));
+        }
+        let provider_id = match self.wire_api {
+            codex_model_provider_info::WireApi::Responses => PROVIDER_OPENAI,
+            codex_model_provider_info::WireApi::AnthropicMessages => PROVIDER_ANTHROPIC,
+            codex_model_provider_info::WireApi::GeminiGenerate => PROVIDER_GEMINI,
+        };
+        Ok(get_provider_api_key(codex_home, provider_id, store_mode))
+    }
+}

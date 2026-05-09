@@ -120,6 +120,10 @@ pub(crate) struct TurnState {
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+    /// Count of URL file attachments injected into this turn so far. Used by the
+    /// URL-attach pipeline (`attach_url_files`, `crop_figure`) to enforce a
+    /// per-turn cap and to support context-window/file-error recovery.
+    url_attachments_injected: usize,
 }
 
 pub(crate) struct PendingRequestPermissions {
@@ -220,6 +224,28 @@ impl TurnState {
 
     pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
         self.pending_input.push(input);
+    }
+
+    /// Returns the number of URL file attachments injected into this turn so
+    /// far.
+    pub(crate) fn url_attachments_injected(&self) -> usize {
+        self.url_attachments_injected
+    }
+
+    /// Atomically reserves capacity for `additional` URL file attachments in
+    /// this turn, enforcing `per_turn_limit`. Returns `Ok(())` on success, or
+    /// `Err(current_count)` if the reservation would exceed the limit.
+    pub(crate) fn reserve_url_attachments(
+        &mut self,
+        additional: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), usize> {
+        let current = self.url_attachments_injected;
+        if current.saturating_add(additional) > per_turn_limit {
+            return Err(current);
+        }
+        self.url_attachments_injected = current + additional;
+        Ok(())
     }
 
     pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {

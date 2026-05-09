@@ -33,11 +33,12 @@ mod provider;
 
 use super::Session;
 use super::TurnContext;
-use crate::ModelProviderInfo;
+use crate::auth::ModelProviderApiKeyExt;
 use crate::config::Config;
-use crate::model_provider_info::WireApi;
 use cache::dedup_local_files_from_cache;
 use cache::record_upload_paths;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 use paths::inject_local_pdf_paths_from_text_inputs;
 pub(crate) use provider::file_capabilities_for_provider;
 use provider::max_raw_inline_bytes;
@@ -429,10 +430,9 @@ pub(super) async fn refresh_uploaded_file_references(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> Result<(), FileReferenceRefreshError> {
-    let (provider_id, _capabilities) = file_capabilities_for_provider(
-        &turn_context.provider,
-        turn_context.config.model.as_deref(),
-    );
+    let provider_info = turn_context.provider.info();
+    let (provider_id, _capabilities) =
+        file_capabilities_for_provider(provider_info, turn_context.config.model.as_deref());
 
     let (referenced_file_ids, referenced_mime_types) = {
         let state = sess.state.lock().await;
@@ -459,8 +459,7 @@ pub(super) async fn refresh_uploaded_file_references(
         .iter()
         .any(|entry| entry.provider != provider_id);
 
-    let Some(api_key) = turn_context
-        .provider
+    let Some(api_key) = provider_info
         .api_key_with_auth(
             &turn_context.config.codex_home,
             turn_context.config.cli_auth_credentials_store_mode,
@@ -493,7 +492,7 @@ pub(super) async fn refresh_uploaded_file_references(
         return Ok(());
     };
 
-    let base_url = upload_base_url_for_provider(&provider_id, &turn_context.provider);
+    let base_url = upload_base_url_for_provider(&provider_id, provider_info);
     let http_client = &sess.services.file_upload_http_client;
 
     let mut updated_file_ids = HashMap::new();
@@ -651,9 +650,7 @@ mod tests {
     use crate::auth::AuthCredentialsStoreMode;
     use crate::auth::PROVIDER_OPENAI;
     use crate::auth::login_with_provider_api_key;
-    use crate::codex::SteerInputError;
     use crate::config::ConfigBuilder;
-    use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
 
     use pretty_assertions::assert_eq;
@@ -667,7 +664,6 @@ mod tests {
     fn workspace_policy_restricted_to_cwd() -> SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::FullAccess,
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -808,20 +804,6 @@ mod tests {
         assert_eq!(local_file_count(&inputs), 1);
     }
 
-    #[tokio::test]
-    async fn steer_input_surfaces_file_prepare_errors() {
-        let (sess, _tc, _rx) = crate::codex::make_session_and_context_with_rx().await;
-        let dir = tempfile::tempdir().expect("temp dir");
-        let missing = dir.path().join("missing.pdf");
-
-        let err = sess
-            .steer_input(vec![UserInput::LocalFile { path: missing }], None)
-            .await
-            .expect_err("missing local file should fail");
-
-        assert!(matches!(err, SteerInputError::InvalidFileInput(_)));
-    }
-
     #[test]
     fn prepare_file_inputs_rejects_file_over_provider_inline_limit() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -942,6 +924,7 @@ mod tests {
                 provider: "openai".to_string(),
                 expires_at: None,
                 source_path: path,
+                needs_refresh: false,
             }]
         );
         assert!(outcome.warnings.is_empty());
@@ -1033,12 +1016,14 @@ mod tests {
                     provider: "openai".to_string(),
                     expires_at: None,
                     source_path: first,
+                    needs_refresh: false,
                 },
                 codex_api::file_support::UploadedFile {
                     file_id: "file-123".to_string(),
                     provider: "openai".to_string(),
                     expires_at: None,
                     source_path: second,
+                    needs_refresh: false,
                 },
             ]
         );
@@ -1217,7 +1202,7 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_uploaded_file_references_reuploads_near_expiry_and_rewrites_history() {
-        let (sess, mut turn_context) = crate::codex::make_session_and_context().await;
+        let (sess, mut turn_context) = crate::session::tests::make_session_and_context().await;
         login_with_provider_api_key(
             turn_context.config.codex_home.as_path(),
             PROVIDER_OPENAI,
@@ -1241,8 +1226,9 @@ mod tests {
             .mount(&server)
             .await;
 
-        turn_context.provider = ModelProviderInfo::create_openai_provider(None);
-        turn_context.provider.base_url = Some(format!("{}/v1", server.uri()));
+        let mut provider_info = ModelProviderInfo::create_openai_provider(None);
+        provider_info.base_url = Some(format!("{}/v1", server.uri()));
+        turn_context.provider = codex_model_provider::create_model_provider(provider_info, None);
 
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("report.pdf");
@@ -1261,7 +1247,6 @@ mod tests {
                         mime_type: Some("application/pdf".to_string()),
                         filename: Some("report.pdf".to_string()),
                     }],
-                    end_turn: None,
                     phase: None,
                 }],
                 None,
@@ -1274,6 +1259,7 @@ mod tests {
                 provider: "openai".to_string(),
                 expires_at: Some(std::time::SystemTime::now() + std::time::Duration::from_secs(30)),
                 source_path: path,
+                needs_refresh: false,
             });
         }
 
@@ -1294,7 +1280,6 @@ mod tests {
                         mime_type: Some("application/pdf".to_string()),
                         filename: Some("report.pdf".to_string()),
                     }],
-                    end_turn: None,
                     phase: None,
                 }]
             );

@@ -16,6 +16,7 @@ use crate::tools::sandboxing::ApprovalStore;
 use crate::unified_exec::UnifiedExecProcessManager;
 use arc_swap::ArcSwap;
 use codex_analytics::AnalyticsEventsClient;
+use codex_api::file_support::FileReferenceCache;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_hooks::Hooks;
@@ -38,6 +39,12 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
     pub(crate) mcp_startup_cancellation_token: Mutex<CancellationToken>,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
+    /// Per-session cache of files uploaded to a provider (anthropic / gemini /
+    /// openai), used so attach_url_files / crop_figure can return the same
+    /// file_id without re-uploading on subsequent turns.
+    pub(crate) file_reference_cache: Arc<Mutex<FileReferenceCache>>,
+    /// Long-lived reqwest::Client reused for the multipart upload requests.
+    pub(crate) file_upload_http_client: reqwest::Client,
     #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) shell_zsh_path: Option<PathBuf>,
     #[cfg_attr(not(unix), allow(dead_code))]

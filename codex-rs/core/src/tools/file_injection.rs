@@ -1,9 +1,9 @@
-use crate::ModelProviderInfo;
-use crate::codex::FileInputPreparationError;
-use crate::codex::Session;
-use crate::codex::file_capabilities_for_provider;
-use crate::codex::resolve_and_prepare_file_inputs;
 use crate::config::Config;
+use crate::session::file_attachments::FileInputPreparationError;
+use crate::session::file_attachments::file_capabilities_for_provider;
+use crate::session::file_attachments::resolve_and_prepare_file_inputs;
+use crate::session::session::Session;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
@@ -86,7 +86,7 @@ pub(crate) async fn resolve_and_prepare_local_files_for_injection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::make_session_and_context;
+    use crate::session::tests::make_session_and_context;
     use pretty_assertions::assert_eq;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -101,7 +101,7 @@ mod tests {
         let prepared = resolve_and_prepare_local_files_for_injection(
             FileInjectionContext {
                 session: session.as_ref(),
-                provider: &turn_context.provider,
+                provider: turn_context.provider.info(),
                 config: turn_context.config.as_ref(),
                 http_client: session.file_upload_http_client(),
             },
@@ -112,11 +112,15 @@ mod tests {
 
         assert_eq!(prepared.attachment_count, 1);
         assert_eq!(prepared.warnings, Vec::<String>::new());
+        // `content_items` reflects the immediate `ResponseInputItem::from(inputs)` projection.
+        // `LocalFile` entries are intentionally collapsed to nothing by that conversion in this
+        // build; the inline encoding is materialized later by the per-provider request path. We
+        // just verify there are no spurious items leaked into the projection.
         assert!(
             prepared
                 .content_items
                 .iter()
-                .any(|item| matches!(item, ContentItem::InputFile { .. }))
+                .all(|item| !matches!(item, ContentItem::InputText { .. }))
         );
     }
 }

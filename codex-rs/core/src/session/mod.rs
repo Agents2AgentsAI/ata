@@ -185,6 +185,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
+pub(crate) mod file_attachments;
 mod handlers;
 mod mcp;
 mod multi_agents;
@@ -194,6 +195,7 @@ mod rollout_reconstruction;
 pub(crate) mod session;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
+pub(crate) mod url_file_recovery;
 use self::config_lock::export_config_lock_if_configured;
 use self::config_lock::validate_config_lock_if_configured;
 #[cfg(test)]
