@@ -3,6 +3,7 @@ pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod attach_url_files;
+pub(crate) mod crop_figure;
 #[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;
@@ -56,6 +57,7 @@ pub use apply_patch::ApplyPatchHandler;
 pub use attach_url_files::AttachUrlFilesHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+pub use crop_figure::CropFigureHandler;
 #[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
 pub use document_reader::DocumentReaderHandler;

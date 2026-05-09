@@ -92,6 +92,7 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 notify = { workspace = true }
 once_cell = { workspace = true }
+pdfium-render = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
