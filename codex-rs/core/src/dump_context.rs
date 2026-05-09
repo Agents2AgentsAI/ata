@@ -161,7 +161,7 @@ pub async fn dump_initial_context(config: &Config) -> anyhow::Result<DumpResult>
 
     // ── 5. Tools summary ───────────────────────────────────────────────
     let tools_summary =
-        "Tool listing requires a running session. Use `codex --full-auto` to see tools in action."
+        "Tool listing requires a running session. Use `ata --full-auto` to see tools in action."
             .to_string();
 
     Ok(DumpResult {

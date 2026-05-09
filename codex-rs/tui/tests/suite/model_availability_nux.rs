@@ -70,7 +70,7 @@ trust_level = "trusted"
 
     let fixture_path =
         codex_utils_cargo_bin::find_resource!("../core/tests/cli_responses_fixture.sse")?;
-    let codex = if let Ok(path) = codex_utils_cargo_bin::cargo_bin("codex") {
+    let codex = if let Ok(path) = codex_utils_cargo_bin::cargo_bin("ata") {
         path
     } else {
         let fallback = repo_root.join("codex-rs/target/debug/codex");

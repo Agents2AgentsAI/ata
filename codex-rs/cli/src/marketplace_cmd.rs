@@ -13,7 +13,7 @@ use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_utils_cli::CliConfigOverrides;
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace")]
+#[command(bin_name = "ata plugin marketplace")]
 pub struct MarketplaceCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
@@ -30,7 +30,7 @@ enum MarketplaceSubcommand {
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace add")]
+#[command(bin_name = "ata plugin marketplace add")]
 struct AddMarketplaceArgs {
     /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, SSH URLs,
     /// or local marketplace root directories.
@@ -48,13 +48,13 @@ struct AddMarketplaceArgs {
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace upgrade")]
+#[command(bin_name = "ata plugin marketplace upgrade")]
 struct UpgradeMarketplaceArgs {
     marketplace_name: Option<String>,
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace remove")]
+#[command(bin_name = "ata plugin marketplace remove")]
 struct RemoveMarketplaceArgs {
     /// Configured marketplace name to remove.
     marketplace_name: String,
