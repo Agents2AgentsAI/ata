@@ -43,6 +43,8 @@ use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::goal_spec::create_create_goal_tool;
 use crate::tools::handlers::goal_spec::create_get_goal_tool;
 use crate::tools::handlers::goal_spec::create_update_goal_tool;
+use crate::tools::handlers::js_repl::JsReplHandler;
+use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resource_templates_tool;
 use crate::tools::handlers::mcp_resource_spec::create_list_mcp_resources_tool;
 use crate::tools::handlers::mcp_resource_spec::create_read_mcp_resource_tool;
@@ -314,6 +316,17 @@ pub fn build_tool_registry_builder(
         config.code_mode_enabled,
     );
     builder.register_handler(Arc::new(CropFigureHandler));
+
+    // Embedded V8-backed JavaScript evaluator. Each call runs in a fresh
+    // isolate (no shared state), capped at 5s and 16KB output. The tool is
+    // unconditionally registered today; if we later add a feature flag for
+    // JS REPL, gate this push_spec/register_handler pair on it.
+    builder.push_spec(
+        create_js_repl_tool(),
+        /*supports_parallel_tool_calls*/ false,
+        config.code_mode_enabled,
+    );
+    builder.register_handler(Arc::new(JsReplHandler));
 
     builder.push_spec(
         create_request_user_input_tool(request_user_input_tool_description(

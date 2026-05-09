@@ -92,6 +92,13 @@ pattern     = "CROP_FIGURE_TOOL"
 description = "Crop a region from a PDF page and store as a figure"
 
 [[entries]]
+name        = "js_repl (JS_REPL_TOOL_DESCRIPTION)"
+category    = "tool-descriptions"
+file        = "core/src/tools/handlers/js_repl_spec.rs"
+pattern     = "JS_REPL_TOOL_DESCRIPTION"
+description = "Evaluate JavaScript in an embedded V8 isolate (stateless per call)"
+
+[[entries]]
 name        = "update_plan (create_update_plan_tool)"
 category    = "tool-descriptions"
 file        = "core/src/tools/handlers/plan_spec.rs"

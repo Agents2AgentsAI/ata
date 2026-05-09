@@ -9,6 +9,8 @@ pub(crate) mod data;
 pub(crate) mod document_reader;
 mod dynamic;
 mod goal;
+pub(crate) mod js_repl;
+pub(crate) mod js_repl_spec;
 pub(crate) mod goal_spec;
 mod mcp;
 mod mcp_resource;
