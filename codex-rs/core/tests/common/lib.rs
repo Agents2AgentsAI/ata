@@ -319,9 +319,11 @@ where
         // ATA registers ~8 extra tools (reading view, voice, document reader,
         // js-repl, etc.), which on contended Linux CI runners pushes the
         // initial-turn-complete past upstream's 10s ceiling. Bump the floor
-        // to 30s so heavily-contended runners still pass; happy-path tests
-        // don't notice because they return as soon as the predicate matches.
-        let ev = timeout(wait_time.max(Duration::from_secs(30)), codex.next_event())
+        // to 60s so heavily-contended runners (especially compact_resume_fork
+        // tests that drive multiple turns through the agent loop) still pass;
+        // happy-path tests don't notice because they return as soon as the
+        // predicate matches.
+        let ev = timeout(wait_time.max(Duration::from_secs(60)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
