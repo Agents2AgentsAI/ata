@@ -123,15 +123,9 @@ webbrowser = { workspace = true }
 uuid = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
-tokio-util = { workspace = true, features = ["time"] }
-
-# `cpal` (and the `hound` WAV writer it pairs with) are only used by the voice
-# baseline / voice mode UI on macOS + Windows — Linux builds intentionally
-# skip them so we don't pull in `alsa-sys` (libasound2-dev) just to get a
-# Linux build / clippy run going.
-[target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = { workspace = true }
 hound = { workspace = true }
+tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

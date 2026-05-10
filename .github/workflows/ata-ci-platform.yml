@@ -153,7 +153,9 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            packages=(pkg-config libcap-dev)
+            # libasound2-dev is required by `alsa-sys` (transitively pulled in by
+            # `cpal`) when codex-tui builds the voice/audio_device modules.
+            packages=(pkg-config libcap-dev libasound2-dev)
             if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
               packages+=(libubsan1)
             fi
