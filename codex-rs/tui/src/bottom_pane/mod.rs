@@ -102,6 +102,10 @@ mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use account_view::AccountView;
+// ATA: re-export the voice context type so voice_mode can refer to it via
+// `crate::bottom_pane::ReadingViewVoiceContext` (the canonical path).
+#[cfg(not(target_os = "linux"))]
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
@@ -1221,6 +1225,181 @@ impl BottomPane {
 
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
+    }
+
+    // ─── ATA reading-view convenience hooks ─────────────────────────────
+    // The reading view overlay extends BottomPaneView with a handful of
+    // optional methods for receiving section updates + voice mode state.
+    // These are thin shims that find the active document reader (if any)
+    // and forward the call. Voice methods are gated to non-Linux platforms.
+
+    pub(crate) fn show_document_reader(
+        &mut self,
+        ev: codex_protocol::document_reader::PresentDocumentEvent,
+        from_replay: bool,
+    ) {
+        // Open the document_reader view; replace any existing view stack entry
+        // for the same document. The actual `DocumentReaderView` constructor
+        // lives in `bottom_pane::document_reader`.
+        let view = Box::new(
+            crate::bottom_pane::document_reader::DocumentReaderView::new_from_event(
+                ev,
+                from_replay,
+                self.frame_requester.clone(),
+            ),
+        );
+        self.push_view(view);
+    }
+
+    pub(crate) fn is_document_reader_active(&self) -> bool {
+        self.view_stack
+            .last()
+            .and_then(|v| v.view_id())
+            .is_some_and(|id| id == "document_reader")
+    }
+
+    pub(crate) fn update_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::UpdateDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_document_section_update(
+                &ev.document_id,
+                ev.section_index,
+                ev.content.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn append_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::AppendDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_document_section_append(
+                &ev.document_id,
+                ev.section_index,
+                ev.content.clone(),
+                ev.foldable,
+                ev.summary.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn add_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::AddDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_document_section_add(
+                &ev.document_id,
+                ev.after_section_index,
+                ev.heading.clone(),
+                ev.content.clone(),
+                ev.foldable,
+                ev.summary.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn patch_document_section(
+        &mut self,
+        ev: &codex_protocol::document_reader::PatchDocumentSectionEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_document_section_patch(
+                &ev.document_id,
+                ev.section_index,
+                &ev.old_text,
+                &ev.new_text,
+                ev.foldable,
+                ev.summary.clone(),
+            );
+            self.request_redraw();
+        }
+    }
+
+    /// Forward a `force_hide_cursor` toggle to the active view. Currently a
+    /// no-op since v0.129.0's BottomPane doesn't track cursor hiding —
+    /// reading view manages cursor visibility via its own focus state.
+    pub(crate) fn set_force_hide_cursor(&mut self, _hide: bool) {}
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn reading_view_voice_context(
+        &self,
+    ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
+        self.view_stack.last().and_then(|v| v.voice_context())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn is_view_composer_focused(&self) -> bool {
+        self.view_stack
+            .last()
+            .map(|v| v.is_composer_focused())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_status(status);
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_tts_flash_msg(&mut self, msg: Option<String>) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_tts_flash_msg(msg);
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_tts_paused(&mut self, paused: bool) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_tts_paused(paused);
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_pending_voice_question(
+        &mut self,
+        section: usize,
+        question: String,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_pending_voice_question(section, question);
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_karaoke_lines(
+        &mut self,
+        lines: Option<Vec<ratatui::text::Line<'static>>>,
+        append: bool,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_karaoke_lines(lines, append);
+            self.request_redraw();
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn set_document_reader_reading_progress(
+        &mut self,
+        word_idx: Option<usize>,
+        heading_words_to_skip: usize,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_voice_reading_progress(word_idx, heading_words_to_skip);
+            self.request_redraw();
+        }
     }
 
     /// Called when the agent requests user approval.

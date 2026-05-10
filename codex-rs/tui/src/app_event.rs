@@ -982,6 +982,28 @@ pub(crate) enum AppEvent {
         section_index: usize,
         text: String,
     },
+    /// Periodic volume meter sample emitted while voice capture is active.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeMeterTick {
+        text: String,
+    },
+    /// PTT timeout safety poller fired — voice mode checks elapsed press time.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePttTimeoutCheck,
+    /// New TTS audio chunk arrived from the persistent ElevenLabs worker.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsAudioChunk {
+        pcm: Vec<i16>,
+        alignment: Option<codex_elevenlabs::TtsAlignment>,
+    },
+    /// TTS worker reported an error.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsError {
+        error: String,
+    },
+    /// TTS worker finished streaming the current sentence.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTtsFinished,
 }
 
 /// Reading view display mode, chosen via the `/reading-view` setup popup.

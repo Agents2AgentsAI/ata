@@ -127,6 +127,14 @@ pub mod legacy_core {
     pub use codex_core::ReadingViewDisplayMode;
     pub use codex_core::reading_view_section_follow_up_guidance;
     pub use codex_core::reading_view_selection_follow_up_guidance;
+
+    // Auth manager — needed by voice_mode for ATA Supabase JWT lookup.
+    pub use codex_core::AuthManager;
+
+    // Auth submodule — voice_mode reaches into AuthMode::Ata / CodexAuth::Ata.
+    pub mod auth {
+        pub use codex_core::auth_legacy::*;
+    }
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);

@@ -1775,10 +1775,10 @@ impl App {
                 self.chat_widget.set_reading_view_server(server);
             }
             AppEvent::ReadingViewBrowserMessage(msg) => {
-                self.chat_widget.handle_reading_view_browser_message(msg);
+                self.chat_widget.handle_reading_view_browser_message(&msg);
             }
             AppEvent::ReadingViewModeChanged(mode) => {
-                self.chat_widget.set_reading_view_mode(mode);
+                self.chat_widget.reading_view_mode = mode;
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeHighlightTick => {
@@ -1832,6 +1832,26 @@ impl App {
             } => {
                 self.chat_widget
                     .on_voice_prefetch_section(document_id, section_index, text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeMeterTick { text } => {
+                self.chat_widget.on_voice_meter_tick(text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePttTimeoutCheck => {
+                self.chat_widget.check_ptt_timeout();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsAudioChunk { pcm, alignment } => {
+                self.chat_widget.on_voice_tts_audio_chunk(pcm, alignment);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsError { error } => {
+                self.chat_widget.on_voice_tts_error(&error);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsFinished => {
+                self.chat_widget.on_voice_tts_finished();
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

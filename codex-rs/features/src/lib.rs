@@ -237,6 +237,10 @@ pub enum Feature {
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
+    /// ATA-private: surface the document-reader / reading-view UI overlay.
+    ReadingView,
+    /// ATA-private: enable voice mode (push-to-talk capture + ElevenLabs TTS).
+    VoiceMode,
 }
 
 impl Feature {
@@ -1180,6 +1184,26 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "workspace_dependencies",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ReadingView,
+        key: "reading_view",
+        stage: Stage::Experimental {
+            name: "Reading view",
+            menu_description: "Open documents in a dedicated reader overlay",
+            announcement: "Open documents in a dedicated reader overlay.",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::Experimental {
+            name: "Voice mode",
+            menu_description: "Push-to-talk capture + ElevenLabs TTS",
+            announcement: "Push-to-talk capture + ElevenLabs TTS.",
+        },
+        default_enabled: false,
     },
 ];
 

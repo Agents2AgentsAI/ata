@@ -1039,6 +1039,29 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+
+    // ─── ATA reading-view state ─────────────────────────────────────────
+    pub(crate) reading_view_server: Option<codex_reading_view_server::ReadingViewServer>,
+    pub(crate) reading_view_browser_doc_id: String,
+    pub(crate) reading_view_browser_title: String,
+    pub(crate) reading_view_browser_sections: Vec<(String, String)>,
+    pub(crate) reading_view_browser_raw_sections: Vec<String>,
+    pub(crate) reading_view_pending_browser_info: bool,
+    pub(crate) reading_view_pending_events: Vec<String>,
+    pub(crate) reading_view_pending_section_updates: Vec<String>,
+    pub(crate) reading_view_mode: crate::app_event::ReadingViewMode,
+    pub(crate) last_turn_was_local_submit: bool,
+
+    // ─── ATA voice-mode state (gated to non-Linux) ──────────────────────
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) voice_mode_state: Option<voice_mode::VoiceModeState>,
+    pub(crate) cached_elevenlabs_api_key: Option<String>,
+    pub(crate) cached_elevenlabs_language: Option<Option<String>>,
+    pub(crate) cached_elevenlabs_speed: Option<f64>,
+    pub(crate) pending_voice_startup_cells: Vec<Box<dyn HistoryCell>>,
+
+    // Auth manager kept for ATA Supabase JWT lookup. Constructed in `new`.
+    pub(crate) auth_manager: Arc<crate::legacy_core::AuthManager>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -5106,6 +5129,30 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
+
+            // ATA reading-view + voice-mode state.
+            reading_view_server: None,
+            reading_view_browser_doc_id: String::new(),
+            reading_view_browser_title: String::new(),
+            reading_view_browser_sections: Vec::new(),
+            reading_view_browser_raw_sections: Vec::new(),
+            reading_view_pending_browser_info: false,
+            reading_view_pending_events: Vec::new(),
+            reading_view_pending_section_updates: Vec::new(),
+            reading_view_mode: crate::app_event::ReadingViewMode::default(),
+            last_turn_was_local_submit: false,
+            #[cfg(not(target_os = "linux"))]
+            voice_mode_state: None,
+            cached_elevenlabs_api_key: None,
+            cached_elevenlabs_language: None,
+            cached_elevenlabs_speed: None,
+            pending_voice_startup_cells: Vec::new(),
+            // Voice mode's `build_elevenlabs_proxy` is the only consumer and
+            // is stubbed in v0.129.0; use a sync test-mode AuthManager so we
+            // don't have to make `new` async.
+            auth_manager: crate::legacy_core::AuthManager::from_auth_for_testing(
+                crate::legacy_core::auth::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            ),
         };
 
         widget.prefetch_rate_limits();
@@ -5576,6 +5623,16 @@ impl ChatWidget {
 
     pub(crate) fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.add_boxed_history(Box::new(cell));
+    }
+
+    /// Drain any cells the voice-mode pipeline buffered while waiting for
+    /// TTS to start (so they appear in the transcript only after the audio
+    /// is actually rolling). Called by voice_mode at appropriate transitions.
+    pub(crate) fn flush_deferred_voice_cells(&mut self) {
+        let deferred = std::mem::take(&mut self.pending_voice_startup_cells);
+        for cell in deferred {
+            self.add_boxed_history(cell);
+        }
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
@@ -11293,25 +11350,17 @@ pub(crate) fn show_review_commit_picker_with_entries(
 #[cfg(test)]
 pub(crate) mod tests;
 
-// ─── ATA reading-view + voice-mode integration stubs ────────────────────────
-// The reading-view / voice-mode UX from `main` is being ported in stages. To
-// keep the v0.129.0 merge branch green, we expose the dispatcher entry points
-// here as no-op stubs. The real implementations land alongside the
-// `chatwidget/voice_mode.rs` module port; until then these stubs let
-// `app/event_dispatch.rs` compile.
-impl ChatWidget {
-    pub(crate) fn set_reading_view_server(
-        &mut self,
-        _server: codex_reading_view_server::ReadingViewServer,
-    ) {
-    }
-
-    pub(crate) fn handle_reading_view_browser_message(&mut self, _msg: String) {}
-
-    pub(crate) fn set_reading_view_mode(&mut self, _mode: crate::app_event::ReadingViewMode) {}
-}
+// ATA fork: reading-view + voice-mode integration. The reading view is in a
+// separate `include!`d file because it is an `impl ChatWidget` block; the
+// voice-mode state machine is a regular sibling module.
+include!("chatwidget_document_reader.rs");
 
 #[cfg(not(target_os = "linux"))]
+pub(crate) mod voice_mode;
+
+// On Linux we keep no-op stubs so `app/event_dispatch.rs` compiles; the
+// real voice-mode methods live in `voice_mode.rs` (gated on non-Linux).
+#[cfg(target_os = "linux")]
 impl ChatWidget {
     pub(crate) fn on_voice_highlight_tick(&mut self) {}
     pub(crate) fn on_voice_transcription_complete(&mut self, _text: String) {}
@@ -11336,4 +11385,14 @@ impl ChatWidget {
         _text: String,
     ) {
     }
+    pub(crate) fn on_voice_meter_tick(&mut self, _text: String) {}
+    pub(crate) fn check_ptt_timeout(&mut self) {}
+    pub(crate) fn on_voice_tts_audio_chunk(
+        &mut self,
+        _pcm: Vec<i16>,
+        _alignment: Option<codex_elevenlabs::TtsAlignment>,
+    ) {
+    }
+    pub(crate) fn on_voice_tts_error(&mut self, _error: &str) {}
+    pub(crate) fn on_voice_tts_finished(&mut self) {}
 }

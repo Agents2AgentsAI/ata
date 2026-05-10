@@ -9,6 +9,12 @@ mod apply_patch;
 mod apps;
 mod arc_monitor;
 pub(crate) mod auth;
+// ATA: re-export AuthManager + the `auth` module via the `legacy_core` shim
+// in `app-server-client` for voice_mode/account_view consumers in `tui`.
+pub use auth::AuthManager;
+pub mod auth_legacy {
+    pub use crate::auth::*;
+}
 /// Re-export Copilot OAuth helpers needed by `codex-app-server` to drive the
 /// device-code login flow on behalf of the TUI/desktop client. Kept narrow on
 /// purpose: the rest of `auth` stays `pub(crate)`.

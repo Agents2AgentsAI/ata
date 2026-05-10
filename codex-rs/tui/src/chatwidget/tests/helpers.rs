@@ -333,6 +333,27 @@ pub(super) async fn make_chatwidget_manual(
         realtime_conversation: RealtimeConversationUiState::default(),
         last_rendered_user_message_display: None,
         last_non_retry_error: None,
+
+        // ATA reading-view + voice-mode state — defaults are inert.
+        reading_view_server: None,
+        reading_view_browser_doc_id: String::new(),
+        reading_view_browser_title: String::new(),
+        reading_view_browser_sections: Vec::new(),
+        reading_view_browser_raw_sections: Vec::new(),
+        reading_view_pending_browser_info: false,
+        reading_view_pending_events: Vec::new(),
+        reading_view_pending_section_updates: Vec::new(),
+        reading_view_mode: crate::app_event::ReadingViewMode::default(),
+        last_turn_was_local_submit: false,
+        #[cfg(not(target_os = "linux"))]
+        voice_mode_state: None,
+        cached_elevenlabs_api_key: None,
+        cached_elevenlabs_language: None,
+        cached_elevenlabs_speed: None,
+        pending_voice_startup_cells: Vec::new(),
+        auth_manager: crate::legacy_core::AuthManager::from_auth_for_testing(
+            crate::legacy_core::auth::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        ),
     };
     widget.set_model(&resolved_model);
     (widget, rx, op_rx)

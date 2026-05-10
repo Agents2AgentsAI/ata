@@ -99,4 +99,7 @@ pub struct VoiceModeToml {
     pub stt_enabled: Option<bool>,
     /// Controls how much the agent narrates: "concise" or "verbose".
     pub verbosity: Option<VoiceVerbosity>,
+    /// ElevenLabs API settings (api_key, voice_id, language, speed).
+    #[serde(default)]
+    pub elevenlabs: Option<codex_config::config_toml::ElevenLabsToml>,
 }

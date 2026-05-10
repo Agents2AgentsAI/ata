@@ -26,6 +26,10 @@ pub enum SlashCommand {
     #[strum(to_string = "approve")]
     AutoReview,
     Account,
+    #[strum(to_string = "reading-view")]
+    ReadingView,
+    #[cfg(not(target_os = "linux"))]
+    Voice,
     Memories,
     Skills,
     Hooks,
@@ -132,6 +136,9 @@ impl SlashCommand {
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
             SlashCommand::Account => "sign in / out of your ATA account",
+            SlashCommand::ReadingView => "configure the reading-view display mode",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => "open the voice mode setup popup",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
@@ -205,13 +212,18 @@ impl SlashCommand {
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Account
+            | SlashCommand::ReadingView
             | SlashCommand::Memories
+            // Voice mode toggling is allowed mid-task on non-Linux.
+
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => true,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Raw
@@ -245,6 +257,8 @@ impl SlashCommand {
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Theme => false,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => true,
         }
     }
 

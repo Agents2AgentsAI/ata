@@ -312,6 +312,19 @@ impl ChatWidget {
             SlashCommand::Account => {
                 self.open_account_popup();
             }
+            SlashCommand::ReadingView => {
+                self.add_info_message(
+                    "Reading-view setup popup will land in a follow-up. \
+                     For now configure `[reading_view] mode = \"tui\"|\"browser\"|\"disabled\"` \
+                     in ~/.codex/config.toml."
+                        .to_string(),
+                    None,
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => {
+                self.open_voice_setup_popup();
+            }
             SlashCommand::Memories => {
                 self.open_memories_popup();
             }
@@ -953,6 +966,7 @@ impl ChatWidget {
             | SlashCommand::Experimental
             | SlashCommand::AutoReview
             | SlashCommand::Account
+            | SlashCommand::ReadingView
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -963,6 +977,8 @@ impl ChatWidget {
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::Theme => QueueDrain::Stop,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => QueueDrain::Stop,
         }
     }
 

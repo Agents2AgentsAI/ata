@@ -49,11 +49,16 @@ impl VoiceCapture {
         })
     }
 
-    pub fn stop(mut self) {
+    pub fn stop(mut self) -> Result<Vec<i16>, String> {
         // Mark stopped so any metering task can exit cleanly.
         self.stopped.store(true, Ordering::SeqCst);
         // Dropping the stream stops capture.
         self.stream.take();
+        // v0.129.0's VoiceCapture pushes audio frames through the
+        // AppEventSender as they arrive, so there is no local buffer to
+        // return. Voice mode's PTT path will see an empty buffer for now;
+        // wire-up of in-memory PCM accumulation is tracked as follow-up.
+        Ok(Vec::new())
     }
 
     pub fn stopped_flag(&self) -> Arc<AtomicBool> {
@@ -355,6 +360,77 @@ impl RealtimeAudioPlayer {
             output_channels: self.output_channels,
         }
     }
+
+    // ─── voice_mode TTS playback shims ──────────────────────────────────
+    // The voice mode pipeline expects pause/resume + buffer state queries on
+    // the player. v0.129.0's RealtimeAudioPlayer is a thin cpal wrapper; we
+    // provide minimal implementations that operate on the queue and a
+    // shared atomic pause flag.
+
+    pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
+        self.playback_handle()
+            .enqueue_pcm(pcm, sample_rate, channels);
+    }
+
+    pub(crate) fn pause(&self) {
+        // Without direct cpal stream pause we approximate by clearing the
+        // queue; future work can add a real pause flag in the consumer.
+        self.clear();
+    }
+
+    pub(crate) fn resume(&self) {
+        // Counterpart to `pause`: nothing to do because the cpal stream
+        // is always running; queue refill will resume audible output.
+    }
+
+    pub(crate) fn is_paused(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn has_buffered_audio(&self) -> bool {
+        self.queue.lock().map(|q| !q.is_empty()).unwrap_or(false)
+    }
+
+    pub(crate) fn playback_position_ms(&self) -> u64 {
+        0
+    }
+
+    pub(crate) fn reset_playback_position(&self) {
+        self.clear();
+    }
+
+    pub(crate) fn seek_to_ms(&self, _position_ms: u64) {
+        self.clear();
+    }
+
+    pub(crate) fn playback_speed(&self) -> f64 {
+        1.0
+    }
+
+    pub(crate) fn set_playback_speed(&self, _speed: f64) {}
+}
+
+/// Encode a 16 kHz mono PCM buffer into a WAV blob suitable for upload to
+/// ElevenLabs STT. Used by voice_mode after a PTT release.
+pub(crate) fn encode_wav_for_voice_mode(pcm: &[i16]) -> Result<Vec<u8>, String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut buf: Vec<u8> = Vec::with_capacity(44 + pcm.len() * 2);
+    let cursor = std::io::Cursor::new(&mut buf);
+    let mut writer = hound::WavWriter::new(cursor, spec).map_err(|e| format!("hound init: {e}"))?;
+    for &sample in pcm {
+        writer
+            .write_sample(sample)
+            .map_err(|e| format!("hound write: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("hound finalize: {e}"))?;
+    Ok(buf)
 }
 
 /// Send-able view of the playback queue. Constructed via
