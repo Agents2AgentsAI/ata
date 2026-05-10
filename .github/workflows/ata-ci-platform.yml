@@ -370,7 +370,7 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
           echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
-          # The openai/codex `ptrcomp_sandbox_release` archive is built against
+          # The upstream Codex release `ptrcomp_sandbox_release` archive is built against
           # libc++ (`std::__1::*` symbols) on every platform, so route the v8
           # build script's link directive to libc++ instead of the per-target
           # default (libstdc++ on linux-gnu).
@@ -663,7 +663,7 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
           echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
-          # The openai/codex `ptrcomp_sandbox_release` archive is built against
+          # The upstream Codex release `ptrcomp_sandbox_release` archive is built against
           # libc++ (`std::__1::*` symbols) on every platform, so route the v8
           # build script's link directive to libc++ instead of the per-target
           # default (libstdc++ on linux-gnu).
