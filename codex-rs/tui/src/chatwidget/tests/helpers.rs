@@ -217,6 +217,7 @@ pub(super) async fn make_chatwidget_manual(
         adaptive_chunking: crate::streaming::chunking::AdaptiveChunkingPolicy::default(),
         stream_controller: None,
         plan_stream_controller: None,
+        #[cfg(not(target_os = "linux"))]
         tts: None,
         clipboard_lease: None,
         copy_last_response_binding: crate::keymap::RuntimeKeymap::defaults().app.copy,

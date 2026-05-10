@@ -2395,6 +2395,7 @@ version = "0.129.0"
 dependencies = [
  "async-channel",
  "async-trait",
+ "cc",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
@@ -4243,7 +4244,6 @@ dependencies = [
 name = "codex-v8-poc"
 version = "0.129.0"
 dependencies = [
- "cc",
  "pretty_assertions",
  "v8",
 ]
