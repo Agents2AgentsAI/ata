@@ -244,6 +244,7 @@ pub fn reindex_file(
 mod tests {
 
     use super::*;
+    use tempfile::tempdir;
 
     fn write_source(root: &Path, rel_path: &str, source: &str) {
         let abs = root.join(rel_path);

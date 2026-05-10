@@ -22,13 +22,23 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tree-sitter = { workspace = true }
-tree-sitter-go = { version = "0.25" }
-tree-sitter-java = { version = "0.23" }
-tree-sitter-javascript = { version = "0.25" }
-tree-sitter-python = { version = "0.25" }
-tree-sitter-rust = { version = "0.24" }
-tree-sitter-scala = { version = "0.24" }
-tree-sitter-typescript = { version = "0.23" }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-scala = { version = "0.24", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+
+[features]
+default = ["rust", "python", "typescript", "javascript", "go", "java", "scala"]
+rust = ["dep:tree-sitter-rust"]
+python = ["dep:tree-sitter-python"]
+typescript = ["dep:tree-sitter-typescript"]
+javascript = ["dep:tree-sitter-javascript"]
+go = ["dep:tree-sitter-go"]
+java = ["dep:tree-sitter-java"]
+scala = ["dep:tree-sitter-scala"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
