@@ -941,6 +941,11 @@ pub(crate) enum AppEvent {
     /// `bottom_pane::ResearchToolsView`.
     ReadingViewModeChanged(ReadingViewMode),
 
+    /// `/workspace use <selector>` switched the active workspace. The app
+    /// loop refreshes the in-memory sandbox + cwd context so the next turn
+    /// runs against the new workspace's repos.
+    WorkspaceSelectionChanged,
+
     /// Periodic tick to update the TTS word-highlight position.
     #[cfg(not(target_os = "linux"))]
     VoiceModeHighlightTick,

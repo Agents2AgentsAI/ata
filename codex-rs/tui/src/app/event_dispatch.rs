@@ -1780,6 +1780,22 @@ impl App {
             AppEvent::ReadingViewModeChanged(mode) => {
                 self.chat_widget.reading_view_mode = mode;
             }
+            AppEvent::WorkspaceSelectionChanged => {
+                // Full sandbox refresh after workspace selection (rebuilding
+                // the config + sandbox policy + sending OverrideTurnContext)
+                // requires several v0.129.0 helpers that aren't yet ported.
+                // The on-disk selection is already written by
+                // `chat_widget.select_workspace`; surface a hint so the user
+                // knows the next session will pick it up.
+                self.chat_widget.add_info_message(
+                    "Workspace selection saved.".to_string(),
+                    Some(
+                        "Restart the TUI for the new workspace's sandbox roots and cwd \
+                         to take effect."
+                            .to_string(),
+                    ),
+                );
+            }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeHighlightTick => {
                 self.chat_widget.on_voice_highlight_tick();

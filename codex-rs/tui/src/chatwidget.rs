@@ -10105,70 +10105,190 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    /// /workspace summary. Without args, surface the help text. With args,
-    /// dispatch to `codex_workspace::dispatch_to_string` and render the
-    /// captured output as an info message.
+    /// /workspace summary (no args). Lists the supported subcommands.
     pub(crate) fn add_workspace_summary(&mut self) {
         self.add_info_message(
-            "Workspace management is in the `ata workspace` CLI subcommand. \
-             Inline form: `/workspace <subcommand> [args]` (e.g. `/workspace list`, \
-             `/workspace select <selector>`)."
-                .to_string(),
-            Some("Try `/workspace help` to see all subcommands.".to_string()),
+            "Usage: /workspace [current|list|use <selector>]".to_string(),
+            Some(
+                "Run `ata workspace --help` for the full CLI surface (init, delete, audit, etc.)."
+                    .to_string(),
+            ),
         );
     }
 
-    /// Run `/workspace <args>` by reusing the `codex-workspace` clap CLI.
-    /// Output is captured and rendered as an info message in chat.
+    /// Dispatch `/workspace <verb> [args]` directly via the `codex-workspace`
+    /// crate APIs (no clap re-parsing, no stdout capture). Mirrors the
+    /// `codex-locus` implementation so behaviour stays identical to the
+    /// upstream-side TUI.
     pub(crate) fn run_workspace_slash_command(&mut self, args: &str) {
-        use clap::Parser as _;
-
         let trimmed = args.trim();
-        if trimmed.is_empty() || trimmed == "help" || trimmed == "--help" || trimmed == "-h" {
+        if trimmed.is_empty() {
             self.add_workspace_summary();
             return;
         }
 
-        // Parse `workspace <args>` using clap. We synthesise an argv that
-        // begins with "workspace" so clap treats `args` as subcommand input.
-        let mut argv = vec!["workspace".to_string()];
-        for piece in shlex::split(trimmed).unwrap_or_else(|| {
-            // Fallback: pass the raw string as a single argument so users get
-            // a clap error instead of silent dropping.
-            vec![trimmed.to_string()]
-        }) {
-            argv.push(piece);
-        }
-
-        let cli = match codex_workspace::Cli::try_parse_from(&argv) {
-            Ok(cli) => cli,
-            Err(err) => {
-                // clap renders both --help and error messages here.
-                self.add_info_message(err.to_string(), /*hint*/ None);
-                return;
-            }
+        let split_at = trimmed.find(char::is_whitespace);
+        let (verb, rest) = match split_at {
+            Some(index) => (&trimmed[..index], trimmed[index..].trim_start()),
+            None => (trimmed, ""),
         };
 
-        match codex_workspace::dispatch_to_string(cli) {
-            Ok((code, output)) => {
-                let trimmed_output = output.trim_end();
-                let body = if trimmed_output.is_empty() {
-                    if code == 0 {
-                        "Workspace command completed.".to_string()
-                    } else {
-                        format!("Workspace command exited with status {code}.")
-                    }
-                } else if code == 0 {
-                    trimmed_output.to_string()
-                } else {
-                    format!("{trimmed_output}\n(exit status {code})")
-                };
-                self.add_info_message(body, /*hint*/ None);
+        match verb.to_ascii_lowercase().as_str() {
+            "current" | "show" | "status" if rest.is_empty() => {
+                self.show_current_workspace();
             }
-            Err(err) => {
-                self.add_error_message(format!("/workspace: {err}"));
+            "list" if rest.is_empty() => {
+                self.show_workspace_list();
+            }
+            "use" | "select" if !rest.is_empty() => {
+                self.select_workspace(rest);
+            }
+            _ => {
+                self.add_error_message(
+                    "Usage: /workspace [current|list|use <selector>]".to_string(),
+                );
             }
         }
+    }
+
+    fn show_current_workspace(&mut self) {
+        match self.effective_workspace_summary() {
+            Ok(summary) => {
+                let repo_label = if summary.repo_count == 1 {
+                    "1 repo".to_string()
+                } else {
+                    format!("{} repos", summary.repo_count)
+                };
+                let message = if summary.name.is_empty() {
+                    format!("Current workspace: {} ({repo_label})", summary.id)
+                } else {
+                    format!(
+                        "Current workspace: {} ({}, {repo_label})",
+                        summary.id, summary.name
+                    )
+                };
+                self.add_info_message(
+                    message,
+                    Some("Use /workspace list or /workspace use <selector>.".to_string()),
+                );
+            }
+            Err(err) => self.add_error_message(err.to_string()),
+        }
+    }
+
+    fn show_workspace_list(&mut self) {
+        let current_workspace_id = self
+            .effective_workspace_summary()
+            .ok()
+            .map(|summary| summary.id);
+
+        match codex_workspace::commands::list::run_for(self.config.codex_home.as_path()) {
+            Ok(workspaces) if workspaces.is_empty() => {
+                self.add_info_message("No workspaces found.".to_string(), None);
+            }
+            Ok(workspaces) => {
+                use ratatui::style::Stylize as _;
+                use ratatui::text::Line;
+                let mut lines: Vec<Line<'static>> = vec![
+                    vec![
+                        "• ".dim(),
+                        format!("Workspaces ({})", workspaces.len()).into(),
+                    ]
+                    .into(),
+                ];
+                for workspace in workspaces {
+                    let mut line = vec!["  ".into(), workspace.id.clone().cyan()];
+                    if !workspace.name.is_empty() {
+                        line.push("  ".into());
+                        line.push(workspace.name.clone().into());
+                    }
+                    line.push("  ".into());
+                    line.push(
+                        format!(
+                            "{} repo{}",
+                            workspace.repo_count,
+                            if workspace.repo_count == 1 { "" } else { "s" }
+                        )
+                        .dark_gray(),
+                    );
+                    if current_workspace_id.as_deref() == Some(workspace.id.as_str()) {
+                        line.push("  ".into());
+                        line.push("current".green());
+                    }
+                    lines.push(Line::from(line));
+                }
+                self.add_plain_history_lines(lines);
+            }
+            Err(err) => self.add_error_message(err.to_string()),
+        }
+    }
+
+    fn select_workspace(&mut self, selector: &str) {
+        let scope_id = self.thread_id.map(|thread_id| thread_id.to_string());
+        let result = codex_workspace::workspace_resolution::resolve_workspace_selector_for(
+            self.config.codex_home.as_path(),
+            selector,
+        )
+        .and_then(|workspace_id| {
+            codex_workspace::selection::write_selection_for(
+                self.config.codex_home.as_path(),
+                &workspace_id,
+                None,
+                scope_id.as_deref(),
+            )?;
+            Ok(workspace_id)
+        });
+
+        match result {
+            Ok(workspace_id) => {
+                self.app_event_tx.send(AppEvent::WorkspaceSelectionChanged);
+                match codex_workspace::manifest::read_manifest_for(
+                    self.config.codex_home.as_path(),
+                    &workspace_id,
+                ) {
+                    Ok(manifest) => {
+                        let repo_label = if manifest.repos.len() == 1 {
+                            "1 repo".to_string()
+                        } else {
+                            format!("{} repos", manifest.repos.len())
+                        };
+                        self.add_info_message(
+                            format!(
+                                "Selected workspace: {} ({}, {repo_label})",
+                                manifest.id, manifest.name
+                            ),
+                            None,
+                        );
+                    }
+                    Err(err) => self.add_error_message(err.to_string()),
+                }
+            }
+            Err(err) => self.add_error_message(err.to_string()),
+        }
+    }
+
+    fn effective_workspace_summary(
+        &self,
+    ) -> Result<codex_workspace::types::WorkspaceSummary, codex_workspace::error::WorkspaceError>
+    {
+        let thread_id = self.thread_id.map(|thread_id| thread_id.to_string());
+        let workspace_id = codex_workspace::workspace_resolution::resolve_workspace_for(
+            self.config.codex_home.as_path(),
+            Some(self.config.cwd.as_path()),
+            None,
+            None,
+            thread_id.as_deref(),
+        )?;
+        let manifest = codex_workspace::manifest::read_manifest_for(
+            self.config.codex_home.as_path(),
+            &workspace_id,
+        )?;
+        Ok(codex_workspace::types::WorkspaceSummary {
+            id: manifest.id,
+            name: manifest.name,
+            updated_at: manifest.updated_at,
+            repo_count: manifest.repos.len(),
+        })
     }
 
     /// /jobs summary. Scheduled-job management lives in `ata jobs` and
