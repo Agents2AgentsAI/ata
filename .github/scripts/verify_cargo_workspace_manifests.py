@@ -28,8 +28,30 @@ UTILITY_NAME_EXCEPTIONS = {
 MANIFEST_FEATURE_EXCEPTIONS = {
     "codex-rs/code-mode/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
     "codex-rs/v8-poc/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
+    # ATA: codex-treesitter ships with seven `tree-sitter-<lang>` deps gated
+    # behind per-language features so a consumer can opt out of dialects it
+    # doesn't need. This matches the upstream layout in codex-locus.
+    "codex-rs/treesitter/Cargo.toml": {
+        "default": ("rust", "python", "typescript", "javascript", "go", "java", "scala"),
+        "rust": ("dep:tree-sitter-rust",),
+        "python": ("dep:tree-sitter-python",),
+        "typescript": ("dep:tree-sitter-typescript",),
+        "javascript": ("dep:tree-sitter-javascript",),
+        "go": ("dep:tree-sitter-go",),
+        "java": ("dep:tree-sitter-java",),
+        "scala": ("dep:tree-sitter-scala",),
+    },
 }
-OPTIONAL_DEPENDENCY_EXCEPTIONS = set()
+OPTIONAL_DEPENDENCY_EXCEPTIONS = {
+    # ATA: paired with the per-language feature gates above.
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-go"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-java"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-javascript"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-python"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-rust"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-scala"),
+    ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-typescript"),
+}
 INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 
 
