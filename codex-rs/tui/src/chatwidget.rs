@@ -1057,12 +1057,17 @@ pub(crate) struct ChatWidget {
     // ─── ATA voice-mode state (gated to non-Linux) ──────────────────────
     #[cfg(not(target_os = "linux"))]
     pub(crate) voice_mode_state: Option<voice_mode::VoiceModeState>,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) cached_elevenlabs_api_key: Option<String>,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) cached_elevenlabs_language: Option<Option<String>>,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) cached_elevenlabs_speed: Option<f64>,
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) pending_voice_startup_cells: Vec<Box<dyn HistoryCell>>,
 
     // Auth manager kept for ATA Supabase JWT lookup. Constructed in `new`.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) auth_manager: Arc<crate::legacy_core::AuthManager>,
 }
 
@@ -5641,6 +5646,7 @@ impl ChatWidget {
     /// Drain any cells the voice-mode pipeline buffered while waiting for
     /// TTS to start (so they appear in the transcript only after the audio
     /// is actually rolling). Called by voice_mode at appropriate transitions.
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn flush_deferred_voice_cells(&mut self) {
         let deferred = std::mem::take(&mut self.pending_voice_startup_cells);
         for cell in deferred {
@@ -11572,6 +11578,7 @@ pub(crate) mod voice_mode;
 // On Linux we keep no-op stubs so `app/event_dispatch.rs` compiles; the
 // real voice-mode methods live in `voice_mode.rs` (gated on non-Linux).
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 impl ChatWidget {
     pub(crate) fn on_voice_highlight_tick(&mut self) {}
     pub(crate) fn on_voice_transcription_complete(&mut self, _text: String) {}
