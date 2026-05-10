@@ -1228,7 +1228,7 @@ async fn replaces_invalid_local_image_after_bad_request() -> anyhow::Result<()> 
         .await?;
 
     wait_for_event_with_timeout(
-        &codex,
+        codex,
         |event| matches!(event, EventMsg::TurnComplete(_)),
         VIEW_IMAGE_TURN_COMPLETE_TIMEOUT,
     )
