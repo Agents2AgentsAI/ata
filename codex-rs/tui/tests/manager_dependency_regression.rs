@@ -45,19 +45,14 @@ fn tui_runtime_source_does_not_depend_on_manager_escape_hatches() {
     // module. These files are exempt from the architectural lint because
     // their callers are TUI features (voice mode, document_reader) layered
     // on top of an upstream that has already moved past the legacy managers.
-    let allowlist: &[&str] = &[
-        "chatwidget.rs",
-        "chatwidget/voice_mode.rs",
-    ];
+    let allowlist: &[&str] = &["chatwidget.rs", "chatwidget/voice_mode.rs"];
 
     let violations: Vec<String> = sources
         .iter()
         .filter(|path| {
-            !allowlist.iter().any(|suffix| {
-                path.to_string_lossy()
-                    .replace('\\', "/")
-                    .ends_with(suffix)
-            })
+            !allowlist
+                .iter()
+                .any(|suffix| path.to_string_lossy().replace('\\', "/").ends_with(suffix))
         })
         .flat_map(|path| {
             let contents = fs::read_to_string(path)
