@@ -5,6 +5,7 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+use crate::chatwidget::UserMessage;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -1765,6 +1766,72 @@ impl App {
             } => {
                 self.chat_widget
                     .submit_user_message_with_mode(text, collaboration_mode);
+            }
+            AppEvent::SubmitUserText { text } => {
+                self.chat_widget
+                    .submit_user_message(UserMessage::from_text(text));
+            }
+            AppEvent::ReadingViewServerStarted(server) => {
+                self.chat_widget.set_reading_view_server(server);
+            }
+            AppEvent::ReadingViewBrowserMessage(msg) => {
+                self.chat_widget.handle_reading_view_browser_message(msg);
+            }
+            AppEvent::ReadingViewModeChanged(mode) => {
+                self.chat_widget.set_reading_view_mode(mode);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeHighlightTick => {
+                self.chat_widget.voice_mode_highlight_tick();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionComplete { text } => {
+                self.chat_widget.voice_mode_transcription_complete(text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionFailed { error } => {
+                self.chat_widget.voice_mode_transcription_failed(error);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeInterruptTts => {
+                self.chat_widget.voice_mode_interrupt_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePauseTts => {
+                self.chat_widget.voice_mode_pause_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeResumeTts => {
+                self.chat_widget.voice_mode_resume_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePlaybackSpeedChange { delta } => {
+                self.chat_widget.voice_mode_playback_speed_change(delta);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeNarrateSection {
+                document_id,
+                section_index,
+                text,
+                selection_word_offset,
+                manual,
+            } => {
+                self.chat_widget.voice_mode_narrate_section(
+                    document_id,
+                    section_index,
+                    text,
+                    selection_word_offset,
+                    manual,
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePrefetchSection {
+                document_id,
+                section_index,
+                text,
+            } => {
+                self.chat_widget
+                    .voice_mode_prefetch_section(document_id, section_index, text);
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

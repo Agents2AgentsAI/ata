@@ -120,6 +120,13 @@ pub mod legacy_core {
     pub mod windows_sandbox {
         pub use codex_core::windows_sandbox::*;
     }
+
+    // Reading-view types are re-exported at the top of `codex_core` (the
+    // underlying `tools` module is private). Forward them here for ATA's
+    // document_reader UI + voice_mode.
+    pub use codex_core::ReadingViewDisplayMode;
+    pub use codex_core::reading_view_section_follow_up_guidance;
+    pub use codex_core::reading_view_selection_follow_up_guidance;
 }
 
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);

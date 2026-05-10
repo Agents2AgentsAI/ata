@@ -3931,6 +3931,7 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
+ "codex-reading-view-server",
  "codex-realtime-webrtc",
  "codex-rollout",
  "codex-shell-command",

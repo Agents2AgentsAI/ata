@@ -91,6 +91,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 pub(crate) mod custom_prompt_view;
+pub(crate) mod document_reader;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;

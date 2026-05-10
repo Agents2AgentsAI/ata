@@ -168,6 +168,12 @@ pub use state_db_bridge::StateDbHandle;
 pub use state_db_bridge::init_state_db;
 mod thread_rollout_truncation;
 mod tools;
+// Re-export the few `tools::handlers::document_reader` items consumed by the
+// ATA reading-view UI in `codex-tui` via the `app-server-client::legacy_core`
+// shim. Keeping this list explicit avoids exposing the full `tools` module.
+pub use tools::handlers::document_reader::ReadingViewDisplayMode;
+pub use tools::handlers::document_reader::reading_view_section_follow_up_guidance;
+pub use tools::handlers::document_reader::reading_view_selection_follow_up_guidance;
 pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;

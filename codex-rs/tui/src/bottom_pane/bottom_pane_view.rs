@@ -4,8 +4,22 @@ use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
+#[cfg(not(target_os = "linux"))]
+use ratatui::text::Line;
 
 use super::CancellationEvent;
+
+/// Voice mode narration context surfaced by reading-view-style overlays.
+/// Used by voice_mode to know what to read aloud and where to anchor karaoke.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone)]
+pub(crate) struct ReadingViewVoiceContext {
+    pub(crate) title: String,
+    pub(crate) document_id: String,
+    pub(crate) section_index: usize,
+    pub(crate) heading: String,
+    pub(crate) selection: Option<String>,
+}
 
 /// Reason an active bottom-pane view finished.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -134,5 +148,106 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Return the next time-based redraw this view needs while it is active.
     fn next_frame_delay(&self) -> Option<std::time::Duration> {
         None
+    }
+
+    // ─── ATA reading-view + voice integration hooks ───────────────────────
+    // Default implementations let regular views ignore these. The reading
+    // view overlay overrides them.
+
+    /// If this view just closed and represents a document reader, return the
+    /// document id so the host can release any cached state for it.
+    fn closed_document_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether the view's composer (if any) currently owns focus. Used by
+    /// chatwidget to decide whether keystrokes should be routed to the view's
+    /// internal composer or trigger global actions.
+    #[cfg(not(target_os = "linux"))]
+    fn is_composer_focused(&self) -> bool {
+        false
+    }
+
+    /// Apply a `update_document_section` tool result to the view if it owns
+    /// the matching document.
+    fn handle_document_section_update(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _content: String,
+    ) {
+    }
+
+    /// Apply an `append_to_section` tool result to the view if it owns the
+    /// matching document.
+    fn handle_document_section_append(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _content: String,
+        _foldable: bool,
+        _summary: Option<String>,
+    ) {
+    }
+
+    /// Apply an `add_document_section` tool result to the view if it owns the
+    /// matching document.
+    fn handle_document_section_add(
+        &mut self,
+        _document_id: &str,
+        _after_section_index: i32,
+        _heading: String,
+        _content: String,
+        _foldable: bool,
+        _summary: Option<String>,
+    ) {
+    }
+
+    /// Apply a `patch_document_section` tool result to the view if it owns
+    /// the matching document.
+    fn handle_document_section_patch(
+        &mut self,
+        _document_id: &str,
+        _section_index: usize,
+        _old_text: &str,
+        _new_text: &str,
+        _foldable: bool,
+        _summary: Option<String>,
+    ) {
+    }
+
+    /// Notify the view that the agent's turn finished, regardless of how it
+    /// ended. The reading view uses this to clear pending-section markers if
+    /// the agent never called an update tool.
+    fn handle_turn_complete(&mut self) {}
+
+    /// Voice-mode integration hooks. Reading-view overlays override these to
+    /// participate in voice narration; everything else gets a no-op.
+    #[cfg(not(target_os = "linux"))]
+    fn voice_context(&self) -> Option<ReadingViewVoiceContext> {
+        None
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_voice_status(&mut self, _status: Option<String>) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_tts_flash_msg(&mut self, _msg: Option<String>) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_voice_tts_paused(&mut self, _paused: bool) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_pending_voice_question(&mut self, _section: usize, _question: String) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_voice_karaoke_lines(&mut self, _lines: Option<Vec<Line<'static>>>, _append: bool) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn set_voice_reading_progress(
+        &mut self,
+        _word_idx: Option<usize>,
+        _heading_words_to_skip: usize,
+    ) {
     }
 }

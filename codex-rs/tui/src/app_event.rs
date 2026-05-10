@@ -817,6 +817,13 @@ pub(crate) enum AppEvent {
         collaboration_mode: CollaborationModeMask,
     },
 
+    /// Submit a plain text user message using the active collaboration mode.
+    /// Used by overlays (document reader, voice mode) that don't track an
+    /// explicit mode.
+    SubmitUserText {
+        text: String,
+    },
+
     /// Open the approval popup.
     FullScreenApprovalRequest(ApprovalRequest),
 
@@ -922,6 +929,71 @@ pub(crate) enum AppEvent {
         context: String,
         action: String,
     },
+
+    // ─── Reading view + voice mode (ATA features) ──────────────────────
+    /// The reading-view HTTP server finished starting up.
+    ReadingViewServerStarted(codex_reading_view_server::ReadingViewServer),
+    /// A message received from a browser WebSocket client connected to the
+    /// reading-view server (e.g. follow-up question, read-aloud request).
+    ReadingViewBrowserMessage(String),
+    /// The user changed the reading view mode via the setup popup.
+    ReadingViewModeChanged(ReadingViewMode),
+
+    /// Periodic tick to update the TTS word-highlight position.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeHighlightTick,
+    /// Voice mode STT transcription completed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionComplete {
+        text: String,
+    },
+    /// Voice mode STT transcription failed.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeTranscriptionFailed {
+        error: String,
+    },
+    /// Interrupt TTS playback.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeInterruptTts,
+    /// Pause TTS playback.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePauseTts,
+    /// Resume TTS playback after pause.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeResumeTts,
+    /// Change client-side TTS playback speed by a delta (e.g. +0.1 or -0.1).
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePlaybackSpeedChange {
+        delta: f64,
+    },
+    /// Auto-narrate a reading view section via TTS when voice mode is active.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModeNarrateSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
+        selection_word_offset: Option<usize>,
+        manual: bool,
+    },
+    /// Pre-generate TTS audio for an adjacent section in the background.
+    #[cfg(not(target_os = "linux"))]
+    VoiceModePrefetchSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
+    },
+}
+
+/// Reading view display mode, chosen via the `/reading-view` setup popup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ReadingViewMode {
+    /// Built-in terminal reader (default).
+    #[default]
+    Tui,
+    /// Opens in browser with rich HTML rendering.
+    Browser,
+    /// No reading view — content stays in chat.
+    Disabled,
 }
 
 #[derive(Debug)]

@@ -1085,6 +1085,21 @@ pub(crate) struct UserMessage {
     mention_bindings: Vec<MentionBinding>,
 }
 
+impl UserMessage {
+    /// Build a plain-text user message with no attachments. Used by overlays
+    /// (document reader, voice mode) that submit a simple text turn through
+    /// `AppEvent::SubmitUserText`.
+    pub(crate) fn from_text(text: String) -> Self {
+        Self {
+            text,
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum UserMessageHistoryRecord {
     UserMessageText,
@@ -5641,7 +5656,7 @@ impl ChatWidget {
         }
     }
 
-    fn submit_user_message(&mut self, user_message: UserMessage) {
+    pub(crate) fn submit_user_message(&mut self, user_message: UserMessage) {
         let _accepted = self.submit_user_message_with_history_record(
             user_message,
             UserMessageHistoryRecord::UserMessageText,
@@ -11277,3 +11292,48 @@ pub(crate) fn show_review_commit_picker_with_entries(
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+// ─── ATA reading-view + voice-mode integration stubs ────────────────────────
+// The reading-view / voice-mode UX from `main` is being ported in stages. To
+// keep the v0.129.0 merge branch green, we expose the dispatcher entry points
+// here as no-op stubs. The real implementations land alongside the
+// `chatwidget/voice_mode.rs` module port; until then these stubs let
+// `app/event_dispatch.rs` and `chatwidget_document_reader.rs` compile.
+impl ChatWidget {
+    pub(crate) fn set_reading_view_server(
+        &mut self,
+        _server: codex_reading_view_server::ReadingViewServer,
+    ) {
+    }
+
+    pub(crate) fn handle_reading_view_browser_message(&mut self, _msg: String) {}
+
+    pub(crate) fn set_reading_view_mode(&mut self, _mode: crate::app_event::ReadingViewMode) {}
+}
+
+#[cfg(not(target_os = "linux"))]
+impl ChatWidget {
+    pub(crate) fn voice_mode_highlight_tick(&mut self) {}
+    pub(crate) fn voice_mode_transcription_complete(&mut self, _text: String) {}
+    pub(crate) fn voice_mode_transcription_failed(&mut self, _error: String) {}
+    pub(crate) fn voice_mode_interrupt_tts(&mut self) {}
+    pub(crate) fn voice_mode_pause_tts(&mut self) {}
+    pub(crate) fn voice_mode_resume_tts(&mut self) {}
+    pub(crate) fn voice_mode_playback_speed_change(&mut self, _delta: f64) {}
+    pub(crate) fn voice_mode_narrate_section(
+        &mut self,
+        _document_id: String,
+        _section_index: usize,
+        _text: String,
+        _selection_word_offset: Option<usize>,
+        _manual: bool,
+    ) {
+    }
+    pub(crate) fn voice_mode_prefetch_section(
+        &mut self,
+        _document_id: String,
+        _section_index: usize,
+        _text: String,
+    ) {
+    }
+}
