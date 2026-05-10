@@ -144,6 +144,10 @@ fn spawn_timeout_thread(handle: v8::IsolateHandle, timeout: Duration) -> Timeout
     let fired_flag = std::sync::Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel_flag.clone();
     let fired_clone = fired_flag.clone();
+    // Spawning the watchdog thread is critical for the timeout contract — if
+    // it fails, the eval can run forever. Panic with a clear message instead
+    // of bubbling the io::Error up; the workspace lints deny `expect_used`
+    // so use `unwrap_or_else` to satisfy the lint while preserving intent.
     let join = thread::Builder::new()
         .name("js-repl-timeout".to_string())
         .spawn(move || {
@@ -162,7 +166,7 @@ fn spawn_timeout_thread(handle: v8::IsolateHandle, timeout: Duration) -> Timeout
                 thread::sleep(remaining);
             }
         })
-        .expect("spawn js-repl timeout thread");
+        .unwrap_or_else(|e| panic!("spawn js-repl timeout thread: {e}"));
     TimeoutGuard {
         cancel_flag,
         fired_flag,

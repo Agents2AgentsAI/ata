@@ -152,28 +152,33 @@ impl RateLimiter {
                     api: bucket.error_api(),
                 })?;
 
-            let mut window = limiter.window.lock().await;
-            let now = Instant::now();
-            while let Some(oldest) = window.front() {
-                if now.duration_since(*oldest) >= limiter.rule.per {
-                    window.pop_front();
-                } else {
-                    break;
+            // Compute wait_for inside a block so the MutexGuard is dropped
+            // before the `tokio::time::sleep` await below — the
+            // `await_holding_invalid_type` clippy lint is scope-based and
+            // doesn't recognise an explicit `drop(window)` further down.
+            let wait_for = {
+                let mut window = limiter.window.lock().await;
+                let now = Instant::now();
+                while let Some(oldest) = window.front() {
+                    if now.duration_since(*oldest) >= limiter.rule.per {
+                        window.pop_front();
+                    } else {
+                        break;
+                    }
                 }
-            }
 
-            if window.len() < limiter.rule.max_requests as usize {
-                window.push_back(now);
-                return Ok(RateLimitPermit::Limited(permit));
-            }
+                if window.len() < limiter.rule.max_requests as usize {
+                    window.push_back(now);
+                    return Ok(RateLimitPermit::Limited(permit));
+                }
 
-            let wait_for = if let Some(oldest) = window.front().copied() {
-                limiter.rule.per.saturating_sub(now.duration_since(oldest))
-            } else {
-                Duration::from_millis(1)
+                if let Some(oldest) = window.front().copied() {
+                    limiter.rule.per.saturating_sub(now.duration_since(oldest))
+                } else {
+                    Duration::from_millis(1)
+                }
             };
 
-            drop(window);
             drop(permit);
             tokio::time::sleep(wait_for).await;
         }

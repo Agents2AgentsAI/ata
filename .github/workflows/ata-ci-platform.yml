@@ -625,6 +625,30 @@ jobs:
           # links many Windows test binaries in parallel.
           echo "CARGO_PROFILE_CI_TEST_DEBUG=0" >> "$GITHUB_ENV"
 
+      - name: Configure rusty_v8 artifact overrides
+        # Same as the Lint/Build job: v8 v147+ defaults to the
+        # `ptrcomp_sandbox` build variant, which `denoland/rusty_v8` does not
+        # ship. Point the v8 build script at the upstream Codex release for
+        # every target so the test build doesn't try to download the missing
+        # archive from denoland.
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive_name="librusty_v8_ptrcomp_sandbox_release_${TARGET}.a.gz"
+          binding_name="src_binding_ptrcomp_sandbox_release_${TARGET}.rs"
+          archive="${base_url}/${archive_name}"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/${binding_name}"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
