@@ -2396,6 +2396,7 @@ dependencies = [
  "async-channel",
  "async-trait",
  "codex-protocol",
+ "codex-v8-shim",
  "deno_core_icudata",
  "pretty_assertions",
  "serde",
@@ -4243,9 +4244,14 @@ dependencies = [
 name = "codex-v8-poc"
 version = "0.129.0"
 dependencies = [
+ "codex-v8-shim",
  "pretty_assertions",
  "v8",
 ]
+
+[[package]]
+name = "codex-v8-shim"
+version = "0.129.0"
 
 [[package]]
 name = "codex-windows-sandbox"

@@ -1,0 +1,13 @@
+[package]
+name = "codex-v8-shim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+name = "codex_v8_shim"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

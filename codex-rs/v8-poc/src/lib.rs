@@ -9,6 +9,11 @@
 //! Future work: per-session persistent isolate with explicit `clear`. Today
 //! the trade-off prefers safety + simplicity over Node-style REPL semantics.
 
+// Force-link the v8 shim so its `__hash_memory` symbol is present in every
+// binary that pulls in libv8 on Linux.
+#[cfg(target_os = "linux")]
+extern crate codex_v8_shim as _;
+
 use std::sync::Once;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;

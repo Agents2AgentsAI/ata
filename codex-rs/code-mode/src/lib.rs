@@ -1,9 +1,14 @@
 mod description;
-#[cfg(target_os = "linux")]
-mod hash_memory_shim;
 mod response;
 mod runtime;
 mod service;
+
+// Force a strong reference to the v8 shim crate so its `__hash_memory`
+// symbol shows up in every binary that links libv8 on Linux. Without this
+// `extern crate`, rustc may drop the rlib if no symbol is referenced from
+// our own code, and the linker is left with the unresolved C++ name.
+#[cfg(target_os = "linux")]
+extern crate codex_v8_shim as _;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
