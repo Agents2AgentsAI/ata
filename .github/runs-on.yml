@@ -24,14 +24,13 @@ runners:
   ci-linux-arm64:
     image: ubuntu24-full-arm64
     family: ["c7g", "m7g"]
-    cpu: [8, 16]
-    # Pin to the larger 64 GB variant. ATA's `--all-features` Tests step
-    # compiles `codex-app-server`, `codex-tui`, `codex-core`, and several
-    # extra crates (v8-poc impl, elevenlabs, realtime-webrtc, voice +
-    # audio_device modules) on top of upstream, and the 32 GB tier was
-    # repeatedly losing the runner mid-build with `runner has received
-    # a shutdown signal`. 64 GB removes the OOM headroom problem.
-    ram: [64]
+    # Use `*.4xlarge` (16 vCPU + 64 GB) explicitly. The previous
+    # `cpu: [8, 16] / ram: [64]` spec was being satisfied by `m7g.xlarge`
+    # (4 vCPU + 16 GB) on us-east-1c, which is well under the 32 GB
+    # ATA's `--all-features` build needs (the runner gets killed
+    # mid-compile with `runner has received a shutdown signal`).
+    cpu: 16
+    ram: 64
     spot: false
     # Re-arm if the AWS instance is interrupted (rare but seen on c7g
     # spot fallbacks during long compiles).
@@ -40,14 +39,12 @@ runners:
   ci-windows-x64:
     image: windows25-vstoolchain-x64
     family: ["c7i", "m7i"]
-    cpu: [8, 16]
-    # Pin to the larger 64 GB variant. ATA registers extra crates
-    # (`codex-v8-poc`, `codex-elevenlabs`, `codex-realtime-webrtc`,
-    # voice/audio_device modules, …) that push the `--all-features` MSVC
-    # ci-test compile past the 32 GB ceiling and trigger
-    # `memory allocation failed` from rustc/`DroplessArena::grow`.
-    # 64 GB removes the OOM headroom problem.
-    ram: [64]
+    # Use `*.4xlarge` (16 vCPU + 64 GB) explicitly. `cpu: [8, 16] /
+    # ram: [64]` was being satisfied by `m7i-flex.xlarge`
+    # (4 vCPU + 16 GB), which OOMs during the MSVC `--all-features`
+    # ci-test compile of `codex-app-server`.
+    cpu: 16
+    ram: 64
     # On-demand instead of spot. Spot interruptions during the long
     # MSVC ci-test compile have repeatedly killed the runner mid-step
     # without recovery (the workload is 12+ minutes and `retry:
