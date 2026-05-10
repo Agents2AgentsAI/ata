@@ -86,6 +86,7 @@ mod app_server_approval_conversions;
 mod app_server_session;
 mod approval_events;
 mod ascii_animation;
+#[cfg(not(target_os = "linux"))]
 mod audio_device;
 mod bottom_pane;
 mod branch_summary;
@@ -173,6 +174,7 @@ mod update_versions;
 mod updates;
 mod vad;
 mod version;
+#[cfg(not(target_os = "linux"))]
 mod voice;
 mod width;
 mod workspace_command;
