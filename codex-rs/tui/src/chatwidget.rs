@@ -11298,7 +11298,7 @@ pub(crate) mod tests;
 // keep the v0.129.0 merge branch green, we expose the dispatcher entry points
 // here as no-op stubs. The real implementations land alongside the
 // `chatwidget/voice_mode.rs` module port; until then these stubs let
-// `app/event_dispatch.rs` and `chatwidget_document_reader.rs` compile.
+// `app/event_dispatch.rs` compile.
 impl ChatWidget {
     pub(crate) fn set_reading_view_server(
         &mut self,
@@ -11313,14 +11313,14 @@ impl ChatWidget {
 
 #[cfg(not(target_os = "linux"))]
 impl ChatWidget {
-    pub(crate) fn voice_mode_highlight_tick(&mut self) {}
-    pub(crate) fn voice_mode_transcription_complete(&mut self, _text: String) {}
-    pub(crate) fn voice_mode_transcription_failed(&mut self, _error: String) {}
-    pub(crate) fn voice_mode_interrupt_tts(&mut self) {}
-    pub(crate) fn voice_mode_pause_tts(&mut self) {}
-    pub(crate) fn voice_mode_resume_tts(&mut self) {}
-    pub(crate) fn voice_mode_playback_speed_change(&mut self, _delta: f64) {}
-    pub(crate) fn voice_mode_narrate_section(
+    pub(crate) fn on_voice_highlight_tick(&mut self) {}
+    pub(crate) fn on_voice_transcription_complete(&mut self, _text: String) {}
+    pub(crate) fn on_voice_transcription_failed(&mut self, _error: String) {}
+    pub(crate) fn on_voice_interrupt_tts(&mut self) {}
+    pub(crate) fn on_voice_pause_tts(&mut self) {}
+    pub(crate) fn on_voice_resume_tts(&mut self) {}
+    pub(crate) fn on_voice_playback_speed_change(&mut self, _delta: f64) {}
+    pub(crate) fn on_voice_narrate_section(
         &mut self,
         _document_id: String,
         _section_index: usize,
@@ -11329,7 +11329,7 @@ impl ChatWidget {
         _manual: bool,
     ) {
     }
-    pub(crate) fn voice_mode_prefetch_section(
+    pub(crate) fn on_voice_prefetch_section(
         &mut self,
         _document_id: String,
         _section_index: usize,

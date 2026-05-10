@@ -1782,31 +1782,31 @@ impl App {
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeHighlightTick => {
-                self.chat_widget.voice_mode_highlight_tick();
+                self.chat_widget.on_voice_highlight_tick();
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeTranscriptionComplete { text } => {
-                self.chat_widget.voice_mode_transcription_complete(text);
+                self.chat_widget.on_voice_transcription_complete(text);
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeTranscriptionFailed { error } => {
-                self.chat_widget.voice_mode_transcription_failed(error);
+                self.chat_widget.on_voice_transcription_failed(error);
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeInterruptTts => {
-                self.chat_widget.voice_mode_interrupt_tts();
+                self.chat_widget.on_voice_interrupt_tts();
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePauseTts => {
-                self.chat_widget.voice_mode_pause_tts();
+                self.chat_widget.on_voice_pause_tts();
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeResumeTts => {
-                self.chat_widget.voice_mode_resume_tts();
+                self.chat_widget.on_voice_resume_tts();
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePlaybackSpeedChange { delta } => {
-                self.chat_widget.voice_mode_playback_speed_change(delta);
+                self.chat_widget.on_voice_playback_speed_change(delta);
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeNarrateSection {
@@ -1816,7 +1816,7 @@ impl App {
                 selection_word_offset,
                 manual,
             } => {
-                self.chat_widget.voice_mode_narrate_section(
+                self.chat_widget.on_voice_narrate_section(
                     document_id,
                     section_index,
                     text,
@@ -1831,7 +1831,7 @@ impl App {
                 text,
             } => {
                 self.chat_widget
-                    .voice_mode_prefetch_section(document_id, section_index, text);
+                    .on_voice_prefetch_section(document_id, section_index, text);
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();

@@ -52,3 +52,51 @@ pub enum RelayMode {
         relay_url: String,
     },
 }
+
+// ─── Voice Mode ──────────────────────────────────────────────────────────────
+
+/// Controls how much the agent narrates aloud via `<voice>` tags.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceVerbosity {
+    /// Only the final answer/summary is spoken aloud.
+    #[default]
+    Concise,
+    /// Intermediate progress updates and final answer are spoken aloud.
+    Verbose,
+}
+
+/// Output mode for the voice mode pipeline.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceOutput {
+    /// Only play TTS audio, suppress text streaming.
+    Voice,
+    /// Only show text, no TTS playback.
+    Text,
+    /// Show text AND play TTS audio (default).
+    #[default]
+    Both,
+}
+
+/// Voice mode configuration nested under `[voice_mode]` in config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct VoiceModeToml {
+    /// When true, voice mode is automatically enabled on startup.
+    pub enabled: Option<bool>,
+    /// Controls what output is produced: "voice", "text", or "both".
+    #[serde(default)]
+    pub output: Option<VoiceOutput>,
+    /// When true, transcribed speech is auto-submitted to the agent.
+    pub auto_submit: Option<bool>,
+    /// RMS energy threshold for voice activity detection (0.0–1.0).
+    pub vad_threshold: Option<f64>,
+    /// Milliseconds of silence before a recording is finalized.
+    pub silence_duration_ms: Option<u64>,
+    /// When false, TTS (text-to-speech) is disabled even when voice mode is on.
+    pub tts_enabled: Option<bool>,
+    /// When false, STT is disabled even when voice mode is on.
+    pub stt_enabled: Option<bool>,
+    /// Controls how much the agent narrates: "concise" or "verbose".
+    pub verbosity: Option<VoiceVerbosity>,
+}
