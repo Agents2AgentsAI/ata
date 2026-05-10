@@ -10,7 +10,6 @@
 // v8 uses it for internal unordered_map buckets — so a small FNV-1a is
 // sufficient.
 
-#![cfg(target_os = "linux")]
 #![allow(non_snake_case)]
 
 #[unsafe(no_mangle)]
