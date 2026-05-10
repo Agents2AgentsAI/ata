@@ -86,7 +86,9 @@ impl AccountView {
             }
         } else {
             match crate::legacy_core::supabase::load_ata_session(&codex_home) {
-                Ok(Some(session)) if !crate::legacy_core::supabase::is_session_expired(&session) => {
+                Ok(Some(session))
+                    if !crate::legacy_core::supabase::is_session_expired(&session) =>
+                {
                     AtaLoginStep::AlreadySigned {
                         email: session.user.email,
                     }
@@ -151,7 +153,9 @@ impl AccountView {
             let auth = crate::legacy_core::supabase::SupabaseAuth::new(client);
             match auth.exchange_code_for_session(&email, &otp).await {
                 Ok(session) => {
-                    if let Err(e) = crate::legacy_core::supabase::save_ata_session(&codex_home, &session) {
+                    if let Err(e) =
+                        crate::legacy_core::supabase::save_ata_session(&codex_home, &session)
+                    {
                         *step.write().unwrap_or_else(PoisonError::into_inner) =
                             AtaLoginStep::Error(format!("Failed to save session: {e}"));
                     } else {

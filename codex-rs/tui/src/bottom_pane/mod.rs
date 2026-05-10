@@ -100,6 +100,7 @@ pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
+pub(crate) use account_view::AccountView;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
@@ -113,7 +114,6 @@ pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
-pub(crate) use account_view::AccountView;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
 mod feedback_view;
 mod hooks_browser_view;
