@@ -338,10 +338,10 @@ jobs:
         # v8 v147+ defaults to the `ptrcomp_sandbox` build variant, but the
         # upstream `denoland/rusty_v8` releases only ship the
         # `release` / `ptrcomp_release` / `simdutf_release` variants and
-        # NOT `ptrcomp_sandbox` for any platform. The openai/codex release
+        # NOT `ptrcomp_sandbox` for any platform. The upstream Codex release
         # publishes the missing `ptrcomp_sandbox` artifacts (along with the
         # plain `release` musl ones), so point both `RUSTY_V8_ARCHIVE` and
-        # `RUSTY_V8_SRC_BINDING_PATH` at openai/codex's release for every
+        # `RUSTY_V8_SRC_BINDING_PATH` at the upstream release for every
         # target. Without this override the v8 build script gets HTTP 404
         # from denoland and the whole Lint/Build matrix fails.
         env:
