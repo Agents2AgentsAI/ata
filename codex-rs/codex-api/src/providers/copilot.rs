@@ -2,8 +2,9 @@
 //!
 //! Authentication is handled out-of-band via OAuth (see
 //! `codex_core::auth::copilot_oauth`); the resolved Copilot bearer token is
-//! threaded through the standard `ApiAuthProvider` path. This adapter is
-//! responsible for the VS Code impersonation headers Copilot requires.
+//! threaded through the standard `ApiAuthProvider` path. With the official
+//! `ata`/opencode Copilot client ID, GitHub accepts requests directly without
+//! any VS Code impersonation headers.
 
 use http::HeaderMap;
 use http::HeaderValue;
@@ -134,10 +135,7 @@ fn extract_message_text(item: &Value) -> String {
     out
 }
 
-const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
-const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
-const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
-const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const COPILOT_USER_AGENT: &str = concat!("ata/", env!("CARGO_PKG_VERSION"));
 
 /// GitHub Copilot adapter.
 pub struct CopilotAdapter;
@@ -202,18 +200,6 @@ impl ProviderAdapter for CopilotAdapter {
         headers.insert(
             http::header::USER_AGENT,
             HeaderValue::from_static(COPILOT_USER_AGENT),
-        );
-        headers.insert(
-            "Editor-Version",
-            HeaderValue::from_static(COPILOT_EDITOR_VERSION),
-        );
-        headers.insert(
-            "Editor-Plugin-Version",
-            HeaderValue::from_static(COPILOT_EDITOR_PLUGIN_VERSION),
-        );
-        headers.insert(
-            "Copilot-Integration-Id",
-            HeaderValue::from_static(COPILOT_INTEGRATION_ID),
         );
         headers.insert(
             "Openai-Intent",
@@ -317,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_headers_include_vscode_impersonation() {
+    fn extra_headers_identify_ata_without_impersonation() {
         let adapter = CopilotAdapter::new();
         let headers = adapter.extra_headers();
         assert_eq!(
@@ -326,16 +312,15 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some(COPILOT_USER_AGENT)
         );
-        assert_eq!(
-            headers.get("Editor-Version").and_then(|v| v.to_str().ok()),
-            Some(COPILOT_EDITOR_VERSION)
-        );
-        assert_eq!(
+        assert!(
             headers
-                .get("Copilot-Integration-Id")
-                .and_then(|v| v.to_str().ok()),
-            Some(COPILOT_INTEGRATION_ID)
+                .get(http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("ata/"))
         );
+        assert!(headers.get("Editor-Version").is_none());
+        assert!(headers.get("Editor-Plugin-Version").is_none());
+        assert!(headers.get("Copilot-Integration-Id").is_none());
         // Auth header is supplied by the auth provider, not the adapter.
         assert!(headers.get(http::header::AUTHORIZATION).is_none());
     }
