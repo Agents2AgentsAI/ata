@@ -11578,6 +11578,27 @@ pub(crate) fn show_review_commit_picker_with_entries(
 }
 
 #[cfg(test)]
+impl ChatWidget {
+    /// Test-only helper that pre-populates the project-root-name cache so
+    /// `status_line_project_root_name` returns `None` for the widget's
+    /// current cwd. Used to keep status-surface and terminal-title preview
+    /// tests deterministic across CI runners where `/tmp/.git` (or any
+    /// other ancestor `.git` of the test cwd) may exist and otherwise
+    /// makes `get_git_repo_root` resolve a live project root that
+    /// overrides the placeholder values the tests assert on.
+    fn force_no_project_root_for_tests(&mut self) {
+        let cwd = self
+            .current_cwd
+            .clone()
+            .unwrap_or_else(|| self.config.cwd.as_path().to_path_buf());
+        self.status_line_project_root_name_cache = Some(CachedProjectRootName {
+            cwd,
+            root_name: None,
+        });
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod tests;
 
 // ATA fork: reading-view + voice-mode integration. The reading view is in a

@@ -1765,6 +1765,28 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
 
     let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
 
+    // The test asserts that, in the absence of a project-root marker,
+    // skill discovery does NOT walk to parent directories. On CI runners
+    // where the test tempdir resolves under an ancestor that already
+    // contains a `.git` (e.g. `/tmp/.git` exists on some RunsOn images),
+    // `find_project_root` resolves a project root above `outer_dir`,
+    // `dirs_between_project_root_and_cwd` then includes `outer_dir`, and
+    // the helper picks up `outer_dir/.codex/skills/outer/SKILL.md` as a
+    // legitimate Repo-scope skill — completely defeating the test premise.
+    // Skip when that environmental condition is present so the test still
+    // exercises the intended invariant on hermetic developer machines.
+    if outer_dir
+        .path()
+        .ancestors()
+        .any(|a| a.join(".git").exists())
+    {
+        eprintln!(
+            "skipping non-git-walk test: {} has an ancestor `.git`",
+            outer_dir.path().display()
+        );
+        return;
+    }
+
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
         outcome.errors.is_empty(),

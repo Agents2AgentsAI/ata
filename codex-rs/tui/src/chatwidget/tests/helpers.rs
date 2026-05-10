@@ -16,16 +16,7 @@ pub(super) async fn test_config() -> Config {
     config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
-    // Use a path under a directory that does not exist on disk so
-    // `get_git_repo_root` does NOT find a `.git` ancestor on CI runners
-    // where `/tmp` (or its ancestors) may resolve inside the checked-out
-    // workspace. Status- and title-preview tests rely on no project root
-    // being resolved so the hardcoded preview placeholders win and
-    // `cwd.file_name()` falls back to "project".
-    config.cwd = PathBuf::from(test_path_display(
-        "/nonexistent-codex-tui-tests-cwd/project",
-    ))
-    .abs();
+    config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
     config.user_instructions = None;
@@ -366,6 +357,11 @@ pub(super) async fn make_chatwidget_manual(
         ),
     };
     widget.set_model(&resolved_model);
+    // Pre-populate the project-root cache so tests get deterministic
+    // placeholder behavior regardless of whether the runner's `/tmp` (or
+    // any ancestor of the test cwd) happens to contain a `.git` directory.
+    // See `ChatWidget::force_no_project_root_for_tests` for context.
+    widget.force_no_project_root_for_tests();
     (widget, rx, op_rx)
 }
 
