@@ -10,23 +10,29 @@ runners:
   ci-linux-x64:
     image: ubuntu24-full-x64
     family: ["c7i-flex", "m7i-flex"]
-    cpu: [4, 8]
-    ram: [16, 32]
-    spot: price-capacity-optimized
+    # Matched to ci-linux-arm64. The full test matrix (--all-features, 7000+
+    # tests across 195 binaries) was silently killing the previous 4 vCPU /
+    # 16 GB spot instances ~15-16 min into the `tests` step (step 20 would
+    # have no conclusion, the job log would stop recording before the
+    # nextest summary). 8 vCPU / 32 GB on-demand removes the OOM headroom
+    # problem and the spot-preemption retry hole in one go.
+    cpu: [8, 16]
+    ram: [32, 64]
+    spot: false
     retry: when-interrupted
 
   ci-linux-arm64:
     image: ubuntu24-full-arm64
     family: ["c7g", "m7g"]
-    cpu: [4, 8]
-    ram: [16, 32]
+    cpu: [8, 16]
+    ram: [32, 64]
     spot: false
 
   ci-windows-x64:
     image: windows25-vstoolchain-x64
-    family: ["c7i-flex", "m7i-flex"]
-    cpu: [4, 8]
-    ram: [16, 32]
+    family: ["c7i", "m7i"]
+    cpu: [8, 16]
+    ram: [32, 64]
     spot: price-capacity-optimized
     retry: when-interrupted
 
