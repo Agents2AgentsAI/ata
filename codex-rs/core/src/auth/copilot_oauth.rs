@@ -271,6 +271,10 @@ pub fn save_credentials(
 
 /// Return a valid Copilot access token for outgoing API calls, refreshing it
 /// from the long-lived GitHub OAuth token if it is expired or about to expire.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the refresh lock serializes concurrent token refreshes for the duration of the network call"
+)]
 pub async fn get_or_refresh_copilot_token(
     codex_home: &Path,
     store_mode: AuthCredentialsStoreMode,

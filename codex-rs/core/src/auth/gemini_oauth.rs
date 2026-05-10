@@ -213,6 +213,10 @@ pub(crate) async fn force_refresh_gemini_oauth_context(
     .await
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the refresh lock serializes concurrent token refreshes for the duration of the network call"
+)]
 async fn ensure_gemini_oauth_context_with_refresh(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,

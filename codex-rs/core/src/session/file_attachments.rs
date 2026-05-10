@@ -569,6 +569,10 @@ pub(super) async fn refresh_uploaded_file_references(
 
 impl Session {
     /// Injects response items while atomically enforcing a per-turn URL attachment cap.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active_turn must remain locked across the inner turn_state lock so the per-turn URL cap stays atomic"
+    )]
     pub(crate) async fn inject_response_items_with_url_attachment_budget(
         &self,
         input: Vec<ResponseInputItem>,

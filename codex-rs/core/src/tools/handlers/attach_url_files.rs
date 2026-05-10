@@ -114,6 +114,10 @@ impl ToolHandler for AttachUrlFilesHandler {
         ToolKind::Function
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "active_turn lock is intentionally held across the inner turn_state lock"
+    )]
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
@@ -581,6 +585,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "test intentionally holds active_turn lock across the inner turn_state lock"
+    )]
     async fn download_path_fails_fast_when_per_turn_budget_is_exhausted() {
         let (session, mut turn_context) = make_session_and_context().await;
         turn_context.provider =
