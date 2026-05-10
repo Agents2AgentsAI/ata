@@ -252,9 +252,54 @@ target_cxx_var="CXX_${TARGET}"
 target_cxx_var="${target_cxx_var//-/_}"
 echo "${target_cxx_var}=${cxx}" >> "$GITHUB_ENV"
 
+# Wrap the musl linker so that the host glibc multiarch directory
+# (`/usr/lib/x86_64-linux-gnu` or `/usr/lib/aarch64-linux-gnu`) is filtered
+# out of any `-L` flags rustc passes through. Sys crates that probe the
+# host with `pkg-config` (e.g. `alsa-sys`, `openssl-sys`) emit
+# `cargo:rustc-link-search=/usr/lib/<arch>-linux-gnu`, which lands in the
+# linker search path BEFORE the musl sysroot. The static-pie release link
+# then resolves `-lc` to glibc's `libc.a` (which references
+# `__gcc_personality_v0`) instead of musl's, breaking the link with
+# `undefined reference to __gcc_personality_v0`. Filter the entry at the
+# linker invocation so the musl sysroot wins regardless of which sys
+# crates are pulled in.
+linker_wrapper="${tool_root}/musl-linker-wrapper"
+cat >"${linker_wrapper}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+bad_dir="/usr/lib/${arch}-linux-gnu"
+filtered=()
+i=1
+# "\$@" is iterated by index so we can drop the "-L" + "<dir>" pair when
+# the dir matches the host glibc multiarch path.
+args=("\$@")
+n=\${#args[@]}
+while [[ \$i -le \$n ]]; do
+  cur="\${args[\$((i - 1))]}"
+  case "\${cur}" in
+    -L"\${bad_dir}"|-Wl,-rpath-link,"\${bad_dir}"|-Wl,-rpath,"\${bad_dir}")
+      i=\$((i + 1))
+      continue
+      ;;
+    -L)
+      if [[ \$i -lt \$n && "\${args[\$i]}" == "\${bad_dir}" ]]; then
+        i=\$((i + 2))
+        continue
+      fi
+      ;;
+  esac
+  filtered+=("\${cur}")
+  i=\$((i + 1))
+done
+
+exec "${musl_linker}" "\${filtered[@]}"
+EOF
+chmod +x "${linker_wrapper}"
+
 cargo_linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
 cargo_linker_var="${cargo_linker_var//-/_}"
-echo "${cargo_linker_var}=${musl_linker}" >> "$GITHUB_ENV"
+echo "${cargo_linker_var}=${linker_wrapper}" >> "$GITHUB_ENV"
 
 echo "CMAKE_C_COMPILER=${cc}" >> "$GITHUB_ENV"
 echo "CMAKE_CXX_COMPILER=${cxx}" >> "$GITHUB_ENV"

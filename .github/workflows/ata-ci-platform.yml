@@ -561,7 +561,7 @@ jobs:
             # std::__1::__hash_memory) not present in Ubuntu noble's default
             # libc++-18.
             if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                pkg-config libcap-dev libasound2-dev \
+                pkg-config libcap-dev libasound2-dev bubblewrap \
                 libc++-20-dev libc++abi-20-dev; then
               # libc++-20 ships under /usr/lib/llvm-20/lib (or the per-arch
               # subdir). Put it first on LIBRARY_PATH so `-lc++` picks the
@@ -581,7 +581,7 @@ jobs:
               fi
             else
               sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev
+                pkg-config libcap-dev libasound2-dev bubblewrap libc++-dev libc++abi-dev
             fi
           fi
       # Some integration tests rely on DotSlash being installed.
