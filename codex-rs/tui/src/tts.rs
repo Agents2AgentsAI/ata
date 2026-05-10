@@ -235,10 +235,7 @@ impl ElevenLabsTtsManager {
             stream.close().await;
         });
 
-        let session = ActiveSession {
-            text_tx,
-            interrupt,
-        };
+        let session = ActiveSession { text_tx, interrupt };
         let snapshot = ActiveSession {
             text_tx: session.text_tx.clone(),
             interrupt: session.interrupt.clone(),
