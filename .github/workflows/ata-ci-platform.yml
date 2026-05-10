@@ -383,16 +383,21 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
-      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') || runner.os == 'Windows' }}
-        name: Cap build parallelism (ARM / Windows)
+      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
+        name: Cap build parallelism (ARM)
+        shell: bash
+        run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+
+      - if: ${{ runner.os == 'Windows' }}
+        name: Cap build parallelism (Windows)
         shell: bash
         # Windows MSVC rustc memory usage compiling `codex-app-server`'s
-        # `--all-features` lib test set spikes high enough to OOM the
-        # 32 GB ci-windows-x64 spot instance with the default 8-job
-        # parallelism. Capping at 4 jobs (same as ARM Linux) keeps peak
-        # heap below the runner's RAM ceiling without materially slowing
-        # the overall step. Same applies to the ARM Linux runners.
-        run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+        # `--all-features` ci-test test set spikes hard enough to OOM the
+        # ci-windows-x64 runner even with `CARGO_BUILD_JOBS=4` (multiple
+        # parallel rustc processes each fail their first ~2 MiB allocation,
+        # which is the runner running out of physical RAM, not heap
+        # fragmentation). Cap at 2 jobs — slower but reliably fits.
+        run: echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
@@ -649,16 +654,21 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') || runner.os == 'Windows' }}
-        name: Cap build parallelism (ARM / Windows)
+      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
+        name: Cap build parallelism (ARM)
+        shell: bash
+        run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+
+      - if: ${{ runner.os == 'Windows' }}
+        name: Cap build parallelism (Windows)
         shell: bash
         # Windows MSVC rustc memory usage compiling `codex-app-server`'s
-        # `--all-features` lib test set spikes high enough to OOM the
-        # 32 GB ci-windows-x64 spot instance with the default 8-job
-        # parallelism. Capping at 4 jobs (same as ARM Linux) keeps peak
-        # heap below the runner's RAM ceiling without materially slowing
-        # the overall step. Same applies to the ARM Linux runners.
-        run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
+        # `--all-features` ci-test test set spikes hard enough to OOM the
+        # ci-windows-x64 runner even with `CARGO_BUILD_JOBS=4` (multiple
+        # parallel rustc processes each fail their first ~2 MiB allocation,
+        # which is the runner running out of physical RAM, not heap
+        # fragmentation). Cap at 2 jobs — slower but reliably fits.
+        run: echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
 
       - name: Enable unprivileged user namespaces (Linux)
         if: runner.os == 'Linux'

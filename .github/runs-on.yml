@@ -32,7 +32,13 @@ runners:
     image: windows25-vstoolchain-x64
     family: ["c7i", "m7i"]
     cpu: [8, 16]
-    ram: [32, 64]
+    # Pin to the larger 64 GB variant. ATA registers extra crates
+    # (`codex-v8-poc`, `codex-elevenlabs`, `codex-realtime-webrtc`,
+    # voice/audio_device modules, …) that push the `--all-features` MSVC
+    # ci-test compile past the 32 GB ceiling and trigger
+    # `memory allocation failed` from rustc/`DroplessArena::grow`.
+    # 64 GB removes the OOM headroom problem.
+    ram: [64]
     spot: price-capacity-optimized
     retry: when-interrupted
 
