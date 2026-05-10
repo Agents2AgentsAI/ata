@@ -690,14 +690,14 @@ jobs:
         # the libstdc++/libc++ link directive since the prebuilt
         # ptrcomp_sandbox archives do not bundle libcxx.
         #
-        # On Windows MSVC, the openai/codex `ptrcomp_sandbox` Windows
-        # prebuilt is published as a Unix `.a.gz` archive whose bundled
+        # On Windows MSVC, the upstream `ptrcomp_sandbox` Windows prebuilt
+        # is published as a Unix `.a.gz` archive whose bundled
         # `binding_147_4_0.pic.o` triggers `LNK1143: invalid or corrupt
         # file: no symbol for COMDAT section` when MSVC `link.exe` consumes
         # it. denoland's regular `release` variant for Windows is published
         # as a proper `.lib.gz` (COFF) archive, so use that instead — it
-        # doesn't have `v8_enable_sandbox` set, but neither does anything
-        # in upstream codex CI on Windows.
+        # doesn't have `v8_enable_sandbox` set, but neither does upstream
+        # CI on Windows.
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
