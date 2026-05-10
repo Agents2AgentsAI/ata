@@ -7,7 +7,6 @@ import type { GetConversationSummaryParams } from "./GetConversationSummaryParam
 import type { GitDiffToRemoteParams } from "./GitDiffToRemoteParams";
 import type { InitializeParams } from "./InitializeParams";
 import type { RequestId } from "./RequestId";
-import type { SetDefaultModelParams } from "./SetDefaultModelParams";
 import type { AppsListParams } from "./v2/AppsListParams";
 import type { CancelLoginAccountParams } from "./v2/CancelLoginAccountParams";
 import type { CommandExecParams } from "./v2/CommandExecParams";

@@ -62,6 +62,23 @@
           ],
           "title": "AmazonBedrockAccount",
           "type": "object"
+        },
+        {
+          "description": "Authenticated via the GitHub Copilot device-code OAuth flow.",
+          "properties": {
+            "type": {
+              "enum": [
+                "copilot"
+              ],
+              "title": "CopilotAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CopilotAccount",
+          "type": "object"
         }
       ]
     },
@@ -196,6 +213,70 @@
         "cooldown_active"
       ],
       "type": "string"
+    },
+    "AddDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `add_document_section`.",
+      "properties": {
+        "after_section_index": {
+          "description": "Insert the new section AFTER this 0-based index. -1 for beginning.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the new section should be collapsible.",
+          "type": "boolean"
+        },
+        "heading": {
+          "type": "string"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after_section_index",
+        "call_id",
+        "content",
+        "document_id",
+        "heading",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AddDocumentSectionNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AddDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "AddDocumentSectionNotification",
+      "type": "object"
     },
     "AdditionalFileSystemPermissions": {
       "properties": {
@@ -673,6 +754,66 @@
       "type": "object"
     },
     "AppToolsConfig": {
+      "type": "object"
+    },
+    "AppendDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `append_to_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the appended content should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AppendDocumentSectionNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AppendDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "AppendDocumentSectionNotification",
       "type": "object"
     },
     "ApprovalsReviewer": {
@@ -2814,76 +2955,6 @@
             "params"
           ],
           "title": "FuzzyFileSearchRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "getUserSavedConfig"
-              ],
-              "title": "GetUserSavedConfigRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "GetUserSavedConfigRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "setDefaultModel"
-              ],
-              "title": "SetDefaultModelRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/definitions/SetDefaultModelParams"
-            }
-          },
-          "required": [
-            "id",
-            "method",
-            "params"
-          ],
-          "title": "SetDefaultModelRequest",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "id": {
-              "$ref": "#/definitions/RequestId"
-            },
-            "method": {
-              "enum": [
-                "userInfo"
-              ],
-              "title": "UserInfoRequestMethod",
-              "type": "string"
-            },
-            "params": {
-              "type": "null"
-            }
-          },
-          "required": [
-            "id",
-            "method"
-          ],
-          "title": "UserInfoRequest",
           "type": "object"
         }
       ],
@@ -6168,15 +6239,11 @@
             }
           ]
         },
-        "requiresGeminiAuth": {
-          "type": "boolean"
-        },
         "requiresOpenaiAuth": {
           "type": "boolean"
         }
       },
       "required": [
-        "requiresGeminiAuth",
         "requiresOpenaiAuth"
       ],
       "title": "GetAccountResponse",
@@ -6689,166 +6756,6 @@
         "hookRunId",
         "text"
       ],
-      "title": "HookCompletedNotification",
-      "type": "object"
-    },
-    "HookEventName": {
-      "enum": [
-        "sessionStart",
-        "stop"
-      ],
-      "type": "string"
-    },
-    "HookExecutionMode": {
-      "enum": [
-        "sync",
-        "async"
-      ],
-      "type": "string"
-    },
-    "HookHandlerType": {
-      "enum": [
-        "command",
-        "prompt",
-        "agent"
-      ],
-      "type": "string"
-    },
-    "HookOutputEntry": {
-      "properties": {
-        "kind": {
-          "$ref": "#/definitions/HookOutputEntryKind"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "text"
-      ],
-      "type": "object"
-    },
-    "HookOutputEntryKind": {
-      "enum": [
-        "warning",
-        "stop",
-        "feedback",
-        "context",
-        "error"
-      ],
-      "type": "string"
-    },
-    "HookRunStatus": {
-      "enum": [
-        "running",
-        "completed",
-        "failed",
-        "blocked",
-        "stopped"
-      ],
-      "type": "string"
-    },
-    "HookRunSummary": {
-      "properties": {
-        "completedAt": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "displayOrder": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "durationMs": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "entries": {
-          "items": {
-            "$ref": "#/definitions/HookOutputEntry"
-          },
-          "type": "array"
-        },
-        "eventName": {
-          "$ref": "#/definitions/HookEventName"
-        },
-        "executionMode": {
-          "$ref": "#/definitions/HookExecutionMode"
-        },
-        "handlerType": {
-          "$ref": "#/definitions/HookHandlerType"
-        },
-        "id": {
-          "type": "string"
-        },
-        "scope": {
-          "$ref": "#/definitions/HookScope"
-        },
-        "sourcePath": {
-          "type": "string"
-        },
-        "startedAt": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "status": {
-          "$ref": "#/definitions/HookRunStatus"
-        },
-        "statusMessage": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "displayOrder",
-        "entries",
-        "eventName",
-        "executionMode",
-        "handlerType",
-        "id",
-        "scope",
-        "sourcePath",
-        "startedAt",
-        "status"
-      ],
-      "type": "object"
-    },
-    "HookScope": {
-      "enum": [
-        "thread",
-        "turn"
-      ],
-      "type": "string"
-    },
-    "HookStartedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "properties": {
-        "run": {
-          "$ref": "#/definitions/HookRunSummary"
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "turnId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "run",
-        "threadId"
-      ],
-      "title": "HookStartedNotification",
       "type": "object"
     },
     "HookRunStatus": {
@@ -7443,6 +7350,23 @@
           "type": "object"
         },
         {
+          "description": "Start the GitHub Copilot device-code OAuth flow. The response carries the user_code + verification URI the client should display; the completion notification arrives once the user authorizes.",
+          "properties": {
+            "type": {
+              "enum": [
+                "copilotDeviceCode"
+              ],
+              "title": "CopilotDeviceCodev2::LoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CopilotDeviceCodev2::LoginAccountParams",
+          "type": "object"
+        },
+        {
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
@@ -7551,6 +7475,37 @@
             "verificationUrl"
           ],
           "title": "ChatgptDeviceCodev2::LoginAccountResponse",
+          "type": "object"
+        },
+        {
+          "description": "Initial response for the GitHub Copilot device-code OAuth flow. The `AccountLoginCompletedNotification` (with the same `login_id`) fires once the user authorizes and the Copilot bearer token is exchanged.",
+          "properties": {
+            "loginId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "copilotDeviceCode"
+              ],
+              "title": "CopilotDeviceCodev2::LoginAccountResponseType",
+              "type": "string"
+            },
+            "userCode": {
+              "description": "One-time code the user must enter on the verification page.",
+              "type": "string"
+            },
+            "verificationUri": {
+              "description": "URL the client should open in a browser to authorize the device.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "loginId",
+            "type",
+            "userCode",
+            "verificationUri"
+          ],
+          "title": "CopilotDeviceCodev2::LoginAccountResponse",
           "type": "object"
         },
         {
@@ -8786,6 +8741,70 @@
         }
       ]
     },
+    "PatchDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `patch_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the patched content should be collapsible.",
+          "type": "boolean"
+        },
+        "new_text": {
+          "type": "string"
+        },
+        "old_text": {
+          "type": "string"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "document_id",
+        "new_text",
+        "old_text",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PatchDocumentSectionNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PatchDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "PatchDocumentSectionNotification",
+      "type": "object"
+    },
     "PermissionProfile": {
       "oneOf": [
         {
@@ -9883,6 +9902,55 @@
       ],
       "type": "object"
     },
+    "PresentDocumentEvent": {
+      "description": "Event emitted when the agent calls `present_reading_view`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "is_reopen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "title",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PresentDocumentNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PresentDocumentEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "PresentDocumentNotification",
+      "type": "object"
+    },
     "ProcessExitedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "Final process exit notification for `process/spawn`.",
@@ -10075,16 +10143,6 @@
           "type": [
             "string",
             "null"
-          ]
-        },
-        "tools": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolsV2"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "tools": {
@@ -10303,16 +10361,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ReasoningEffortOption": {
       "properties": {
@@ -12868,6 +12937,106 @@
           ],
           "title": "Account/login/completedNotification",
           "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/present"
+              ],
+              "title": "Document/presentNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PresentDocumentNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/presentNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/update"
+              ],
+              "title": "Document/section/updateNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/UpdateDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/updateNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/append"
+              ],
+              "title": "Document/section/appendNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AppendDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/appendNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/add"
+              ],
+              "title": "Document/section/addNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AddDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/addNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/patch"
+              ],
+              "title": "Document/section/patchNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/PatchDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/patchNotification",
+          "type": "object"
         }
       ],
       "title": "ServerNotification"
@@ -12949,27 +13118,6 @@
           "type": "object"
         }
       ]
-    },
-    "SetDefaultModelParams": {
-      "properties": {
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoningEffort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "Settings": {
       "description": "Settings for a collaboration mode.",
@@ -16502,6 +16650,66 @@
       "title": "TurnSteerResponse",
       "type": "object"
     },
+    "UpdateDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `update_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the updated section should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "UpdateDocumentSectionNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/UpdateDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "UpdateDocumentSectionNotification",
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -16618,6 +16826,60 @@
             "type"
           ],
           "title": "MentionUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Local PDF or other file the user attached, either explicitly via the composer or implicitly via the proactive-injection pipeline that detects PDF mentions in turn text. Sent through to the model as a `ContentItem::InputFile` block once the file is read or uploaded.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localFile"
+              ],
+              "title": "LocalFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalFileUserInput",
+          "type": "object"
+        },
+        {
+          "description": "File previously uploaded to the provider's file API and reused by `file_id` (avoids re-uploading on subsequent turns).",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "string"
+            },
+            "source_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "uploadedFile"
+              ],
+              "title": "UploadedFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id",
+            "filename",
+            "mime_type",
+            "source_path",
+            "type"
+          ],
+          "title": "UploadedFileUserInput",
           "type": "object"
         }
       ]

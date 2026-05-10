@@ -64,6 +64,68 @@
       },
       "type": "object"
     },
+    "AddDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `add_document_section`.",
+      "properties": {
+        "after_section_index": {
+          "description": "Insert the new section AFTER this 0-based index. -1 for beginning.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the new section should be collapsible.",
+          "type": "boolean"
+        },
+        "heading": {
+          "type": "string"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after_section_index",
+        "call_id",
+        "content",
+        "document_id",
+        "heading",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AddDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AddDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {
@@ -412,6 +474,64 @@
       },
       "required": [
         "userPrompt"
+      ],
+      "type": "object"
+    },
+    "AppendDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `append_to_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the appended content should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AppendDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AppendDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
       ],
       "type": "object"
     },
@@ -2376,6 +2496,68 @@
         }
       ]
     },
+    "PatchDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `patch_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the patched content should be collapsible.",
+          "type": "boolean"
+        },
+        "new_text": {
+          "type": "string"
+        },
+        "old_text": {
+          "type": "string"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "document_id",
+        "new_text",
+        "old_text",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PatchDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PatchDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "PlanDeltaNotification": {
       "description": "EXPERIMENTAL - proposed plan streaming deltas for plan items. Clients should not assume concatenated deltas match the completed plan item content.",
       "properties": {
@@ -2416,6 +2598,53 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "PresentDocumentEvent": {
+      "description": "Event emitted when the agent calls `present_reading_view`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "is_reopen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "title",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PresentDocumentNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PresentDocumentEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
     },
     "ProcessExitedNotification": {
       "description": "Final process exit notification for `process/spawn`.",
@@ -2619,15 +2848,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ReasoningSummaryPartAddedNotification": {
       "properties": {
@@ -4535,6 +4776,64 @@
       ],
       "type": "string"
     },
+    "UpdateDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `update_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the updated section should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "UpdateDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/UpdateDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "UserInput": {
       "oneOf": [
         {
@@ -4651,6 +4950,60 @@
             "type"
           ],
           "title": "MentionUserInput",
+          "type": "object"
+        },
+        {
+          "description": "Local PDF or other file the user attached, either explicitly via the composer or implicitly via the proactive-injection pipeline that detects PDF mentions in turn text. Sent through to the model as a `ContentItem::InputFile` block once the file is read or uploaded.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localFile"
+              ],
+              "title": "LocalFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalFileUserInput",
+          "type": "object"
+        },
+        {
+          "description": "File previously uploaded to the provider's file API and reused by `file_id` (avoids re-uploading on subsequent turns).",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "string"
+            },
+            "source_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "uploadedFile"
+              ],
+              "title": "UploadedFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id",
+            "filename",
+            "mime_type",
+            "source_path",
+            "type"
+          ],
+          "title": "UploadedFileUserInput",
           "type": "object"
         }
       ]
@@ -6096,6 +6449,106 @@
         "params"
       ],
       "title": "Account/login/completedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/present"
+          ],
+          "title": "Document/presentNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PresentDocumentNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/presentNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/update"
+          ],
+          "title": "Document/section/updateNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/UpdateDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/updateNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/append"
+          ],
+          "title": "Document/section/appendNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AppendDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/appendNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/add"
+          ],
+          "title": "Document/section/addNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AddDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/addNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/patch"
+          ],
+          "title": "Document/section/patchNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PatchDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/patchNotification",
       "type": "object"
     }
   ],

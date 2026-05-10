@@ -57,6 +57,23 @@
       "type": "object"
     },
     {
+      "description": "Start the GitHub Copilot device-code OAuth flow. The response carries the user_code + verification URI the client should display; the completion notification arrives once the user authorizes.",
+      "properties": {
+        "type": {
+          "enum": [
+            "copilotDeviceCode"
+          ],
+          "title": "CopilotDeviceCodev2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "CopilotDeviceCodev2::LoginAccountParams",
+      "type": "object"
+    },
+    {
       "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
       "properties": {
         "accessToken": {

@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "PresentDocumentEvent": {
+      "description": "Event emitted when the agent calls `present_reading_view`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "is_reopen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "title",
+        "turn_id"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "event": {
+      "$ref": "#/definitions/PresentDocumentEvent"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "threadId"
+  ],
+  "title": "PresentDocumentNotification",
+  "type": "object"
+}

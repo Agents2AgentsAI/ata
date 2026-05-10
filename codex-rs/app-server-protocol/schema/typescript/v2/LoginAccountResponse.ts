@@ -14,4 +14,12 @@ verificationUrl: string,
 /**
  * One-time code the user must enter after signing in.
  */
+userCode: string, } | { "type": "copilotDeviceCode", loginId: string,
+/**
+ * URL the client should open in a browser to authorize the device.
+ */
+verificationUri: string,
+/**
+ * One-time code the user must enter on the verification page.
+ */
 userCode: string, } | { "type": "chatgptAuthTokens", };

@@ -96,14 +96,6 @@ model: string | null,
  */
 reasoningEffort: ReasoningEffort | null,
 /**
- * Model requested for the spawned agent, when applicable.
- */
-model: string | null, 
-/**
- * Reasoning effort requested for the spawned agent, when applicable.
- */
-reasoningEffort: ReasoningEffort | null, 
-/**
  * Last known status of the target agents, when available.
  */
 agentsStates: { [key in string]?: CollabAgentState }, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, } | { "type": "imageView", id: string, path: AbsolutePathBuf, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, savedPath?: AbsolutePathBuf, } | { "type": "enteredReviewMode", id: string, review: string, } | { "type": "exitedReviewMode", id: string, review: string, } | { "type": "contextCompaction", id: string, };

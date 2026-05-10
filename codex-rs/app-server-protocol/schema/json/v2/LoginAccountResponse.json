@@ -73,6 +73,37 @@
       "type": "object"
     },
     {
+      "description": "Initial response for the GitHub Copilot device-code OAuth flow. The `AccountLoginCompletedNotification` (with the same `login_id`) fires once the user authorizes and the Copilot bearer token is exchanged.",
+      "properties": {
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "copilotDeviceCode"
+          ],
+          "title": "CopilotDeviceCodev2::LoginAccountResponseType",
+          "type": "string"
+        },
+        "userCode": {
+          "description": "One-time code the user must enter on the verification page.",
+          "type": "string"
+        },
+        "verificationUri": {
+          "description": "URL the client should open in a browser to authorize the device.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loginId",
+        "type",
+        "userCode",
+        "verificationUri"
+      ],
+      "title": "CopilotDeviceCodev2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
       "properties": {
         "type": {
           "enum": [

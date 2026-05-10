@@ -1,7 +1,9 @@
 // GENERATED CODE! DO NOT MODIFY BY HAND!
 
 export type { AbsolutePathBuf } from "./AbsolutePathBuf";
+export type { AddDocumentSectionEvent } from "./AddDocumentSectionEvent";
 export type { AgentPath } from "./AgentPath";
+export type { AppendDocumentSectionEvent } from "./AppendDocumentSectionEvent";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { AuthMode } from "./AuthMode";
@@ -46,8 +48,10 @@ export type { ModeKind } from "./ModeKind";
 export type { NetworkPolicyAmendment } from "./NetworkPolicyAmendment";
 export type { NetworkPolicyRuleAction } from "./NetworkPolicyRuleAction";
 export type { ParsedCommand } from "./ParsedCommand";
+export type { PatchDocumentSectionEvent } from "./PatchDocumentSectionEvent";
 export type { Personality } from "./Personality";
 export type { PlanType } from "./PlanType";
+export type { PresentDocumentEvent } from "./PresentDocumentEvent";
 export type { RealtimeConversationVersion } from "./RealtimeConversationVersion";
 export type { RealtimeOutputModality } from "./RealtimeOutputModality";
 export type { RealtimeVoice } from "./RealtimeVoice";
@@ -65,13 +69,12 @@ export type { ReviewDecision } from "./ReviewDecision";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { SessionSource } from "./SessionSource";
-export type { SetDefaultModelParams } from "./SetDefaultModelParams";
-export type { SetDefaultModelResponse } from "./SetDefaultModelResponse";
 export type { Settings } from "./Settings";
 export type { SubAgentSource } from "./SubAgentSource";
 export type { ThreadId } from "./ThreadId";
 export type { ThreadMemoryMode } from "./ThreadMemoryMode";
 export type { Tool } from "./Tool";
+export type { UpdateDocumentSectionEvent } from "./UpdateDocumentSectionEvent";
 export type { Verbosity } from "./Verbosity";
 export type { WebSearchAction } from "./WebSearchAction";
 export type { WebSearchContextSize } from "./WebSearchContextSize";

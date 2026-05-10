@@ -58,6 +58,23 @@
           ],
           "title": "AmazonBedrockAccount",
           "type": "object"
+        },
+        {
+          "description": "Authenticated via the GitHub Copilot device-code OAuth flow.",
+          "properties": {
+            "type": {
+              "enum": [
+                "copilot"
+              ],
+              "title": "CopilotAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CopilotAccount",
+          "type": "object"
         }
       ]
     },
@@ -90,15 +107,11 @@
         }
       ]
     },
-    "requiresGeminiAuth": {
-      "type": "boolean"
-    },
     "requiresOpenaiAuth": {
       "type": "boolean"
     }
   },
   "required": [
-    "requiresGeminiAuth",
     "requiresOpenaiAuth"
   ],
   "title": "GetAccountResponse",
