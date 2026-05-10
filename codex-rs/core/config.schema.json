@@ -499,6 +499,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "reading_view": {
+              "type": "boolean"
+            },
             "realtime_conversation": {
               "type": "boolean"
             },
@@ -521,6 +524,27 @@
               "type": "boolean"
             },
             "request_rule": {
+              "type": "boolean"
+            },
+            "research": {
+              "type": "boolean"
+            },
+            "research_hacker_news": {
+              "type": "boolean"
+            },
+            "research_knowledge_base": {
+              "type": "boolean"
+            },
+            "research_paper_search": {
+              "type": "boolean"
+            },
+            "research_patents": {
+              "type": "boolean"
+            },
+            "research_repo_analysis": {
+              "type": "boolean"
+            },
+            "research_zotero": {
               "type": "boolean"
             },
             "responses_websocket_response_processed": {
@@ -593,6 +617,9 @@
               "type": "boolean"
             },
             "use_linux_sandbox_bwrap": {
+              "type": "boolean"
+            },
+            "voice_mode": {
               "type": "boolean"
             },
             "web_search": {
@@ -4141,6 +4168,9 @@
         "prevent_idle_sleep": {
           "type": "boolean"
         },
+        "reading_view": {
+          "type": "boolean"
+        },
         "realtime_conversation": {
           "type": "boolean"
         },
@@ -4163,6 +4193,27 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "research": {
+          "type": "boolean"
+        },
+        "research_hacker_news": {
+          "type": "boolean"
+        },
+        "research_knowledge_base": {
+          "type": "boolean"
+        },
+        "research_paper_search": {
+          "type": "boolean"
+        },
+        "research_patents": {
+          "type": "boolean"
+        },
+        "research_repo_analysis": {
+          "type": "boolean"
+        },
+        "research_zotero": {
           "type": "boolean"
         },
         "responses_websocket_response_processed": {
@@ -4235,6 +4286,9 @@
           "type": "boolean"
         },
         "use_linux_sandbox_bwrap": {
+          "type": "boolean"
+        },
+        "voice_mode": {
           "type": "boolean"
         },
         "web_search": {
