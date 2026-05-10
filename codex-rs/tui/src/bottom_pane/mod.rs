@@ -1254,7 +1254,7 @@ impl BottomPane {
         self.view_stack
             .last()
             .and_then(|v| v.closed_document_id())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     }
 
     pub(crate) fn show_document_reader(

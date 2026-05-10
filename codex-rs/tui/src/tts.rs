@@ -11,6 +11,12 @@
 //! `voice.rs::RealtimeAudioPlayer::enqueue_frame` so a future PR can swap
 //! the source back if/when ElevenLabs becomes a fallback.
 
+// All `.expect(...)` calls in this file are on `std::sync::Mutex::lock()`
+// results — `Mutex::lock` returns `Err` only on poison, which itself
+// represents a panic in another holder of the lock. We intentionally
+// propagate that panic rather than degrading silently.
+#![allow(clippy::expect_used)]
+
 use crate::legacy_core::config::Config;
 use crate::voice::RealtimeAudioPlaybackHandle;
 use crate::voice::RealtimeAudioPlayer;
@@ -231,7 +237,7 @@ impl ElevenLabsTtsManager {
 
         let session = ActiveSession {
             text_tx,
-            interrupt: interrupt.clone(),
+            interrupt,
         };
         let snapshot = ActiveSession {
             text_tx: session.text_tx.clone(),

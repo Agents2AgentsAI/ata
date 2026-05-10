@@ -1499,10 +1499,6 @@ async fn run_ratatui_app(
     app_result
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "TUI should no longer be displayed, so we can write to stderr."
-)]
 /// Best-effort extraction of a `Display` panic message from a
 /// `catch_unwind` payload. Falls back to a generic label when the
 /// payload is neither `String` nor `&'static str`.
@@ -1539,6 +1535,10 @@ fn append_otel_init_failure(log_dir: &std::path::Path, message: &str) {
     }
 }
 
+#[expect(
+    clippy::print_stderr,
+    reason = "TUI is being torn down, so writing to stderr is acceptable."
+)]
 fn restore() {
     if let Err(err) = tui::restore_after_exit() {
         eprintln!(

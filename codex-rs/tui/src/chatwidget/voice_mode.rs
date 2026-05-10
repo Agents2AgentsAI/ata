@@ -1452,8 +1452,7 @@ impl super::ChatWidget {
         // without ElevenLabs because it uses the built-in Whisper path).
         // ATA users get keys vended at runtime, so skip the warning for them.
         let session_not_ready = self.thread_id.is_none();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || false /* AuthMode::Ata not in v0.129.0 baseline */;
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         if !has_tts_key {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
@@ -2091,8 +2090,7 @@ impl super::ChatWidget {
     ) -> Option<String> {
         // Capture config before taking a mutable borrow on voice_mode_state.
         let vc = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&vc).is_some()
-            || false /* AuthMode::Ata not in v0.129.0 baseline */;
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&vc).is_some();
         let state = match self.voice_mode_state.as_mut() {
             Some(s) => s,
             None => {
@@ -3745,8 +3743,7 @@ impl super::ChatWidget {
     ) {
         let narrate_start = std::time::Instant::now();
         let voice_config = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || false /* AuthMode::Ata not in v0.129.0 baseline */;
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         tracing::info!(
             "[TTS-TIMING] on_voice_narrate_section: section={section_index}, manual={manual}, \
              voice_state_exists={}, text_len={}",
@@ -4086,8 +4083,7 @@ impl super::ChatWidget {
         raw_text: String,
     ) {
         let voice_config = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || false /* AuthMode::Ata not in v0.129.0 baseline */;
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         if self.voice_mode_state.is_none() {
             if !has_tts_key {
                 return;
