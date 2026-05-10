@@ -1944,6 +1944,7 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
+            started_at_ms: _,
             approval_id,
             reason,
             network_approval_context,
@@ -2019,6 +2020,7 @@ impl CodexClient {
             thread_id,
             turn_id,
             item_id,
+            started_at_ms: _,
             reason,
             grant_root,
         } = params;
@@ -2134,6 +2136,7 @@ impl TestClientTracing {
             &config,
             env!("CARGO_PKG_VERSION"),
             Some(OTEL_SERVICE_NAME),
+            /*default_analytics_enabled*/ false,
         )
         .map_err(|e| anyhow::anyhow!("error loading otel config: {e}"))?;
         let traces_enabled = otel_provider

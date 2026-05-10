@@ -89,6 +89,7 @@ pub async fn run_main(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some(OTEL_SERVICE_NAME),
+        /*default_analytics_enabled*/ false,
     )
     .map_err(|e| {
         std::io::Error::new(
@@ -220,10 +221,14 @@ mod tests {
         config.otel.metrics_exporter = exporter;
         config.analytics_enabled = Some(true);
 
-        let provider =
-            codex_core::otel_init::build_provider(&config, "0.0.0-test", Some(OTEL_SERVICE_NAME))
-                .map_err(|err| anyhow::anyhow!(err.to_string()))?
-                .expect("otel provider");
+        let provider = codex_core::otel_init::build_provider(
+            &config,
+            "0.0.0-test",
+            Some(OTEL_SERVICE_NAME),
+            /*default_analytics_enabled*/ false,
+        )
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?
+        .expect("otel provider");
 
         assert!(provider.logger.is_some(), "expected log exporter");
         assert!(

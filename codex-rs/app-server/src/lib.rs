@@ -573,6 +573,7 @@ pub async fn run_main_with_transport_options(
         &config,
         env!("CARGO_PKG_VERSION"),
         Some("codex-app-server"),
+        /*default_analytics_enabled*/ false,
     )
     .map_err(|e| {
         std::io::Error::new(

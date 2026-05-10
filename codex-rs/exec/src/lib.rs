@@ -468,6 +468,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
+            /*default_analytics_enabled*/ false,
         )
     })) {
         Ok(Ok(otel)) => otel,

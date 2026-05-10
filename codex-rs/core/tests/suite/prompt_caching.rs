@@ -177,6 +177,16 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     };
     expected_tools_names.extend([
         "update_plan",
+        // ATA-extra tools registered unconditionally on top of the upstream
+        // base toolset (see codex-core::tools::spec_plan).
+        "present_reading_view",
+        "update_document_section",
+        "append_to_section",
+        "add_document_section",
+        "patch_document_section",
+        "attach_url_files",
+        "crop_figure",
+        "js_repl",
         "request_user_input",
         "apply_patch",
         "web_search",

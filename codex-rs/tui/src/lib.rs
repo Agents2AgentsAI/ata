@@ -971,6 +971,7 @@ pub async fn run_main(
             &config,
             env!("CARGO_PKG_VERSION"),
             /*service_name_override*/ None,
+            /*default_analytics_enabled*/ false,
         )
     }));
     std::panic::set_hook(original_hook);
