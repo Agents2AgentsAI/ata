@@ -390,17 +390,6 @@ pub(crate) struct DocumentReaderView {
     pending_auto_navigate: bool,
 }
 
-#[cfg(all(test, not(target_os = "linux")))]
-impl DocumentReaderView {
-    pub(crate) fn voice_tts_paused_for_test(&self) -> bool {
-        self.voice_tts_paused
-    }
-
-    pub(crate) fn voice_status_for_test(&self) -> Option<String> {
-        self.voice_status.clone()
-    }
-}
-
 impl DocumentReaderView {
     /// Convenience constructor used by `BottomPane::show_document_reader`
     /// to build the view straight from the protocol event.
@@ -3953,7 +3942,6 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use crate::history_cell::DocumentCell;
     use crate::render::renderable::Renderable;
-    use codex_protocol::protocol::Op;
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;

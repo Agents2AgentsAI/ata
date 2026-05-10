@@ -1233,6 +1233,27 @@ impl BottomPane {
     // These are thin shims that find the active document reader (if any)
     // and forward the call. Voice methods are gated to non-Linux platforms.
 
+    /// Forward a "turn complete" signal to the active view. Reading-view
+    /// overlays use this to clear pending follow-up indicators if the agent
+    /// finished without calling an update tool.
+    pub(crate) fn notify_turn_complete(&mut self) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_turn_complete();
+            self.request_redraw();
+        }
+    }
+
+    /// If the active view is a document reader that just closed, return the
+    /// document id so the host can release any cached state for it.
+    /// (Wired during the closed-document-tracking follow-up.)
+    #[allow(dead_code)]
+    pub(crate) fn closed_document_id(&self) -> Option<String> {
+        self.view_stack
+            .last()
+            .and_then(|v| v.closed_document_id())
+            .map(|s| s.to_string())
+    }
+
     pub(crate) fn show_document_reader(
         &mut self,
         ev: codex_protocol::document_reader::PresentDocumentEvent,
@@ -1325,6 +1346,8 @@ impl BottomPane {
     /// Forward a `force_hide_cursor` toggle to the active view. Currently a
     /// no-op since v0.129.0's BottomPane doesn't track cursor hiding —
     /// reading view manages cursor visibility via its own focus state.
+    /// Voice-mode wires this once PTT key handling lands.
+    #[allow(dead_code)]
     pub(crate) fn set_force_hide_cursor(&mut self, _hide: bool) {}
 
     #[cfg(not(target_os = "linux"))]
@@ -1335,6 +1358,7 @@ impl BottomPane {
     }
 
     #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
     pub(crate) fn is_view_composer_focused(&self) -> bool {
         self.view_stack
             .last()

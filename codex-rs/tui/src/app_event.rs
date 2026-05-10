@@ -937,6 +937,10 @@ pub(crate) enum AppEvent {
     /// reading-view server (e.g. follow-up question, read-aloud request).
     ReadingViewBrowserMessage(String),
     /// The user changed the reading view mode via the setup popup.
+    /// Emitted by the reading-view setup popup (port pending; until then the
+    /// `/reading-view` slash command shows an info message and this variant
+    /// is intentionally unused).
+    #[allow(dead_code)]
     ReadingViewModeChanged(ReadingViewMode),
 
     /// Periodic tick to update the TTS word-highlight position.
@@ -983,12 +987,18 @@ pub(crate) enum AppEvent {
         text: String,
     },
     /// Periodic volume meter sample emitted while voice capture is active.
+    /// Emitted by the PTT meter task that's only spawned once the composer
+    /// Space key handler activates voice capture (follow-up).
     #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
     VoiceModeMeterTick {
         text: String,
     },
     /// PTT timeout safety poller fired — voice mode checks elapsed press time.
+    /// Emitted by the PTT timeout poller, gated behind the same composer
+    /// key handler follow-up as `VoiceModeMeterTick`.
     #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
     VoiceModePttTimeoutCheck,
     /// New TTS audio chunk arrived from the persistent ElevenLabs worker.
     #[cfg(not(target_os = "linux"))]

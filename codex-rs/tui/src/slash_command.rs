@@ -214,16 +214,12 @@ impl SlashCommand {
             | SlashCommand::Account
             | SlashCommand::ReadingView
             | SlashCommand::Memories
-            // Voice mode toggling is allowed mid-task on non-Linux.
-
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice => true,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Raw

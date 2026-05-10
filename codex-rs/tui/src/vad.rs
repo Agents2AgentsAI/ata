@@ -3,6 +3,12 @@
 //! Uses a simple peak energy approach with configurable threshold.
 //! Designed for the voice mode pipeline where low latency matters more
 //! than perfect accuracy.
+//!
+//! NOTE: this module is ported but not yet wired into the v0.129.0 voice
+//! capture pipeline (capture currently emits raw frames through
+//! `AppEventSender` without VAD-driven gating). Hook-up follows the PTT
+//! key handler work; until then the contents are intentionally allowed-dead.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU16;

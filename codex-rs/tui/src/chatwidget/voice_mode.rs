@@ -18,7 +18,12 @@ use crate::legacy_core::config::types::VoiceOutput;
 use crate::legacy_core::config::types::VoiceVerbosity;
 
 // ─── Voice mode instruction prefix ──────────────────────────────────────────
-
+// These prompt prefixes are injected into the agent's instructions when the
+// user enables voice mode. They are referenced by `voice_mode_instruction()`,
+// which the core prompt builder will call once the voice-mode prompt
+// injection wiring lands. See follow-up: hook these into
+// `ThreadConfigSnapshot` / instruction stitching in `codex-core`.
+#[allow(dead_code)]
 /// Verbose instruction: acknowledgments, progress updates, and final summary
 /// are all spoken aloud.
 const VOICE_MODE_INSTRUCTION_VERBOSE: &str = "\
@@ -56,6 +61,7 @@ or \"Checking a few more files.\"). Keep these to one sentence.\n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
 
+#[allow(dead_code)]
 /// Concise instruction: only the final answer/summary is spoken aloud.
 const VOICE_MODE_INSTRUCTION_CONCISE: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
@@ -90,6 +96,7 @@ Follow this pattern:\n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
 
+#[allow(dead_code)]
 /// Returns the voice mode instruction for the given verbosity level.
 pub(crate) fn voice_mode_instruction(verbosity: VoiceVerbosity) -> &'static str {
     match verbosity {
@@ -98,6 +105,7 @@ pub(crate) fn voice_mode_instruction(verbosity: VoiceVerbosity) -> &'static str 
     }
 }
 
+#[allow(dead_code)]
 /// Returns all voice mode instruction variants (for prefix stripping).
 pub(crate) fn voice_mode_instruction_prefixes() -> &'static [&'static str] {
     &[
@@ -131,6 +139,7 @@ fn append_browser_reading_view_debug_log(message: &str) {
     let _ = std::io::Write::write_all(&mut file, format!("[{ts}] {message}\n").as_bytes());
 }
 
+#[allow(dead_code)]
 /// Instruction prepended to the first user message after voice mode is
 /// turned off, so the agent stops using `<voice>` tags.
 pub(crate) const VOICE_MODE_OFF_INSTRUCTION: &str = "\
@@ -236,6 +245,11 @@ impl SentenceBuffer {
 // ─── Voice tag parser (streaming) ────────────────────────────────────────────
 
 /// Result of pushing a delta through the voice tag parser.
+///
+/// `display_text` and `voice_block_closed` are read by the agent-message-delta
+/// streaming integration which has not yet been ported to v0.129.0; they are
+/// allowed-dead until that wiring lands.
+#[allow(dead_code)]
 pub(crate) struct VoiceParseResult {
     /// Text to display in chat (all content with `<voice>`/`</voice>` tags stripped).
     pub display_text: String,
@@ -774,6 +788,12 @@ pub struct AlignmentEntry {
     pub word: String,
 }
 
+/// Per-thread voice mode state. Several fields are written by the
+/// PTT/meter/timer flows that are not yet wired through a composer key
+/// handler in v0.129.0; rustc therefore flags them as never-read until that
+/// wiring lands. Marking the struct `allow(dead_code)` keeps the warnings
+/// off without losing the field shape we'll need.
+#[allow(dead_code)]
 pub(crate) struct VoiceModeState {
     pub(crate) phase: VoiceModePhase,
     pub(crate) sentence_buffer: SentenceBuffer,
@@ -920,6 +940,7 @@ pub(crate) struct VoiceModeState {
     pub(crate) mock_has_audio: Option<bool>,
 }
 
+#[allow(dead_code)]
 impl VoiceModeState {
     pub(crate) fn new(config: &VoiceModeToml) -> Self {
         let output = config.output.unwrap_or_default();
@@ -1303,7 +1324,13 @@ fn voice_mode_config(config: &crate::legacy_core::config::Config) -> VoiceModeTo
         .unwrap_or_default()
 }
 
+// Several voice-mode ChatWidget entry points (PTT key handlers, voice setup
+// popup callbacks, voice-mode toggle, browser TTS bridge helpers) are
+// invoked by UI flows that have not yet been wired in v0.129.0 (composer
+// Space key handler + VoiceSetupView popup port). Allow dead_code on the
+// entire impl block until those follow-ups land.
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 impl super::ChatWidget {
     /// Return the voice mode config with in-session overrides (speed, language)
     /// applied on top of the on-disk config.  `/voice-setup` writes to disk but

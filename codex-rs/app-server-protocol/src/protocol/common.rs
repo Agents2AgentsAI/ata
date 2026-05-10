@@ -1509,6 +1509,14 @@ server_notification_definitions! {
     #[strum(serialize = "account/login/completed")]
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
+    // ATA reading-view notifications. Emitted when the agent calls one of the
+    // document_reader tools (`present_reading_view`, `update_document_section`,
+    // `append_to_section`, `add_document_section`, `patch_document_section`).
+    PresentDocument => "document/present" (v2::PresentDocumentNotification),
+    UpdateDocumentSection => "document/section/update" (v2::UpdateDocumentSectionNotification),
+    AppendDocumentSection => "document/section/append" (v2::AppendDocumentSectionNotification),
+    AddDocumentSection => "document/section/add" (v2::AddDocumentSectionNotification),
+    PatchDocumentSection => "document/section/patch" (v2::PatchDocumentSectionNotification),
 }
 
 client_notification_definitions! {

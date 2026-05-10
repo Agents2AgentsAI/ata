@@ -140,6 +140,19 @@ pub(super) fn server_notification_thread_target(
         }
         ServerNotification::Warning(notification) => notification.thread_id.as_deref(),
         ServerNotification::GuardianWarning(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::PresentDocument(notification) => Some(notification.thread_id.as_str()),
+        ServerNotification::UpdateDocumentSection(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::AppendDocumentSection(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::AddDocumentSection(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::PatchDocumentSection(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerStatusUpdated(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)

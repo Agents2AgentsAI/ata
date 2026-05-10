@@ -401,6 +401,9 @@ impl ChatWidget {
     }
 
     /// Returns `true` when the document reader view is the active bottom pane view.
+    /// Used by the chat composer to gate certain shortcuts; the call site
+    /// integration is a follow-up.
+    #[allow(dead_code)]
     pub(crate) fn is_document_reader_active(&self) -> bool {
         self.bottom_pane.is_document_reader_active()
     }

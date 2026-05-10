@@ -1220,6 +1220,58 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .note_thread_shutdown(&conversation_id.to_string())
                 .await;
         }
+        // ATA reading-view: forward document_reader tool results to the TUI
+        // overlay via dedicated `ServerNotification` variants.
+        EventMsg::PresentDocument(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::PresentDocument(
+                    codex_app_server_protocol::PresentDocumentNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::UpdateDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::UpdateDocumentSection(
+                    codex_app_server_protocol::UpdateDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::AppendDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::AppendDocumentSection(
+                    codex_app_server_protocol::AppendDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::AddDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::AddDocumentSection(
+                    codex_app_server_protocol::AddDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::PatchDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::PatchDocumentSection(
+                    codex_app_server_protocol::PatchDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
 
         _ => {}
     }

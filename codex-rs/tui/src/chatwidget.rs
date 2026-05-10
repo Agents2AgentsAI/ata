@@ -4388,6 +4388,12 @@ impl ChatWidget {
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
+        // ATA reading-view: when a document overlay is active and the agent
+        // is producing the document body itself, suppress chat-area streaming
+        // (the content lives in the reader, not the transcript).
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         // Before streaming agent content, flush any active exec cell group.
         self.flush_unified_exec_wait_streak();
         self.flush_active_cell();
@@ -6551,6 +6557,23 @@ impl ChatWidget {
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
             ServerNotification::ContextCompacted(_) => {}
+            // ATA reading-view: route document-tool notifications into the
+            // reading-view overlay handlers.
+            ServerNotification::PresentDocument(notification) => {
+                self.on_present_document(notification.event, from_replay, is_resume_initial_replay);
+            }
+            ServerNotification::UpdateDocumentSection(notification) => {
+                self.on_update_document_section(notification.event);
+            }
+            ServerNotification::AppendDocumentSection(notification) => {
+                self.on_append_document_section(notification.event);
+            }
+            ServerNotification::AddDocumentSection(notification) => {
+                self.on_add_document_section(notification.event);
+            }
+            ServerNotification::PatchDocumentSection(notification) => {
+                self.on_patch_document_section(notification.event);
+            }
         }
     }
 
@@ -6563,6 +6586,10 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        // ATA reading-view: notify the active overlay so it can clear any
+        // pending follow-up indicators if the agent ended the turn without
+        // calling an update_section tool.
+        self.bottom_pane.notify_turn_complete();
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;

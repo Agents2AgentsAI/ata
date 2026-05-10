@@ -156,14 +156,18 @@ pub(crate) trait BottomPaneView: Renderable {
 
     /// If this view just closed and represents a document reader, return the
     /// document id so the host can release any cached state for it.
+    /// (Wired during the closed-document tracking follow-up.)
+    #[allow(dead_code)]
     fn closed_document_id(&self) -> Option<&str> {
         None
     }
 
     /// Whether the view's composer (if any) currently owns focus. Used by
     /// chatwidget to decide whether keystrokes should be routed to the view's
-    /// internal composer or trigger global actions.
+    /// internal composer or trigger global actions. Wired with the PTT
+    /// composer key handler follow-up.
     #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
     fn is_composer_focused(&self) -> bool {
         false
     }
