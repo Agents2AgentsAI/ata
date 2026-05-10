@@ -155,7 +155,9 @@ jobs:
             sudo apt-get update -y
             # libasound2-dev is required by `alsa-sys` (transitively pulled in by
             # `cpal`) when codex-tui builds the voice/audio_device modules.
-            packages=(pkg-config libcap-dev libasound2-dev)
+            # libc++-dev / libc++abi-dev provide the libcxx ABI the prebuilt v8
+            # `ptrcomp_sandbox_release` archive was compiled against.
+            packages=(pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev)
             if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
               packages+=(libubsan1)
             fi
@@ -368,6 +370,13 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
           echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
+          # The openai/codex `ptrcomp_sandbox_release` archive is built against
+          # libc++ (`std::__1::*` symbols) on every platform, so route the v8
+          # build script's link directive to libc++ instead of the per-target
+          # default (libstdc++ on linux-gnu).
+          case "${TARGET}" in
+            *-linux-gnu|*-linux-musl) echo "CXXSTDLIB=c++" >> "$GITHUB_ENV" ;;
+          esac
 
       - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
         name: Cap build parallelism (ARM)
@@ -529,7 +538,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev
           fi
       # Some integration tests rely on DotSlash being installed.
       - name: Install DotSlash
@@ -654,6 +663,13 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
           echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
+          # The openai/codex `ptrcomp_sandbox_release` archive is built against
+          # libc++ (`std::__1::*` symbols) on every platform, so route the v8
+          # build script's link directive to libc++ instead of the per-target
+          # default (libstdc++ on linux-gnu).
+          case "${TARGET}" in
+            *-linux-gnu|*-linux-musl) echo "CXXSTDLIB=c++" >> "$GITHUB_ENV" ;;
+          esac
 
       - name: tests
         id: test
