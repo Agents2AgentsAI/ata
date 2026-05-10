@@ -355,7 +355,6 @@ impl RealtimeAudioPlayer {
             output_channels: self.output_channels,
         }
     }
-
 }
 
 /// Send-able view of the playback queue. Constructed via

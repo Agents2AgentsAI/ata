@@ -529,6 +529,7 @@ ignored = [
     "codex-reading-view-server",
     "codex-data-tools",
     "codex-test-macros",
+    "codex-utils-git",
     "md-5",
     "cpal",
     "hound",

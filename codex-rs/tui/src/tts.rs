@@ -46,11 +46,7 @@ pub(crate) fn elevenlabs_config_from(config: &Config) -> Option<ElevenLabsConfig
     if let Some(model) = toml.model_id.as_ref().filter(|s| !s.trim().is_empty()) {
         cfg = cfg.with_model_id(model.trim().to_string());
     }
-    if let Some(language) = toml
-        .language_code
-        .as_ref()
-        .filter(|s| !s.trim().is_empty())
-    {
+    if let Some(language) = toml.language_code.as_ref().filter(|s| !s.trim().is_empty()) {
         cfg.language_code = Some(language.trim().to_string());
     }
     cfg.speed = toml.speed;
@@ -114,10 +110,7 @@ impl ElevenLabsTtsManager {
         };
         if let Err(err) = session.text_tx.send(TextCommand::Text(text)) {
             warn!("ElevenLabs TTS text channel closed: {err}");
-            *self
-                .active
-                .lock()
-                .expect("ElevenLabs active session lock") = None;
+            *self.active.lock().expect("ElevenLabs active session lock") = None;
         }
     }
 
@@ -159,8 +152,7 @@ impl ElevenLabsTtsManager {
                 *self
                     .playback
                     .lock()
-                    .expect("ElevenLabs playback handle lock") =
-                    Some(player.playback_handle());
+                    .expect("ElevenLabs playback handle lock") = Some(player.playback_handle());
                 *guard = Some(player);
                 true
             }

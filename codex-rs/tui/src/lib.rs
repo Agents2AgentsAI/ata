@@ -172,9 +172,9 @@ mod update_prompt;
 mod update_versions;
 mod updates;
 mod version;
+mod voice;
 mod width;
 mod workspace_command;
-mod voice;
 
 mod wrapping;
 

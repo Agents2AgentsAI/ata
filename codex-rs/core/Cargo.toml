@@ -58,7 +58,6 @@ codex-rollout-trace = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-elevenlabs = { workspace = true }
 codex-research-tools = { workspace = true }
-codex-utils-git = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
