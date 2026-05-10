@@ -2395,7 +2395,6 @@ version = "0.129.0"
 dependencies = [
  "async-channel",
  "async-trait",
- "cc",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",

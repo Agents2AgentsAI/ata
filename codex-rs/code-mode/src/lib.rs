@@ -1,4 +1,6 @@
 mod description;
+#[cfg(target_os = "linux")]
+mod hash_memory_shim;
 mod response;
 mod runtime;
 mod service;

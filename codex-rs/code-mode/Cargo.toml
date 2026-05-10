@@ -3,8 +3,6 @@ edition.workspace = true
 license.workspace = true
 name = "codex-code-mode"
 version.workspace = true
-build = "build.rs"
-links = "codex_hash_memory_shim"
 
 [lib]
 doctest = false
@@ -16,9 +14,6 @@ sandbox = ["v8/v8_enable_sandbox"]
 
 [lints]
 workspace = true
-
-[build-dependencies]
-cc = "1"
 
 [dependencies]
 async-channel = { workspace = true }
