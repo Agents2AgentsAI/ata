@@ -25,8 +25,17 @@ runners:
     image: ubuntu24-full-arm64
     family: ["c7g", "m7g"]
     cpu: [8, 16]
-    ram: [32, 64]
+    # Pin to the larger 64 GB variant. ATA's `--all-features` Tests step
+    # compiles `codex-app-server`, `codex-tui`, `codex-core`, and several
+    # extra crates (v8-poc impl, elevenlabs, realtime-webrtc, voice +
+    # audio_device modules) on top of upstream, and the 32 GB tier was
+    # repeatedly losing the runner mid-build with `runner has received
+    # a shutdown signal`. 64 GB removes the OOM headroom problem.
+    ram: [64]
     spot: false
+    # Re-arm if the AWS instance is interrupted (rare but seen on c7g
+    # spot fallbacks during long compiles).
+    retry: when-interrupted
 
   ci-windows-x64:
     image: windows25-vstoolchain-x64
@@ -39,7 +48,13 @@ runners:
     # `memory allocation failed` from rustc/`DroplessArena::grow`.
     # 64 GB removes the OOM headroom problem.
     ram: [64]
-    spot: price-capacity-optimized
+    # On-demand instead of spot. Spot interruptions during the long
+    # MSVC ci-test compile have repeatedly killed the runner mid-step
+    # without recovery (the workload is 12+ minutes and `retry:
+    # when-interrupted` only re-runs the entire job, multiplying cost).
+    # ATA's compile takes longer than upstream codex-locus's because we
+    # add `codex-v8-poc` (real impl), voice/audio_device, etc.
+    spot: false
     retry: when-interrupted
 
   # --- Release (bigger for LTO, on-demand for reliability) ---
