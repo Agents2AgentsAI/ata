@@ -198,6 +198,7 @@ pub use rollout::read_session_meta_line;
 pub use rollout::rollout_date_parts;
 mod function_tool;
 mod state;
+pub mod supabase;
 mod tasks;
 mod user_shell_command;
 pub mod util;

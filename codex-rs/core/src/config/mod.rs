@@ -176,9 +176,15 @@ pub struct ResearchToolsToml {
 
 /// ATA-side `crate::config::types::*` re-exports. Upstream's
 /// `codex_config::types::*` items are not affected.
+pub mod ata;
+
 pub mod types {
     pub use super::ReadingViewToml;
     pub use super::ResearchToolsToml;
+    pub use super::ata::AtaAccountConfig;
+    pub use super::ata::DEFAULT_ATA_SUPABASE_ANON_KEY;
+    pub use super::ata::DEFAULT_ATA_SUPABASE_URL;
+    pub use super::ata::RelayMode;
 }
 
 pub use codex_network_proxy::NetworkProxyAuditMetadata;

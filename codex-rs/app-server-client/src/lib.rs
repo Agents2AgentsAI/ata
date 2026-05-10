@@ -105,6 +105,10 @@ pub mod legacy_core {
         pub use codex_core::review_prompts::*;
     }
 
+    pub mod supabase {
+        pub use codex_core::supabase::*;
+    }
+
     pub mod test_support {
         pub use codex_core::test_support::*;
     }

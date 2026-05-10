@@ -2796,6 +2796,14 @@ impl ChatWidget {
         });
     }
 
+    pub(crate) fn open_account_popup(&mut self) {
+        let view = crate::bottom_pane::AccountView::new(
+            self.frame_requester.clone(),
+            self.config.codex_home.as_path().to_path_buf(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
     pub(crate) fn open_memories_popup(&mut self) {
         if !self.config.features.enabled(Feature::MemoryTool) {
             self.open_memories_enable_prompt();

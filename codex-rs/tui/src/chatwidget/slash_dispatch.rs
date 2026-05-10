@@ -309,6 +309,9 @@ impl ChatWidget {
             SlashCommand::AutoReview => {
                 self.open_auto_review_denials_popup();
             }
+            SlashCommand::Account => {
+                self.open_account_popup();
+            }
             SlashCommand::Memories => {
                 self.open_memories_popup();
             }
@@ -949,6 +952,7 @@ impl ChatWidget {
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::AutoReview
+            | SlashCommand::Account
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit

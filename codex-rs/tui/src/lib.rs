@@ -171,6 +171,7 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+mod vad;
 mod version;
 mod voice;
 mod width;

@@ -48,6 +48,7 @@ use ratatui::text::Line;
 use std::time::Duration;
 use std::time::Instant;
 
+mod account_view;
 mod action_required_title;
 mod app_link_view;
 mod approval_overlay;
@@ -112,6 +113,7 @@ pub(crate) use list_selection_view::SelectionViewParams;
 pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
+pub(crate) use account_view::AccountView;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
 mod feedback_view;
 mod hooks_browser_view;
