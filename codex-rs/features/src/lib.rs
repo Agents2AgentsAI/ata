@@ -564,11 +564,23 @@ fn web_search_details() -> &'static str {
     "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
 }
 
-// is_research_feature carve-out removed during merge — ATA `Feature::Research*`
-// variants are not present in upstream's `codex-features` crate. To restore the
-// quality-of-life carve-out (suppressing the under-development warning for
-// research features), add the variants to upstream's enum and re-introduce this
-// helper. Tracked as follow-up.
+/// ATA: research features are intentionally `Stage::UnderDevelopment` so they
+/// are off-by-default and managed via `/research`. The under-development
+/// warning is noisy for users who deliberately enabled them, so the warning
+/// emitter skips this carve-out.
+fn is_research_feature(feature: Feature) -> bool {
+    matches!(
+        feature,
+        Feature::Research
+            | Feature::ResearchPaperSearch
+            | Feature::ResearchZotero
+            | Feature::ResearchHackerNews
+            | Feature::ResearchPatents
+            | Feature::ResearchRepoAnalysis
+            | Feature::ResearchKnowledgeBase
+            | Feature::ReadingView
+    )
+}
 
 /// Keys accepted in `[features]` tables.
 pub fn feature_for_key(key: &str) -> Option<Feature> {
@@ -1203,11 +1215,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ReadingView,
         key: "reading_view",
-        stage: Stage::Experimental {
-            name: "Reading view",
-            menu_description: "Open documents in a dedicated reader overlay",
-            announcement: "Open documents in a dedicated reader overlay.",
-        },
+        stage: Stage::Stable,
         default_enabled: true,
     },
     FeatureSpec {
@@ -1286,7 +1294,9 @@ pub fn unstable_features_warning_event(
             if !features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment) {
+            if matches!(spec.stage, Stage::UnderDevelopment)
+                && !is_research_feature(spec.id)
+            {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }
