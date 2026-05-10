@@ -235,7 +235,12 @@ pub struct ContentBlockDeltaPayload {
     pub delta: Option<ContentDelta>,
 }
 
+// Variant names mirror the Anthropic SSE `type` field
+// (text_delta, input_json_delta, thinking_delta, signature_delta) which is
+// what `from_value` matches on; renaming them to placate clippy would
+// silently break deserialization of upstream events.
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum ContentDelta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
