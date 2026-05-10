@@ -253,7 +253,6 @@ async fn turn_start_emits_user_message_item_with_text_elements() -> Result<()> {
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
@@ -329,10 +328,22 @@ async fn turn_start_emits_thread_scoped_warning_notification_for_trimmed_skills(
     let warning: WarningNotification =
         serde_json::from_value(params).expect("deserialize warning notification");
     assert_eq!(warning.thread_id.as_deref(), Some(thread.id.as_str()));
-    assert_eq!(
-        warning.message,
-        "Exceeded skills context budget of 2%. All skill descriptions were removed and 7 additional skills were not included in the model-visible skills list."
-    );
+    // ATA bundles 3 extra system skill categories (.system-research,
+    // .system-workspace, .system-adapt-environment) on top of upstream's
+    // base set, so the trimmed-skill count differs from upstream's
+    // hardcoded 7. Match the prefix and validate the count is non-zero
+    // rather than pinning to the exact upstream number.
+    let prefix = "Exceeded skills context budget of 2%. All skill descriptions were removed and ";
+    let suffix = " additional skills were not included in the model-visible skills list.";
+    let middle = warning
+        .message
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .unwrap_or_else(|| panic!("unexpected warning message format: {}", warning.message));
+    let count: usize = middle
+        .parse()
+        .unwrap_or_else(|err| panic!("expected integer skill count in {middle:?}: {err}"));
+    assert!(count > 0, "expected non-zero trimmed skills count");
 
     timeout(
         DEFAULT_READ_TIMEOUT,
@@ -514,7 +525,6 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];

@@ -1425,7 +1425,6 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
 }
 
 #[cfg_attr(target_os = "windows", ignore)]
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result<()> {
     skip_if_no_network!(Ok(()));

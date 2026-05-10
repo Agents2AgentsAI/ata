@@ -198,6 +198,22 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
                 SkillScope::System,
                 user_folder.join("skills").join(".system")
             ),
+            // ATA-bundled custom system skill categories (see
+            // codex_skills::custom_skill_cache_root_dirs in skills/src/lib.rs).
+            (
+                SkillScope::System,
+                user_folder.join("skills").join(".system-research")
+            ),
+            (
+                SkillScope::System,
+                user_folder.join("skills").join(".system-workspace")
+            ),
+            (
+                SkillScope::System,
+                user_folder
+                    .join("skills")
+                    .join(".system-adapt-environment")
+            ),
             (SkillScope::Admin, system_folder.join("skills")),
         ]
     );
@@ -264,6 +280,22 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
             (
                 SkillScope::System,
                 user_folder.join("skills").join(".system")
+            ),
+            // ATA-bundled custom system skill categories (see
+            // codex_skills::custom_skill_cache_root_dirs in skills/src/lib.rs).
+            (
+                SkillScope::System,
+                user_folder.join("skills").join(".system-research")
+            ),
+            (
+                SkillScope::System,
+                user_folder.join("skills").join(".system-workspace")
+            ),
+            (
+                SkillScope::System,
+                user_folder
+                    .join("skills")
+                    .join(".system-adapt-environment")
             ),
         ]
     );
@@ -1796,6 +1828,13 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
     }
+    // ATA-bundled custom system skill categories register 3 extra System
+    // roots after the upstream `.system` entry.
+    expected.extend([
+        SkillScope::System,
+        SkillScope::System,
+        SkillScope::System,
+    ]);
     expected.push(SkillScope::Admin);
     assert_eq!(scopes, expected);
 }

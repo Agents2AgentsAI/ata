@@ -110,6 +110,9 @@ async fn build_analytics_plugin_test_codex(
         .with_model("gpt-5.2")
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
+            // ATA defaults `analytics_enabled` to false (privacy posture);
+            // tests that verify the analytics pipeline must opt in explicitly.
+            config.analytics_enabled = Some(true);
         });
     Ok(builder
         .build(server)
@@ -363,7 +366,6 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     skip_if_no_network!(Ok(()));

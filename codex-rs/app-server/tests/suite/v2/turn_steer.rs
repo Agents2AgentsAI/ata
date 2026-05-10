@@ -29,7 +29,6 @@ use super::analytics::wait_for_analytics_event;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn turn_steer_requires_active_turn() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -205,7 +204,6 @@ async fn turn_steer_rejects_oversized_text_input() -> Result<()> {
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn turn_steer_returns_active_turn_id() -> Result<()> {
     #[cfg(target_os = "windows")]

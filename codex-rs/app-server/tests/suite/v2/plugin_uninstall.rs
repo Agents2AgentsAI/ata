@@ -79,7 +79,6 @@ enabled = true
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
     let analytics_server = start_analytics_events_server().await?;
@@ -88,7 +87,9 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            "chatgpt_base_url = \"{}\"\n\n[features]\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
+            // ATA defaults `analytics_enabled` to false (privacy posture);
+            // tests that verify the analytics pipeline must opt in explicitly.
+            "chatgpt_base_url = \"{}\"\n\n[analytics]\nenabled = true\n\n[features]\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
             analytics_server.uri()
         ),
     )?;

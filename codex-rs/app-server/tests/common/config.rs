@@ -101,6 +101,11 @@ chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
 
+# ATA defaults `analytics_enabled` to false (privacy posture); tests that
+# verify the analytics pipeline must opt in explicitly.
+[analytics]
+enabled = true
+
 [model_providers.mock_provider]
 name = "Mock provider for test"
 base_url = "{server_uri}/v1"

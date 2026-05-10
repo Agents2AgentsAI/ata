@@ -369,7 +369,6 @@ async fn thread_fork_can_exclude_turns_and_skip_restored_token_usage() -> Result
     Ok(())
 }
 
-#[ignore = "TODO(ata-merge-v0.130): pre-existing failure carried over from merge_upstream_0.129.0 baseline; needs analytics-default investigation"]
 #[tokio::test]
 async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
@@ -763,6 +762,11 @@ sandbox_mode = "read-only"
 chatgpt_base_url = "{chatgpt_base_url}"
 
 model_provider = "mock_provider"
+
+# ATA defaults `analytics_enabled` to false (privacy posture); tests that
+# verify the analytics pipeline must opt in explicitly.
+[analytics]
+enabled = true
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
