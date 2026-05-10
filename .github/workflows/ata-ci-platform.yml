@@ -163,8 +163,23 @@ jobs:
             if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
               packages+=(libubsan1)
             fi
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-20-dev libc++abi-20-dev \
-              || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-dev libc++abi-dev
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-20-dev libc++abi-20-dev; then
+              llvm_lib_dir=""
+              for candidate in /usr/lib/llvm-20/lib/x86_64-unknown-linux-gnu \
+                               /usr/lib/llvm-20/lib/aarch64-unknown-linux-gnu \
+                               /usr/lib/llvm-20/lib; do
+                if [ -e "$candidate/libc++.so" ] || [ -e "$candidate/libc++.so.1" ]; then
+                  llvm_lib_dir="$candidate"; break
+                fi
+              done
+              if [ -n "$llvm_lib_dir" ]; then
+                echo "LIBRARY_PATH=${llvm_lib_dir}" >> "$GITHUB_ENV"
+                echo "LD_LIBRARY_PATH=${llvm_lib_dir}" >> "$GITHUB_ENV"
+                echo "Selected libc++ dir: ${llvm_lib_dir}"
+              fi
+            else
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-dev libc++abi-dev
+            fi
           fi
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
@@ -545,11 +560,29 @@ jobs:
             # was built against newer libc++ and references symbols (e.g.
             # std::__1::__hash_memory) not present in Ubuntu noble's default
             # libc++-18.
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              pkg-config libcap-dev libasound2-dev \
-              libc++-20-dev libc++abi-20-dev \
-              || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                pkg-config libcap-dev libasound2-dev \
+                libc++-20-dev libc++abi-20-dev; then
+              # libc++-20 ships under /usr/lib/llvm-20/lib (or the per-arch
+              # subdir). Put it first on LIBRARY_PATH so `-lc++` picks the
+              # newer libc++ over the system default libc++-18.
+              llvm_lib_dir=""
+              for candidate in /usr/lib/llvm-20/lib/x86_64-unknown-linux-gnu \
+                               /usr/lib/llvm-20/lib/aarch64-unknown-linux-gnu \
+                               /usr/lib/llvm-20/lib; do
+                if [ -e "$candidate/libc++.so" ] || [ -e "$candidate/libc++.so.1" ]; then
+                  llvm_lib_dir="$candidate"; break
+                fi
+              done
+              if [ -n "$llvm_lib_dir" ]; then
+                echo "LIBRARY_PATH=${llvm_lib_dir}" >> "$GITHUB_ENV"
+                echo "LD_LIBRARY_PATH=${llvm_lib_dir}" >> "$GITHUB_ENV"
+                echo "Selected libc++ dir: ${llvm_lib_dir}"
+              fi
+            else
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                 pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev
+            fi
           fi
       # Some integration tests rely on DotSlash being installed.
       - name: Install DotSlash
