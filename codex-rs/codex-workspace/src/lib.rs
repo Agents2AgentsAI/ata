@@ -18,6 +18,7 @@ use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use error::WorkspaceError;
+use std::io::Write;
 
 fn parse_positive_usize(input: &str) -> std::result::Result<usize, String> {
     let value = input
@@ -372,7 +373,8 @@ pub struct SearchCommandsArgs {
 /// Run the workspace CLI and print output to stdout/stderr.
 /// Returns the process exit code.
 pub fn run_cli(cli: Cli) -> i32 {
-    match dispatch(cli) {
+    let mut stdout = std::io::stdout().lock();
+    match dispatch(cli, &mut stdout) {
         Ok(code) => code,
         Err(e) => {
             let code = e.exit_code();
@@ -382,17 +384,26 @@ pub fn run_cli(cli: Cli) -> i32 {
     }
 }
 
-fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
+/// Run the workspace CLI capturing stdout into a string. Used by the TUI's
+/// `/workspace` slash command so subcommand output can be inserted as a chat
+/// message instead of printed to the terminal.
+pub fn dispatch_to_string(cli: Cli) -> Result<(i32, String), WorkspaceError> {
+    let mut buf: Vec<u8> = Vec::new();
+    let code = dispatch(cli, &mut buf)?;
+    Ok((code, String::from_utf8_lossy(&buf).into_owned()))
+}
+
+fn dispatch<W: Write>(cli: Cli, out: &mut W) -> Result<i32, WorkspaceError> {
     match cli.command {
         Command::Init { name } => {
             let wid = commands::init::run(&name)?;
-            println!("{wid}");
+            writeln!(out, "{wid}")?;
             Ok(0)
         }
 
         Command::List => {
             let results = commands::list::run()?;
-            println!("{}", serde_json::to_string_pretty(&results)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&results)?)?;
             Ok(0)
         }
 
@@ -400,55 +411,56 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             let query = args.query.join(" ");
             let matches = search_command_catalog(&query, args.limit);
             if matches.is_empty() {
-                println!(
+                writeln!(
+                    out,
                     "No matching workspace command found for \"{}\".",
                     query.trim()
-                );
+                )?;
                 return Ok(0);
             }
             let best_match = matches[0];
             let manual = render_command_manual(best_match)?;
-            println!("{}", render_search_results(&matches, &manual));
+            writeln!(out, "{}", render_search_results(&matches, &manual))?;
             Ok(0)
         }
 
         Command::Read { workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::read::run(&wid)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
         Command::Select { selector } => {
             let wid = commands::select::run(&selector)?;
-            println!("selected: {wid}");
+            writeln!(out, "selected: {wid}")?;
             Ok(0)
         }
 
         Command::Delete { id, force } => {
             commands::delete::run(&id, force)?;
-            println!("deleted: {id}");
+            writeln!(out, "deleted: {id}")?;
             Ok(0)
         }
 
         Command::Resolve { spec, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let path = commands::resolve::run(&wid, &spec)?;
-            println!("{}", path.display());
+            writeln!(out, "{}", path.display())?;
             Ok(0)
         }
 
         Command::CheckHost { url, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             commands::check_host::run(&wid, &url)?;
-            println!("{url}");
+            writeln!(out, "{url}")?;
             Ok(0)
         }
 
         Command::Audit { json, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let entry = commands::audit::run(&wid, &json)?;
-            println!("{}", serde_json::to_string_pretty(&entry)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&entry)?)?;
             Ok(0)
         }
 
@@ -461,14 +473,14 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let results = commands::audit_query::run(&wid, since, until, ops.as_deref(), limit)?;
-            println!("{}", serde_json::to_string_pretty(&results)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&results)?)?;
             Ok(0)
         }
 
         Command::Validate { workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let report = commands::validate::run(&wid)?;
-            println!("{}", serde_json::to_string_pretty(&report)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
             Ok(if report.ok { 0 } else { 1 })
         }
 
@@ -488,7 +500,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
 
         Command::MirrorPath { url } => {
             let path = commands::mirror_path::run(&url);
-            println!("{}", path.display());
+            writeln!(out, "{}", path.display())?;
             Ok(0)
         }
 
@@ -500,7 +512,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let result = commands::repo_clone::run(&wid, &url, &alias, full)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&result)?)?;
             Ok(0)
         }
 
@@ -513,7 +525,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest =
                 commands::repo_update_state::run(&wid, &alias, &head_sha, head_ref.as_deref())?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -524,21 +536,21 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::repo_pin::run(&wid, &alias, &sha)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
         Command::RepoUnpin { alias, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::repo_unpin::run(&wid, &alias)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
         Command::RepoRemove { alias, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             commands::repo_remove::run(&wid, &alias)?;
-            println!("removed: {alias}");
+            writeln!(out, "removed: {alias}")?;
             Ok(0)
         }
 
@@ -550,7 +562,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let result = commands::run_setup::run(&wid, &name, &source_alias, &strategy)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&result)?)?;
             Ok(0)
         }
 
@@ -561,14 +573,14 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::run_update_status::run(&wid, &id, &status)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
         Command::RunRemove { id, workspace } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             commands::run_remove::run(&wid, &id)?;
-            println!("removed: {id}");
+            writeln!(out, "removed: {id}")?;
             Ok(0)
         }
 
@@ -579,7 +591,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::add_entry::run(&wid, &collection, &json)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -600,7 +612,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
                 doi.as_deref(),
                 pdf_path.as_deref().map(std::path::Path::new),
             )?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -611,7 +623,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::remove_entry::run(&wid, &collection, &id)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -622,7 +634,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::set_field::run(&wid, &path, &value)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -633,7 +645,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::index_update_status::run(&wid, &id, &status)?;
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&manifest)?)?;
             Ok(0)
         }
 
@@ -651,7 +663,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             let wid = resolve_workspace_or_create_from_spec(workspace.as_deref(), &spec_path)?;
             let result =
                 commands::materialize::run(&wid, std::path::Path::new(&spec_path), dry_run)?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            writeln!(out, "{}", serde_json::to_string_pretty(&result)?)?;
             Ok(0)
         }
 
@@ -660,7 +672,7 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             let json =
                 commands::export_spec::run(&wid, output.as_deref().map(std::path::Path::new))?;
             if output.is_none() {
-                println!("{json}");
+                writeln!(out, "{json}")?;
             }
             Ok(0)
         }

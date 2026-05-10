@@ -434,7 +434,7 @@ impl ChatWidget {
                 self.add_jobs_summary();
             }
             SlashCommand::Research => {
-                self.add_research_summary();
+                self.open_research_popup();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -650,6 +650,9 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
+            SlashCommand::Workspace => {
+                self.run_workspace_slash_command(trimmed);
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;

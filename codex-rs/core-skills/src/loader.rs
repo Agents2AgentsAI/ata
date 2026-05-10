@@ -318,6 +318,25 @@ fn skill_roots_from_layer_stack_inner(
                     file_system: Arc::clone(&LOCAL_FS),
                     plugin_id: None,
                 });
+                // ATA: also register the custom skill category cache dirs
+                // (`$CODEX_HOME/skills/.system-research`,
+                // `.system-workspace`, `.system-adapt-environment`, …) so
+                // ATA-bundled skills are discovered alongside upstream's
+                // `.system` directory.
+                for custom_root in
+                    codex_skills::custom_skill_cache_root_dirs(config_folder.as_path())
+                {
+                    if let Ok(custom_root) =
+                        AbsolutePathBuf::from_absolute_path_checked(custom_root)
+                    {
+                        roots.push(SkillRoot {
+                            path: custom_root,
+                            scope: SkillScope::System,
+                            file_system: Arc::clone(&LOCAL_FS),
+                            plugin_id: None,
+                        });
+                    }
+                }
             }
             ConfigLayerSource::System { .. } => {
                 // The system config layer lives under `/etc/codex/` on Unix, so treat

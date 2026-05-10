@@ -936,11 +936,9 @@ pub(crate) enum AppEvent {
     /// A message received from a browser WebSocket client connected to the
     /// reading-view server (e.g. follow-up question, read-aloud request).
     ReadingViewBrowserMessage(String),
-    /// The user changed the reading view mode via the setup popup.
-    /// Emitted by the reading-view setup popup (port pending; until then the
-    /// `/reading-view` slash command shows an info message and this variant
-    /// is intentionally unused).
-    #[allow(dead_code)]
+    /// The user changed the reading view mode via the research popup or the
+    /// reading-view setup popup. Currently emitted from
+    /// `bottom_pane::ResearchToolsView`.
     ReadingViewModeChanged(ReadingViewMode),
 
     /// Periodic tick to update the TTS word-highlight position.

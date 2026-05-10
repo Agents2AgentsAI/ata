@@ -55,6 +55,7 @@ mod approval_overlay;
 mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
+mod research_tools_view;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -102,6 +103,8 @@ mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use account_view::AccountView;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_research_tool_items;
 // ATA: re-export the voice context type so voice_mode can refer to it via
 // `crate::bottom_pane::ReadingViewVoiceContext` (the canonical path).
 #[cfg(not(target_os = "linux"))]

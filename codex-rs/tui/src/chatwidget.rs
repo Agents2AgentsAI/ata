@@ -10105,14 +10105,70 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    /// /workspace summary. Workspace selection / migration is managed by the
-    /// `ata workspace` CLI; this in-TUI command just confirms the verb exists
-    /// and points the user at it.
+    /// /workspace summary. Without args, surface the help text. With args,
+    /// dispatch to `codex_workspace::dispatch_to_string` and render the
+    /// captured output as an info message.
     pub(crate) fn add_workspace_summary(&mut self) {
         self.add_info_message(
-            "Workspace management is in the `ata workspace` CLI subcommand.".to_string(),
-            Some("Try `ata workspace --help` for a list of operations.".to_string()),
+            "Workspace management is in the `ata workspace` CLI subcommand. \
+             Inline form: `/workspace <subcommand> [args]` (e.g. `/workspace list`, \
+             `/workspace select <selector>`)."
+                .to_string(),
+            Some("Try `/workspace help` to see all subcommands.".to_string()),
         );
+    }
+
+    /// Run `/workspace <args>` by reusing the `codex-workspace` clap CLI.
+    /// Output is captured and rendered as an info message in chat.
+    pub(crate) fn run_workspace_slash_command(&mut self, args: &str) {
+        use clap::Parser as _;
+
+        let trimmed = args.trim();
+        if trimmed.is_empty() || trimmed == "help" || trimmed == "--help" || trimmed == "-h" {
+            self.add_workspace_summary();
+            return;
+        }
+
+        // Parse `workspace <args>` using clap. We synthesise an argv that
+        // begins with "workspace" so clap treats `args` as subcommand input.
+        let mut argv = vec!["workspace".to_string()];
+        for piece in shlex::split(trimmed).unwrap_or_else(|| {
+            // Fallback: pass the raw string as a single argument so users get
+            // a clap error instead of silent dropping.
+            vec![trimmed.to_string()]
+        }) {
+            argv.push(piece);
+        }
+
+        let cli = match codex_workspace::Cli::try_parse_from(&argv) {
+            Ok(cli) => cli,
+            Err(err) => {
+                // clap renders both --help and error messages here.
+                self.add_info_message(err.to_string(), /*hint*/ None);
+                return;
+            }
+        };
+
+        match codex_workspace::dispatch_to_string(cli) {
+            Ok((code, output)) => {
+                let trimmed_output = output.trim_end();
+                let body = if trimmed_output.is_empty() {
+                    if code == 0 {
+                        "Workspace command completed.".to_string()
+                    } else {
+                        format!("Workspace command exited with status {code}.")
+                    }
+                } else if code == 0 {
+                    trimmed_output.to_string()
+                } else {
+                    format!("{trimmed_output}\n(exit status {code})")
+                };
+                self.add_info_message(body, /*hint*/ None);
+            }
+            Err(err) => {
+                self.add_error_message(format!("/workspace: {err}"));
+            }
+        }
     }
 
     /// /jobs summary. Scheduled-job management lives in `ata jobs` and
@@ -10126,16 +10182,16 @@ impl ChatWidget {
         );
     }
 
-    /// /research summary. The research toolkit is invoked by the agent itself
-    /// (it shows up as tools the model can call); for ad-hoc one-off queries
-    /// the user can invoke `ata research` from the CLI.
-    pub(crate) fn add_research_summary(&mut self) {
-        self.add_info_message(
-            "The research toolkit is exposed to the agent as tools (search, fetch, \
-             summarise). It runs automatically when the agent decides to research."
-                .to_string(),
-            Some("For one-off CLI research, use `ata research --help`.".to_string()),
+    /// /research opens the research-tools toggle popup so users can enable
+    /// or disable individual research integrations (Paper Search, Zotero,
+    /// HN, Patents, Repo Analysis, Reading View, Knowledge Base).
+    pub(crate) fn open_research_popup(&mut self) {
+        let items = crate::bottom_pane::build_research_tool_items(
+            &self.config.features,
+            self.reading_view_mode,
         );
+        let view = crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

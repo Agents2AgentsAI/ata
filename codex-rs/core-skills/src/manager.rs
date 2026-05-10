@@ -78,6 +78,14 @@ impl SkillsManager {
         } else if let Err(err) = install_system_skills(&manager.codex_home) {
             tracing::error!("failed to install system skills: {err}");
         }
+        // ATA-private: install custom skill categories (research, workspace,
+        // adapt-environment). These live alongside upstream's `.system`
+        // directory and follow the same on-disk-cache lifecycle.
+        if bundled_skills_enabled {
+            if let Err(err) = codex_skills::install_custom_skills(manager.codex_home.as_path()) {
+                tracing::error!("failed to install custom skills: {err}");
+            }
+        }
         manager
     }
 

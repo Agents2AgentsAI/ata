@@ -241,6 +241,21 @@ pub enum Feature {
     ReadingView,
     /// ATA-private: enable voice mode (push-to-talk capture + ElevenLabs TTS).
     VoiceMode,
+    /// ATA-private: master toggle for the research tool integrations (turning
+    /// this on enables the family below as a unit).
+    Research,
+    /// ATA-private: research paper search tools (Semantic Scholar, arXiv, OpenAlex).
+    ResearchPaperSearch,
+    /// ATA-private: Zotero library search, notes, annotations, citations.
+    ResearchZotero,
+    /// ATA-private: Hacker News search and browsing tools.
+    ResearchHackerNews,
+    /// ATA-private: worldwide patent search via the EPO Open Patent Services API.
+    ResearchPatents,
+    /// ATA-private: repository cloning, summarization, and analysis tools.
+    ResearchRepoAnalysis,
+    /// ATA-private: knowledge-base persistence (cards, journal, cross-paper reports).
+    ResearchKnowledgeBase,
 }
 
 impl Feature {
@@ -1204,6 +1219,48 @@ pub const FEATURES: &[FeatureSpec] = &[
             announcement: "Push-to-talk capture + ElevenLabs TTS.",
         },
         default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Research,
+        key: "research",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPaperSearch,
+        key: "research_paper_search",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ResearchZotero,
+        key: "research_zotero",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchHackerNews,
+        key: "research_hacker_news",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPatents,
+        key: "research_patents",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchRepoAnalysis,
+        key: "research_repo_analysis",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchKnowledgeBase,
+        key: "research_knowledge_base",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 
