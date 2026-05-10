@@ -26,8 +26,6 @@ UTILITY_NAME_EXCEPTIONS = {
     "path-utils": "codex-utils-path",
 }
 MANIFEST_FEATURE_EXCEPTIONS = {
-    "codex-rs/code-mode/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
-    "codex-rs/v8-poc/Cargo.toml": {"sandbox": ("v8/v8_enable_sandbox",)},
     # ATA: codex-treesitter ships with seven `tree-sitter-<lang>` deps gated
     # behind per-language features so a consumer can opt out of dialects it
     # doesn't need. This matches the upstream layout in codex-locus.

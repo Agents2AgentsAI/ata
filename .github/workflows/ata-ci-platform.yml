@@ -359,7 +359,8 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
         name: Configure musl rusty_v8 artifact overrides
         # `denoland/rusty_v8` does not ship a musl prebuilt for any v8
-        # version; openai/codex republishes a plain `release` musl variant.
+        # version; the upstream Codex release republishes a plain `release`
+        # musl variant.
         # All other targets fall back to the v8 build script's default
         # download from denoland. Neither archive enables
         # `v8_enable_sandbox`, which matches the
@@ -382,9 +383,15 @@ jobs:
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
-      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
-        name: Cap build parallelism (ARM)
+      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') || runner.os == 'Windows' }}
+        name: Cap build parallelism (ARM / Windows)
         shell: bash
+        # Windows MSVC rustc memory usage compiling `codex-app-server`'s
+        # `--all-features` lib test set spikes high enough to OOM the
+        # 32 GB ci-windows-x64 spot instance with the default 8-job
+        # parallelism. Capping at 4 jobs (same as ARM Linux) keeps peak
+        # heap below the runner's RAM ceiling without materially slowing
+        # the overall step. Same applies to the ARM Linux runners.
         run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
 
       - name: Install cargo-chef
@@ -642,9 +649,15 @@ jobs:
           tool: nextest
           version: 0.9.103
 
-      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
-        name: Cap build parallelism (ARM)
+      - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') || runner.os == 'Windows' }}
+        name: Cap build parallelism (ARM / Windows)
         shell: bash
+        # Windows MSVC rustc memory usage compiling `codex-app-server`'s
+        # `--all-features` lib test set spikes high enough to OOM the
+        # 32 GB ci-windows-x64 spot instance with the default 8-job
+        # parallelism. Capping at 4 jobs (same as ARM Linux) keeps peak
+        # heap below the runner's RAM ceiling without materially slowing
+        # the overall step. Same applies to the ARM Linux runners.
         run: echo "CARGO_BUILD_JOBS=4" >> "$GITHUB_ENV"
 
       - name: Enable unprivileged user namespaces (Linux)
