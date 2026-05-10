@@ -122,7 +122,6 @@ members = [
     "artifacts",
     "codex-workspace",
     "test-macros",
-    "utils/git",
 ]
 resolver = "2"
 
@@ -257,7 +256,6 @@ codex-scheduler = { path = "scheduler" }
 codex-package-manager = { path = "package-manager" }
 codex-artifacts = { path = "artifacts" }
 codex-test-macros = { path = "test-macros" }
-codex-utils-git = { path = "utils/git" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
@@ -529,7 +527,6 @@ ignored = [
     "codex-reading-view-server",
     "codex-data-tools",
     "codex-test-macros",
-    "codex-utils-git",
     "md-5",
     "cpal",
     "hound",
