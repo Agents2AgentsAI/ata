@@ -4243,6 +4243,7 @@ dependencies = [
 name = "codex-v8-poc"
 version = "0.129.0"
 dependencies = [
+ "cc",
  "pretty_assertions",
  "v8",
 ]

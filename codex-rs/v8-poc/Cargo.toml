@@ -3,6 +3,7 @@ name = "codex-v8-poc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [lib]
 name = "codex_v8_poc"
@@ -16,6 +17,9 @@ workspace = true
 
 [dependencies]
 v8 = { workspace = true }
+
+[build-dependencies]
+cc = "1"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
