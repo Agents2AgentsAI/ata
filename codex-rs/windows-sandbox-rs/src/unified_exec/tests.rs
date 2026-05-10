@@ -36,6 +36,42 @@ fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
         .expect("legacy Windows sandbox process test lock poisoned")
 }
 
+/// Returns `Some(guard)` only when the current process token has a logon
+/// SID — i.e. when running under an interactive Windows session. CI
+/// runners and Windows services launch tasks with a token that lacks
+/// `SE_GROUP_LOGON_ID`, so `create_workspace_write_token_with_caps_from`
+/// (called by `spawn_windows_sandbox_session_legacy`) bails with
+/// `Logon SID not present on token` and the test panics. Returning `None`
+/// from this helper lets the test exit early so the suite passes on
+/// non-interactive hosts while still exercising the legacy path on
+/// developer machines.
+fn legacy_process_test_guard_or_skip(name: &str) -> Option<MutexGuard<'static, ()>> {
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    let mut token: HANDLE = 0;
+    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
+    if opened == 0 {
+        eprintln!(
+            "skipping legacy Windows sandbox test {name}: OpenProcessToken failed (likely sandboxed CI)"
+        );
+        return None;
+    }
+    let result = unsafe { crate::token::get_logon_sid_bytes(token) };
+    unsafe {
+        windows_sys::Win32::Foundation::CloseHandle(token);
+    }
+    if result.is_err() {
+        eprintln!(
+            "skipping legacy Windows sandbox test {name}: process token has no logon SID (typical for CI runners)"
+        );
+        return None;
+    }
+    Some(legacy_process_test_guard())
+}
+
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread()
         .enable_all()
@@ -142,7 +178,9 @@ async fn collect_stdout_and_exit(
 
 #[test]
 fn legacy_non_tty_cmd_emits_output() {
-    let _guard = legacy_process_test_guard();
+    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_non_tty_cmd_emits_output") else {
+        return;
+    };
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -181,7 +219,10 @@ fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_non_tty_powershell_emits_output")
+    else {
+        return;
+    };
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -366,7 +407,10 @@ fn legacy_capture_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_capture_powershell_emits_output")
+    else {
+        return;
+    };
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
@@ -403,7 +447,11 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let _guard = legacy_process_test_guard();
+    let Some(_guard) =
+        legacy_process_test_guard_or_skip("legacy_tty_powershell_emits_output_and_accepts_input")
+    else {
+        return;
+    };
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
