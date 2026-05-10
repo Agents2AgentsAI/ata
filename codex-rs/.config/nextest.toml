@@ -106,6 +106,16 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 retries = 2
 
 [[profile.default.overrides]]
+# compact_remote tests use `wait_for_event` with the upstream default 1s
+# timeout. ATA's overlay registers ~8 extra tools and a larger system
+# prompt, which on contended Linux x64 CI runners pushes
+# initial-turn-complete past the 1s window. Retry to absorb that
+# variance — the underlying logic is unchanged.
+filter = 'package(codex-core) & test(/^suite::compact_remote::/)'
+slow-timeout = { period = "120s", terminate-after = 2 }
+retries = 2
+
+[[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.
 # Serialize them to avoid exhausting Windows session/global desktop resources in CI.
 filter = 'package(codex-windows-sandbox) & test(legacy_)'
