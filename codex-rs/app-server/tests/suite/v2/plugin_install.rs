@@ -1249,9 +1249,13 @@ plugins = true
 }
 
 fn write_analytics_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
+    // ATA's config overlay defaults `analytics_enabled` to `Some(false)` for
+    // privacy, so `AnalyticsEventsClient::new` skips creating the upload queue
+    // and `plugin_install_tracks_*` tests time out waiting on the mock
+    // analytics endpoint. Opt in explicitly here.
     std::fs::write(
         codex_home.join("config.toml"),
-        format!("chatgpt_base_url = \"{base_url}\"\n"),
+        format!("chatgpt_base_url = \"{base_url}\"\n\n[analytics]\nenabled = true\n"),
     )
 }
 
@@ -1290,6 +1294,9 @@ fn write_remote_plugin_catalog_config(
     codex_home: &std::path::Path,
     base_url: &str,
 ) -> std::io::Result<()> {
+    // ATA's config overlay defaults `analytics_enabled` to `Some(false)` for
+    // privacy. Opt in here so the analytics-tracking install tests can
+    // observe their expected events instead of timing out.
     std::fs::write(
         codex_home.join("config.toml"),
         format!(
@@ -1299,6 +1306,9 @@ chatgpt_base_url = "{base_url}"
 [features]
 plugins = true
 remote_plugin = true
+
+[analytics]
+enabled = true
 "#
         ),
     )
