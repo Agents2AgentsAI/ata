@@ -212,10 +212,6 @@ impl ResponsesWebsocketConnection {
         skip_all,
         fields(transport = "responses_websocket", api.path = "responses")
     )]
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the guard serializes exclusive use of the websocket while sending a request frame"
-    )]
     pub async fn send_response_processed(&self, response_id: String) -> Result<(), ApiError> {
         let request =
             ResponsesWsRequest::ResponseProcessed(ResponseProcessedWsRequest { response_id });
@@ -273,10 +269,6 @@ impl ResponsesWebsocketConnection {
 
         let current_span = Span::current();
         tokio::spawn(
-            #[expect(
-                clippy::await_holding_invalid_type,
-                reason = "the guard serializes exclusive use of the websocket stream for the lifetime of the response stream"
-            )]
             async move {
                 if let Some(model) = server_model {
                     let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
