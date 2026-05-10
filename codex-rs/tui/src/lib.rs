@@ -161,6 +161,7 @@ mod theme_picker;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;
+#[cfg(not(target_os = "linux"))]
 mod tts;
 mod tui;
 mod ui_consts;

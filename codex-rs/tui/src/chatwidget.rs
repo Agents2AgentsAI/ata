@@ -792,7 +792,9 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     /// ElevenLabs TTS pipeline. `Some` when `[elevenlabs] api_key` is set
     /// in the user's config; `None` falls back to the upstream realtime
-    /// audio path.
+    /// audio path. Linux builds skip this entirely because the playback path
+    /// depends on `cpal`/`hound` which are non-Linux-only deps.
+    #[cfg(not(target_os = "linux"))]
     tts: Option<crate::tts::ElevenLabsTtsManager>,
     /// Holds the platform clipboard lease so copied text remains available while supported.
     clipboard_lease: Option<crate::clipboard_copy::ClipboardLease>,
@@ -2355,11 +2357,13 @@ impl ChatWidget {
         {
             // Forward to TTS in the no-stream-controller branch only; the
             // delta path below already covers the streamed case.
+            #[cfg(not(target_os = "linux"))]
             if let Some(tts) = self.tts.as_ref() {
                 tts.enqueue_text(message);
             }
             self.handle_streaming_delta(message.to_string());
         }
+        #[cfg(not(target_os = "linux"))]
         if let Some(tts) = self.tts.as_ref() {
             tts.flush();
         }
@@ -2369,6 +2373,7 @@ impl ChatWidget {
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
+        #[cfg(not(target_os = "linux"))]
         if let Some(tts) = self.tts.as_ref() {
             tts.enqueue_text(&delta);
         }
@@ -4978,6 +4983,7 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        #[cfg(not(target_os = "linux"))]
         let tts_manager = crate::tts::ElevenLabsTtsManager::try_new(&config);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
@@ -5022,6 +5028,7 @@ impl ChatWidget {
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
+            #[cfg(not(target_os = "linux"))]
             tts: tts_manager,
             clipboard_lease: None,
             copy_last_response_binding,
@@ -5760,6 +5767,7 @@ impl ChatWidget {
     ) -> (bool, Option<AppCommand>) {
         // A new user turn cancels in-flight TTS playback so the assistant
         // doesn't keep talking over the user.
+        #[cfg(not(target_os = "linux"))]
         if let Some(tts) = self.tts.as_ref() {
             tts.interrupt();
         }
