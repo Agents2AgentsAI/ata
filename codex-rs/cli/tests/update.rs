@@ -1,8 +1,13 @@
+#[cfg(debug_assertions)]
 use anyhow::Result;
+#[cfg(debug_assertions)]
 use predicates::str::contains;
+#[cfg(debug_assertions)]
 use std::path::Path;
+#[cfg(debug_assertions)]
 use tempfile::TempDir;
 
+#[cfg(debug_assertions)]
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
     let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("ata")?);
     cmd.env("CODEX_HOME", codex_home);
