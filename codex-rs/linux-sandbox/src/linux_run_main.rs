@@ -226,8 +226,6 @@ pub fn run_main() -> ! {
             sandbox_policy_cwd: &sandbox_policy_cwd,
             command_cwd: command_cwd.as_deref(),
             permission_profile: &permission_profile,
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            network_sandbox_policy,
             allow_network_for_proxy,
             proxy_route_spec,
             command,
@@ -1394,8 +1392,6 @@ struct InnerSeccompCommandArgs<'a> {
     sandbox_policy_cwd: &'a Path,
     command_cwd: Option<&'a Path>,
     permission_profile: &'a PermissionProfile,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     allow_network_for_proxy: bool,
     proxy_route_spec: Option<String>,
     command: Vec<String>,
@@ -1407,8 +1403,6 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
         sandbox_policy_cwd,
         command_cwd,
         permission_profile,
-        file_system_sandbox_policy,
-        network_sandbox_policy,
         allow_network_for_proxy,
         proxy_route_spec,
         command,
@@ -1420,14 +1414,6 @@ fn build_inner_seccomp_command(args: InnerSeccompCommandArgs<'_>) -> Vec<String>
     let permission_profile_json = match serde_json::to_string(permission_profile) {
         Ok(json) => json,
         Err(err) => panic!("failed to serialize permission profile: {err}"),
-    };
-    let file_system_policy_json = match serde_json::to_string(file_system_sandbox_policy) {
-        Ok(json) => json,
-        Err(err) => panic!("failed to serialize filesystem sandbox policy: {err}"),
-    };
-    let network_policy_json = match serde_json::to_string(&network_sandbox_policy) {
-        Ok(json) => json,
-        Err(err) => panic!("failed to serialize network sandbox policy: {err}"),
     };
 
     let mut inner = vec![

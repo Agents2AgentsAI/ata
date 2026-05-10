@@ -344,6 +344,10 @@ jobs:
         # `RUSTY_V8_SRC_BINDING_PATH` at the upstream release for every
         # target. Without this override the v8 build script gets HTTP 404
         # from denoland and the whole Lint/Build matrix fails.
+        # `GN_ARGS=use_custom_libcxx=false` makes the v8 build script emit
+        # the `cargo:rustc-link-lib=stdc++` (linux) / `c++` (mac/bsd)
+        # directive, since the prebuilt ptrcomp_sandbox archives do not bundle
+        # libcxx and would otherwise leave libv8 with unresolved C++ symbols.
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
@@ -361,6 +365,7 @@ jobs:
           curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+          echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
 
       - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
         name: Cap build parallelism (ARM)
@@ -382,13 +387,9 @@ jobs:
         # stubs on disk. In the Docker pattern this is fine because the next
         # stage does `COPY . .` to restore real source on top. In this CI job
         # there is no such restore, so follow-up steps (clippy, tests) would
-        # see the stubbed source. Two extra concerns specific to this repo:
-        #   * `--all-features` enables `ata-plus/mcgs`, which pulls in the
-        #     cross-workspace path deps under `ata-domains/*`. Those crates
-        #     are NOT stubbed by cargo-chef (different workspace), so they
-        #     try to compile against the emptied codex-rs sources and fail
-        #     with `unresolved import` errors. So we cook without
-        #     `--all-features`.
+        # see the stubbed source. Cook without `--all-features` so we don't
+        # pull in optional path deps that try to compile against the emptied
+        # codex-rs sources.
         #   * We manually restore source with `git checkout` after cook so
         #     the subsequent `cargo clippy` step sees the real files.
         run: |
@@ -403,7 +404,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         # cargo-chef leaves every workspace crate's src replaced with an empty
         # stub; restore the real source before the real clippy/test runs.
-        run: git checkout -- codex-rs ata-domains
+        run: git checkout -- codex-rs
 
       - name: cargo clippy
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} --timings -- -D warnings
@@ -630,7 +631,9 @@ jobs:
         # `ptrcomp_sandbox` build variant, which `denoland/rusty_v8` does not
         # ship. Point the v8 build script at the upstream Codex release for
         # every target so the test build doesn't try to download the missing
-        # archive from denoland.
+        # archive from denoland. `GN_ARGS=use_custom_libcxx=false` makes the
+        # v8 build script emit the libstdc++/libc++ link directive since the
+        # prebuilt ptrcomp_sandbox archives do not bundle libcxx.
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
@@ -648,6 +651,7 @@ jobs:
           curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+          echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
 
       - name: tests
         id: test

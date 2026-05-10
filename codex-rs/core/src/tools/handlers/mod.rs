@@ -231,10 +231,6 @@ pub(crate) fn normalize_and_validate_additional_permissions(
                     .to_string(),
             );
         };
-        #[cfg(not(target_os = "macos"))]
-        if additional_permissions.macos.is_some() {
-            return Err("`additional_permissions.macos` is only supported on macOS".to_string());
-        }
         let normalized = normalize_additional_permissions(additional_permissions)?;
         if normalized.is_empty() {
             return Err(
