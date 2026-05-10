@@ -3,9 +3,8 @@
 //! Glue layer between ATA's `ModelClientSession` / `Prompt` API and
 //! `codex-api`'s `ChatCompletionsClient` + `CopilotAdapter`. The adapter
 //! handles request shaping (Responses-API input -> Chat Completions
-//! messages, tool spec translation, VS Code impersonation headers); this
-//! module wires HTTP transport, OAuth bearer-token resolution, and the
-//! mapping back into `ResponseStream`.
+//! messages, tool spec translation); this module wires HTTP transport,
+//! OAuth bearer-token resolution, and the mapping back into `ResponseStream`.
 
 use std::sync::Arc;
 

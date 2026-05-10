@@ -1,13 +1,9 @@
 use std::path::Path;
 use std::time::Duration as StdDuration;
 
-use chrono::DateTime;
-use chrono::Utc;
 use once_cell::sync::Lazy;
-use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
-use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use super::AuthCredentialsStoreMode;
@@ -21,31 +17,21 @@ use codex_login::default_client::build_reqwest_client;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 
-/// Public OAuth Client ID used by the GitHub Copilot CLI / VS Code extensions.
-/// Reused here to satisfy GitHub's Copilot endpoints, which only accept
-/// approved Copilot client IDs.
-pub const COPILOT_OAUTH_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+/// OAuth Client ID for the official `ata` / opencode Copilot integration. GitHub
+/// added first-class support for this client ID alongside the VS Code one in
+/// January 2026, so requests do not need to impersonate the VS Code extension.
+pub const COPILOT_OAUTH_CLIENT_ID: &str = "Ov23li8tweQw6odWQebz";
 
 /// OAuth scope requested for the device flow.
 pub const COPILOT_OAUTH_SCOPE: &str = "read:user";
 
-/// GitHub OAuth + Copilot endpoints.
+/// GitHub OAuth endpoints used by the device-code flow.
 pub const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 pub const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-pub const COPILOT_TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 
-/// Headers identifying us as the official Copilot Chat client. These are
-/// required for both the token-exchange endpoint and Copilot API requests.
-pub const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
-pub const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
-pub const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
-pub const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+/// Identify ourselves on outgoing requests.
+pub const COPILOT_USER_AGENT: &str = concat!("ata/", env!("CARGO_PKG_VERSION"));
 
-/// Refresh the Copilot access token this many seconds before its actual
-/// expiry to avoid races with the server clock.
-const REFRESH_SKEW_SECONDS: i64 = 300;
-
-static COPILOT_OAUTH_REFRESH_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static COPILOT_OAUTH_HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(build_reqwest_client);
 
 /// Response from the device-code endpoint.
@@ -85,13 +71,6 @@ struct AccessTokenResponse {
     error: Option<String>,
     #[serde(default)]
     error_description: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CopilotTokenResponse {
-    token: String,
-    /// Unix seconds at which `token` expires.
-    expires_at: i64,
 }
 
 /// Initiate a GitHub device-code authorization for Copilot.
@@ -193,73 +172,28 @@ pub async fn poll_for_access_token(device: &DeviceCodeResponse) -> Result<String
     }
 }
 
-/// Exchange a long-lived GitHub OAuth token for a short-lived Copilot token.
-async fn exchange_for_copilot_token(github_oauth_token: &str) -> Result<(String, DateTime<Utc>)> {
-    let resp = COPILOT_OAUTH_HTTP_CLIENT
-        .get(COPILOT_TOKEN_EXCHANGE_URL)
-        .header("Accept", "application/json")
-        .header("Authorization", format!("Bearer {github_oauth_token}"))
-        .header("User-Agent", COPILOT_USER_AGENT)
-        .header("Editor-Version", COPILOT_EDITOR_VERSION)
-        .header("Editor-Plugin-Version", COPILOT_EDITOR_PLUGIN_VERSION)
-        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .send()
-        .await
-        .map_err(|e| CodexErr::Api(format!("Failed to exchange Copilot token: {e}")))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = redact_error_body(&resp.text().await.unwrap_or_default());
-        let hint = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            " (does this account have an active GitHub Copilot subscription?)"
-        } else {
-            ""
-        };
-        return Err(CodexErr::Api(format!(
-            "Copilot token exchange failed ({status}){hint}: {body}"
-        )));
-    }
-
-    let parsed: CopilotTokenResponse = resp
-        .json()
-        .await
-        .map_err(|e| CodexErr::Api(format!("Invalid Copilot token response: {e}")))?;
-
-    let expires = DateTime::<Utc>::from_timestamp(parsed.expires_at, 0)
-        .ok_or_else(|| CodexErr::Api("Copilot token expires_at out of range".into()))?;
-
-    Ok((parsed.token, expires))
-}
-
-/// Finish a device-code login: exchange the long-lived GitHub OAuth token
-/// for a Copilot session token and persist both.
+/// Finish a device-code login: persist the GitHub OAuth access token. With the
+/// official `ata`/opencode client ID, the token returned by the device flow is
+/// the bearer used directly against `https://api.githubcopilot.com`, so no
+/// further token exchange is required.
 pub async fn complete_login(
     codex_home: &Path,
     store_mode: AuthCredentialsStoreMode,
     github_oauth_token: String,
 ) -> Result<()> {
-    let (copilot_token, expires) = exchange_for_copilot_token(&github_oauth_token).await?;
-    save_credentials(
-        codex_home,
-        store_mode,
-        github_oauth_token,
-        copilot_token,
-        expires,
-    )
+    save_credentials(codex_home, store_mode, github_oauth_token)
 }
 
-/// Persist a freshly-issued GitHub OAuth token + Copilot token to disk.
+/// Persist the GitHub OAuth access token returned by the device flow.
 pub fn save_credentials(
     codex_home: &Path,
     store_mode: AuthCredentialsStoreMode,
     github_oauth_token: String,
-    copilot_token: String,
-    expires: DateTime<Utc>,
 ) -> Result<()> {
     let credential = ProviderOauthCredential {
-        access: copilot_token,
+        access: github_oauth_token.clone(),
         refresh: github_oauth_token,
-        expires: Some(expires),
+        expires: None,
         email: None,
         project_id: None,
         managed_project_id: None,
@@ -269,18 +203,11 @@ pub fn save_credentials(
         .map_err(|e| CodexErr::Api(format!("Failed to save Copilot credentials: {e}")))
 }
 
-/// Return a valid Copilot access token for outgoing API calls, refreshing it
-/// from the long-lived GitHub OAuth token if it is expired or about to expire.
-#[expect(
-    clippy::await_holding_invalid_type,
-    reason = "the refresh lock serializes concurrent token refreshes for the duration of the network call"
-)]
+/// Return the GitHub OAuth access token used as the Copilot bearer.
 pub async fn get_or_refresh_copilot_token(
     codex_home: &Path,
     store_mode: AuthCredentialsStoreMode,
 ) -> Result<String> {
-    let _guard = COPILOT_OAUTH_REFRESH_LOCK.lock().await;
-
     let credential = get_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode)
         .ok_or_else(|| {
             CodexErr::Api(
@@ -289,29 +216,13 @@ pub async fn get_or_refresh_copilot_token(
             )
         })?;
 
-    let needs_refresh = match credential.expires {
-        Some(expires) => {
-            let skew = chrono::Duration::seconds(REFRESH_SKEW_SECONDS);
-            credential.access.is_empty() || (expires - skew) <= Utc::now()
-        }
-        None => true,
-    };
-
-    if !needs_refresh {
-        return Ok(credential.access);
+    if credential.access.is_empty() {
+        return Err(CodexErr::Api(
+            "Stored Copilot credentials are empty. Run `ata login` again.".into(),
+        ));
     }
 
-    let (copilot_token, expires) = exchange_for_copilot_token(&credential.refresh).await?;
-
-    save_credentials(
-        codex_home,
-        store_mode,
-        credential.refresh.clone(),
-        copilot_token.clone(),
-        expires,
-    )?;
-
-    Ok(copilot_token)
+    Ok(credential.access)
 }
 
 /// Forget all stored Copilot credentials.
@@ -326,21 +237,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_id_is_well_known_copilot_id() {
-        assert_eq!(COPILOT_OAUTH_CLIENT_ID, "Iv1.b507a08c87ecfe98");
+    fn client_id_is_official_ata_id() {
+        assert_eq!(COPILOT_OAUTH_CLIENT_ID, "Ov23li8tweQw6odWQebz");
     }
 
     #[test]
     fn endpoints_point_at_github() {
         assert!(GITHUB_DEVICE_CODE_URL.starts_with("https://github.com/"));
         assert!(GITHUB_ACCESS_TOKEN_URL.starts_with("https://github.com/"));
-        assert!(COPILOT_TOKEN_EXCHANGE_URL.starts_with("https://api.github.com/"));
     }
 
     #[test]
-    fn impersonation_headers_match_vscode() {
-        assert!(COPILOT_USER_AGENT.starts_with("GitHubCopilotChat/"));
-        assert!(COPILOT_EDITOR_VERSION.starts_with("vscode/"));
-        assert_eq!(COPILOT_INTEGRATION_ID, "vscode-chat");
+    fn user_agent_identifies_ata() {
+        assert!(COPILOT_USER_AGENT.starts_with("ata/"));
     }
 }

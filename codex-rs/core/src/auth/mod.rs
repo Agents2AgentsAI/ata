@@ -50,9 +50,6 @@ pub use codex_login::CodexAuth;
 pub use codex_login::OPENAI_API_KEY_ENV_VAR;
 pub use codex_login::auth::storage::AuthDotJson;
 
-pub use copilot_oauth::COPILOT_EDITOR_PLUGIN_VERSION;
-pub use copilot_oauth::COPILOT_EDITOR_VERSION;
-pub use copilot_oauth::COPILOT_INTEGRATION_ID;
 pub use copilot_oauth::COPILOT_OAUTH_CLIENT_ID;
 pub use copilot_oauth::COPILOT_USER_AGENT;
 pub use copilot_oauth::DeviceCodeResponse as CopilotDeviceCodeResponse;
