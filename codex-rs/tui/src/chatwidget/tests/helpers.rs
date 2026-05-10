@@ -16,7 +16,16 @@ pub(super) async fn test_config() -> Config {
     config.codex_home = codex_home.abs();
     config.sqlite_home = codex_home.clone();
     config.log_dir = codex_home.join("log");
-    config.cwd = PathBuf::from(test_path_display("/tmp/project")).abs();
+    // Use a path under a directory that does not exist on disk so
+    // `get_git_repo_root` does NOT find a `.git` ancestor on CI runners
+    // where `/tmp` (or its ancestors) may resolve inside the checked-out
+    // workspace. Status- and title-preview tests rely on no project root
+    // being resolved so the hardcoded preview placeholders win and
+    // `cwd.file_name()` falls back to "project".
+    config.cwd = PathBuf::from(test_path_display(
+        "/nonexistent-codex-tui-tests-cwd/project",
+    ))
+    .abs();
     config.config_layer_stack = ConfigLayerStack::default();
     config.startup_warnings.clear();
     config.user_instructions = None;

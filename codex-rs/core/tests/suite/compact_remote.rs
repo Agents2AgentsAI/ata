@@ -1527,12 +1527,17 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
     let baseline_input_tokens = estimate_compact_input_tokens(&baseline_compact_request);
     let baseline_payload_tokens = estimate_compact_payload_tokens(&baseline_compact_request);
 
+    // ATA's overlay registers extra tools (reading view, voice, document
+    // reader, js-repl, etc.) which inflate the actual remote-compact tool
+    // schema beyond what `approx_token_count` measures. Use a larger
+    // override block + a tighter context window so the trim threshold is
+    // crossed for both the upstream baseline and the ATA-overlay variant.
     let override_base_instructions = format!(
         "{}\nREMOTE_BASE_INSTRUCTIONS_OVERRIDE {}",
         baseline_compact_request.instructions_text(),
-        "x".repeat(4_000)
+        "x".repeat(20_000)
     );
-    let override_context_window = baseline_payload_tokens.saturating_add(500);
+    let override_context_window = baseline_payload_tokens.saturating_add(100);
     let pretrim_override_estimate =
         baseline_input_tokens.saturating_add(approx_token_count(&override_base_instructions));
     assert!(
