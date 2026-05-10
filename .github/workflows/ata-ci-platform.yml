@@ -155,13 +155,16 @@ jobs:
             sudo apt-get update -y
             # libasound2-dev is required by `alsa-sys` (transitively pulled in by
             # `cpal`) when codex-tui builds the voice/audio_device modules.
-            # libc++-dev / libc++abi-dev provide the libcxx ABI the prebuilt v8
-            # `ptrcomp_sandbox_release` archive was compiled against.
-            packages=(pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev)
+            # libc++-20-dev / libc++abi-20-dev provide the newer libcxx ABI the
+            # prebuilt v8 `ptrcomp_sandbox_release` archive references (e.g.
+            # std::__1::__hash_memory). Fall back to the default 18 if 20 isn't
+            # available on this runner.
+            packages=(pkg-config libcap-dev libasound2-dev)
             if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
               packages+=(libubsan1)
             fi
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-20-dev libc++abi-20-dev \
+              || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}" libc++-dev libc++abi-dev
           fi
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
@@ -538,7 +541,15 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev
+            # libc++-20-dev / libc++abi-20-dev are needed because the v8 prebuilt
+            # was built against newer libc++ and references symbols (e.g.
+            # std::__1::__hash_memory) not present in Ubuntu noble's default
+            # libc++-18.
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+              pkg-config libcap-dev libasound2-dev \
+              libc++-20-dev libc++abi-20-dev \
+              || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                pkg-config libcap-dev libasound2-dev libc++-dev libc++abi-dev
           fi
       # Some integration tests rely on DotSlash being installed.
       - name: Install DotSlash
