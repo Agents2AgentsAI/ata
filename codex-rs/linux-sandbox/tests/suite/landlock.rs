@@ -512,9 +512,9 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
 
     let tmpdir = tempfile::tempdir().expect("tempdir");
     let dot_git = tmpdir.path().join(".git");
-    let dot_codex = tmpdir.path().join(".ata");
+    let dot_codex = tmpdir.path().join(".codex");
     std::fs::create_dir_all(&dot_git).expect("create .git");
-    std::fs::create_dir_all(&dot_codex).expect("create .ata");
+    std::fs::create_dir_all(&dot_codex).expect("create .codex");
 
     let git_target = dot_git.join("config");
     let codex_target = dot_codex.join("config.toml");
@@ -548,7 +548,7 @@ async fn sandbox_blocks_git_and_codex_writes_inside_writable_root() {
             /*network_access*/ true,
         )
         .await,
-        ".ata write should be denied under bubblewrap",
+        ".codex write should be denied under bubblewrap",
     );
     assert_ne!(git_output.exit_code, 0);
     assert_ne!(codex_output.exit_code, 0);
@@ -567,8 +567,8 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
     let decoy = tmpdir.path().join("decoy-codex");
     std::fs::create_dir_all(&decoy).expect("create decoy dir");
 
-    let dot_codex = tmpdir.path().join(".ata");
-    symlink(&decoy, &dot_codex).expect("create .ata symlink");
+    let dot_codex = tmpdir.path().join(".codex");
+    symlink(&decoy, &dot_codex).expect("create .codex symlink");
 
     let codex_target = dot_codex.join("config.toml");
 
@@ -585,7 +585,7 @@ async fn sandbox_blocks_codex_symlink_replacement_attack() {
             /*network_access*/ true,
         )
         .await,
-        ".ata symlink replacement should be denied",
+        ".codex symlink replacement should be denied",
     );
     assert_ne!(codex_output.exit_code, 0);
 }

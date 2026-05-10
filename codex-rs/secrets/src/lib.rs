@@ -189,6 +189,20 @@ mod tests {
     #[test]
     fn environment_id_fallback_has_cwd_prefix() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // If the tempdir resolves inside a git repo (e.g., on CI runners
+        // where `TMPDIR` is mapped underneath the checked-out workspace),
+        // `environment_id_from_cwd` returns the repo's directory name
+        // instead of the `cwd-<hash>` fallback we are trying to verify.
+        // Skip the assertion in that case so the test still meaningfully
+        // exercises the fallback branch on developer machines / hermetic
+        // environments without producing false negatives on shared CI.
+        if get_git_repo_root(dir.path()).is_some() {
+            eprintln!(
+                "skipping fallback test: {} is inside a git repo",
+                dir.path().display()
+            );
+            return;
+        }
         let env_id = environment_id_from_cwd(dir.path());
         let canonical = dir
             .path()
