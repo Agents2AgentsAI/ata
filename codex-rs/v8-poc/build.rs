@@ -37,9 +37,11 @@ std::size_t _ZNSt3__113__hash_memoryEPKvm(const void* ptr, std::size_t size) noe
 } // extern "C"
 "#;
 
-    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");
+    let out_dir = std::env::var("OUT_DIR")
+        .unwrap_or_else(|err| panic!("OUT_DIR is set by cargo: {err}"));
     let shim_path = std::path::Path::new(&out_dir).join("hash_memory_shim.cpp");
-    std::fs::write(&shim_path, shim).expect("write hash_memory_shim.cpp");
+    std::fs::write(&shim_path, shim)
+        .unwrap_or_else(|err| panic!("write hash_memory_shim.cpp: {err}"));
 
     cc::Build::new()
         .cpp(true)
