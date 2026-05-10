@@ -356,20 +356,16 @@ jobs:
           echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
-      - name: Configure rusty_v8 artifact overrides
-        # v8 v147+ defaults to the `ptrcomp_sandbox` build variant, but the
-        # upstream `denoland/rusty_v8` releases only ship the
-        # `release` / `ptrcomp_release` / `simdutf_release` variants and
-        # NOT `ptrcomp_sandbox` for any platform. The upstream Codex release
-        # publishes the missing `ptrcomp_sandbox` artifacts (along with the
-        # plain `release` musl ones), so point both `RUSTY_V8_ARCHIVE` and
-        # `RUSTY_V8_SRC_BINDING_PATH` at the upstream release for every
-        # target. Without this override the v8 build script gets HTTP 404
-        # from denoland and the whole Lint/Build matrix fails.
-        # `GN_ARGS=use_custom_libcxx=false` makes the v8 build script emit
-        # the `cargo:rustc-link-lib=stdc++` (linux) / `c++` (mac/bsd)
-        # directive, since the prebuilt ptrcomp_sandbox archives do not bundle
-        # libcxx and would otherwise leave libv8 with unresolved C++ symbols.
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides
+        # `denoland/rusty_v8` does not ship a musl prebuilt for any v8
+        # version; openai/codex republishes a plain `release` musl variant.
+        # All other targets fall back to the v8 build script's default
+        # download from denoland. Neither archive enables
+        # `v8_enable_sandbox`, which matches the
+        # `[features] sandbox = ...` removal from `codex-v8-poc` and
+        # `codex-code-mode` in this workspace — keeping the linked-V8
+        # ABI consistent with the bindings the v8 crate generates.
         env:
           TARGET: ${{ matrix.target }}
         shell: bash
@@ -378,23 +374,13 @@ jobs:
           version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
           release_tag="rusty-v8-v${version}"
           base_url="https://github.com/openai/codex/releases/download/${release_tag}"
-          archive_name="librusty_v8_ptrcomp_sandbox_release_${TARGET}.a.gz"
-          binding_name="src_binding_ptrcomp_sandbox_release_${TARGET}.rs"
-          archive="${base_url}/${archive_name}"
+          archive="${base_url}/librusty_v8_release_${TARGET}.a.gz"
           binding_dir="${RUNNER_TEMP}/rusty_v8"
-          binding_path="${binding_dir}/${binding_name}"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
           mkdir -p "${binding_dir}"
-          curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
           echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
-          echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
-          # The upstream Codex release `ptrcomp_sandbox_release` archive is built against
-          # libc++ (`std::__1::*` symbols) on every platform, so route the v8
-          # build script's link directive to libc++ instead of the per-target
-          # default (libstdc++ on linux-gnu).
-          case "${TARGET}" in
-            *-linux-gnu|*-linux-musl) echo "CXXSTDLIB=c++" >> "$GITHUB_ENV" ;;
-          esac
 
       - if: ${{ contains(matrix.target, 'aarch64-unknown-linux') }}
         name: Cap build parallelism (ARM)
@@ -681,72 +667,9 @@ jobs:
           # links many Windows test binaries in parallel.
           echo "CARGO_PROFILE_CI_TEST_DEBUG=0" >> "$GITHUB_ENV"
 
-      - name: Configure rusty_v8 artifact overrides
-        # v8 v147+ defaults to the `ptrcomp_sandbox` build variant, which
-        # `denoland/rusty_v8` does not ship for non-Windows targets. Point
-        # the v8 build script at the upstream Codex release for those
-        # targets so the build doesn't 404 against denoland.
-        # `GN_ARGS=use_custom_libcxx=false` makes the v8 build script emit
-        # the libstdc++/libc++ link directive since the prebuilt
-        # ptrcomp_sandbox archives do not bundle libcxx.
-        #
-        # On Windows MSVC, the upstream `ptrcomp_sandbox` Windows prebuilt
-        # is published as a Unix `.a.gz` archive whose bundled
-        # `binding_147_4_0.pic.o` triggers `LNK1143: invalid or corrupt
-        # file: no symbol for COMDAT section` when MSVC `link.exe` consumes
-        # it. denoland's regular `release` variant for Windows is published
-        # as a proper `.lib.gz` (COFF) archive, so use that instead — it
-        # doesn't have `v8_enable_sandbox` set, but neither does upstream
-        # CI on Windows.
-        env:
-          TARGET: ${{ matrix.target }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
-          release_tag="rusty-v8-v${version}"
-          if [[ "${TARGET}" == *-pc-windows-msvc ]]; then
-            base_url="https://github.com/denoland/rusty_v8/releases/download/v${version}"
-            archive_name="rusty_v8_release_${TARGET}.lib.gz"
-            binding_name="src_binding_release_${TARGET}.rs"
-          else
-            base_url="https://github.com/openai/codex/releases/download/${release_tag}"
-            archive_name="librusty_v8_ptrcomp_sandbox_release_${TARGET}.a.gz"
-            binding_name="src_binding_ptrcomp_sandbox_release_${TARGET}.rs"
-          fi
-          archive="${base_url}/${archive_name}"
-          binding_dir="${RUNNER_TEMP}/rusty_v8"
-          binding_path="${binding_dir}/${binding_name}"
-          mkdir -p "${binding_dir}"
-          curl -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
-          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
-          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
-          echo "GN_ARGS=use_custom_libcxx=false" >> "$GITHUB_ENV"
-          # The upstream Codex release `ptrcomp_sandbox_release` archive is built against
-          # libc++ (`std::__1::*` symbols) on every platform, so route the v8
-          # build script's link directive to libc++ instead of the per-target
-          # default (libstdc++ on linux-gnu).
-          case "${TARGET}" in
-            *-linux-gnu|*-linux-musl) echo "CXXSTDLIB=c++" >> "$GITHUB_ENV" ;;
-          esac
-
       - name: tests
         id: test
-        # On Windows, exclude `codex-v8-poc` and `codex-code-mode` from the
-        # workspace test set so `--all-features` does NOT activate their
-        # `sandbox = ["v8/v8_enable_sandbox"]` feature. The denoland v8
-        # release variant we use on Windows is built without sandbox, so
-        # enabling the Cargo feature would mismatch the archive ABI. The
-        # crates are still compiled as deps of `codex-core` (with default
-        # features), so production code paths are still exercised by the
-        # other test crates.
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings --workspace --exclude codex-v8-poc --exclude codex-code-mode
-          else
-            cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
-          fi
-        shell: bash
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
         env:
           RUST_BACKTRACE: 1
           NEXTEST_STATUS_LEVEL: leak

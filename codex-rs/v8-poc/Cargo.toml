@@ -9,9 +9,6 @@ name = "codex_v8_poc"
 path = "src/lib.rs"
 doctest = false
 
-[features]
-sandbox = ["v8/v8_enable_sandbox"]
-
 [lints]
 workspace = true
 

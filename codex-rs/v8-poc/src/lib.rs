@@ -242,8 +242,14 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_feature_matches_linked_v8() {
-        assert_eq!(linked_v8_has_sandbox(), cfg!(feature = "sandbox"));
+    fn linked_v8_has_no_sandbox() {
+        // We use `denoland/rusty_v8`'s regular `release` archive (no
+        // `v8_enable_sandbox`) on every platform. The `ptrcomp_sandbox`
+        // archive that openai/codex publishes ABI-mismatches our bindings
+        // on Windows MSVC (LNK1143) and aarch64-apple-darwin (V8 startup
+        // SIGTRAP), and we don't get any production benefit from sandbox
+        // mode for the short-lived REPL isolates `js_eval` spins up.
+        assert!(!linked_v8_has_sandbox());
     }
 
     #[test]
