@@ -49,5 +49,21 @@ std::size_t _ZNSt3__113__hash_memoryEPKvm(const void* ptr, std::size_t size) noe
         .flag_if_supported("-std=c++17")
         .compile("codex_hash_memory_shim");
 
+    // Force every binary and test in dependent crates to link the shim.
+    // `cc::Build::compile` already emits `cargo:rustc-link-lib=static=...`
+    // and `cargo:rustc-link-search=native=...` for code-mode's own output,
+    // but cargo may not propagate those to downstream test/bin link lines
+    // when code-mode is only a transitive dependency. Re-emit the lib
+    // reference scoped to bins/tests so the shim symbol is always present
+    // wherever libv8 is linked.
+    let lib_dir = std::path::Path::new(&out_dir).to_string_lossy().to_string();
+    println!("cargo:rustc-link-search=native={lib_dir}");
+    println!("cargo:rustc-link-arg-bins=-Wl,--whole-archive");
+    println!("cargo:rustc-link-arg-bins={lib_dir}/libcodex_hash_memory_shim.a");
+    println!("cargo:rustc-link-arg-bins=-Wl,--no-whole-archive");
+    println!("cargo:rustc-link-arg-tests=-Wl,--whole-archive");
+    println!("cargo:rustc-link-arg-tests={lib_dir}/libcodex_hash_memory_shim.a");
+    println!("cargo:rustc-link-arg-tests=-Wl,--no-whole-archive");
+
     println!("cargo:rerun-if-changed=build.rs");
 }
