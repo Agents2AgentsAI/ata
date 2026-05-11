@@ -33,6 +33,12 @@ pub enum ConfigEdit {
         effort: Option<ReasoningEffort>,
         model_provider: Option<String>,
     },
+    /// Remove `model` and `model_provider` from the active scope. Used on
+    /// logout from a non-OpenAI provider (e.g., GitHub Copilot) so the next
+    /// launch falls back to the default provider and surfaces the login
+    /// screen, instead of silently entering chat without credentials.
+    /// Leaves `model_reasoning_effort` and other unrelated keys alone.
+    ClearModelAndProvider,
     /// Update the service tier preference for future turns.
     SetServiceTier { service_tier: Option<ServiceTier> },
     /// Update the active (or default) model personality.
@@ -543,6 +549,12 @@ impl ConfigDocument {
                         .as_ref()
                         .map(|provider| value(provider.clone())),
                 );
+                mutated
+            }),
+            ConfigEdit::ClearModelAndProvider => Ok({
+                let mut mutated = false;
+                mutated |= self.write_profile_value(&["model"], None);
+                mutated |= self.write_profile_value(&["model_provider"], None);
                 mutated
             }),
             ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
@@ -1142,6 +1154,13 @@ impl ConfigEditsBuilder {
             effort,
             model_provider,
         });
+        self
+    }
+
+    /// Remove `model` and `model_provider` from the active scope while
+    /// preserving sibling keys like `model_reasoning_effort`.
+    pub fn clear_model_and_provider(mut self) -> Self {
+        self.edits.push(ConfigEdit::ClearModelAndProvider);
         self
     }
 

@@ -1314,3 +1314,52 @@ async fn from_auth_dot_json_returns_none_for_copilot_only_auth() {
         "copilot-only auth.json must not produce a CodexAuth, got {result:?}"
     );
 }
+
+#[tokio::test]
+async fn logout_clears_provider_oauth_only_auth_file() {
+    // Regression for "/logout doesn't log me out after GitHub Copilot signin":
+    // after a Copilot-only sign-in (no codex auth tokens, only an OAuth entry
+    // under `providers.copilot`), `AuthManager::logout_with_revoke` must wipe
+    // the whole auth.json so a subsequent launch sees no provider OAuth cred.
+    let codex_home = tempdir().unwrap();
+    let storage = create_auth_storage(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+    );
+    storage
+        .save(&copilot_oauth_only_auth())
+        .expect("save copilot-only auth.json");
+
+    let auth_file = get_auth_file(codex_home.path());
+    assert!(
+        auth_file.exists(),
+        "auth.json should exist after Copilot login"
+    );
+
+    let manager = AuthManager::new(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+
+    let removed = manager
+        .logout_with_revoke()
+        .await
+        .expect("logout_with_revoke should succeed for Copilot-only auth.json");
+    assert!(
+        removed,
+        "logout should report removed=true when a Copilot-only auth.json existed"
+    );
+
+    assert!(
+        !auth_file.exists(),
+        "auth.json must be deleted after logout, but {} still exists",
+        auth_file.display()
+    );
+    assert!(
+        manager.auth_cached().is_none(),
+        "cached auth should be cleared"
+    );
+}

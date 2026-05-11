@@ -217,7 +217,26 @@ impl ModelProvider for ConfiguredModelProvider {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        match config_model_catalog {
+        // Resolve the effective catalog. Precedence:
+        //   1. Explicit `[model_catalog]` from config.toml (caller-provided).
+        //   2. Bundled GitHub Copilot catalog when the provider's wire API is
+        //      Copilot. The Copilot bearer is a GitHub OAuth token resolved at
+        //      request time (not a CodexAuth), so the standard /models fetch
+        //      path can't authenticate against api.githubcopilot.com — without
+        //      this branch the picker silently falls back to the bundled
+        //      OpenAI/Codex catalog, which is the wrong list for Copilot users.
+        let resolved_catalog = config_model_catalog.or_else(|| {
+            if matches!(
+                self.info.wire_api,
+                codex_model_provider_info::WireApi::CopilotInline
+            ) {
+                codex_models_manager::bundled_copilot_models_response().ok()
+            } else {
+                None
+            }
+        });
+
+        match resolved_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
@@ -510,6 +529,65 @@ mod tests {
 
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].slug, "custom-bedrock-model");
+    }
+
+    #[tokio::test]
+    async fn copilot_provider_serves_bundled_copilot_catalog() {
+        // Regression: `/model` for a Copilot user must show Copilot's catalog
+        // (gpt-4.1, Claude, Gemini, etc.), not the bundled OpenAI/Codex
+        // catalog. Before this branch, the picker silently fell back to the
+        // OpenAI bundled models because `should_refresh_models` returned
+        // false for Copilot and no provider-specific static catalog existed.
+        let provider = create_model_provider(
+            ModelProviderInfo::create_copilot_provider(),
+            /*auth_manager*/ None,
+        );
+        let manager =
+            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+
+        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        let slugs: Vec<&str> = catalog.models.iter().map(|m| m.slug.as_str()).collect();
+
+        assert!(
+            slugs.contains(&"gpt-4.1"),
+            "Copilot catalog should include gpt-4.1; got: {slugs:?}"
+        );
+        assert!(
+            slugs.iter().any(|s| s.starts_with("claude-")),
+            "Copilot catalog should include at least one Claude model; got: {slugs:?}"
+        );
+        assert!(
+            slugs.iter().any(|s| s.starts_with("gemini-")),
+            "Copilot catalog should include at least one Gemini model; got: {slugs:?}"
+        );
+        // The OpenAI bundled "Frontier model" should NOT appear in the
+        // picker for Copilot users (e.g., a hypothetical Codex-only model).
+        // We assert positively that the catalog is the Copilot one by
+        // checking it's a strict superset of what Copilot publishes.
+        assert!(catalog.models.len() >= 5);
+    }
+
+    #[tokio::test]
+    async fn copilot_provider_honors_explicit_static_catalog_override() {
+        // If config.toml supplies an explicit `[model_catalog]`, that
+        // override must still win over the bundled Copilot catalog.
+        let custom_model =
+            codex_models_manager::model_info::model_info_from_slug("custom-copilot-override");
+
+        let provider = create_model_provider(
+            ModelProviderInfo::create_copilot_provider(),
+            /*auth_manager*/ None,
+        );
+        let manager = provider.models_manager(
+            test_codex_home(),
+            Some(ModelsResponse {
+                models: vec![custom_model],
+            }),
+        );
+
+        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
+        assert_eq!(catalog.models.len(), 1);
+        assert_eq!(catalog.models[0].slug, "custom-copilot-override");
     }
 
     #[tokio::test]

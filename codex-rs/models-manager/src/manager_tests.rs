@@ -784,3 +784,39 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+#[test]
+fn bundled_copilot_models_json_roundtrips() {
+    let response = crate::bundled_copilot_models_response()
+        .unwrap_or_else(|err| panic!("bundled copilot_models.json should parse: {err}"));
+
+    let serialized = serde_json::to_string(&response)
+        .expect("bundled copilot_models.json should serialize");
+    let roundtripped: ModelsResponse = serde_json::from_str(&serialized)
+        .expect("serialized copilot_models.json should deserialize");
+
+    assert_eq!(
+        response, roundtripped,
+        "bundled copilot_models.json should round trip through serde"
+    );
+    assert!(
+        !response.models.is_empty(),
+        "bundled copilot_models.json should contain at least one model"
+    );
+    // Slugs must be unique so the picker can identify a selected model.
+    let mut seen = std::collections::HashSet::new();
+    for model in &response.models {
+        assert!(
+            seen.insert(model.slug.clone()),
+            "duplicate slug in copilot_models.json: {}",
+            model.slug
+        );
+    }
+    // Sanity check: the catalog must contain the model the Copilot login
+    // flow persists as the default, otherwise newly-logged-in users land on
+    // a model that is not in the picker.
+    assert!(
+        response.models.iter().any(|m| m.slug == "gpt-4.1"),
+        "bundled copilot_models.json must include the login-default slug"
+    );
+}

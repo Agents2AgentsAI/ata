@@ -34,6 +34,63 @@ model_reasoning_effort = "high"
 }
 
 #[test]
+fn clear_model_and_provider_drops_keys_preserves_effort() {
+    // Regression for "/logout doesn't log me out after Copilot signin":
+    // Copilot login writes `model = "gpt-4o"` and `model_provider = "copilot"`
+    // to config.toml. Logout from a non-OpenAI provider must drop those keys
+    // so the next launch falls back to the default provider and surfaces the
+    // login screen. `model_reasoning_effort` is an unrelated UX preference
+    // and must survive.
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    std::fs::write(
+        &config_path,
+        r#"model = "gpt-4o"
+model_provider = "copilot"
+model_reasoning_effort = "high"
+"#,
+    )
+    .expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .clear_model_and_provider()
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(&config_path).expect("read config");
+    let parsed: TomlValue = toml::from_str(&contents).expect("parse toml");
+    let table = parsed.as_table().expect("toml is a table");
+
+    assert!(
+        !table.contains_key("model"),
+        "model should be cleared, got: {contents}"
+    );
+    assert!(
+        !table.contains_key("model_provider"),
+        "model_provider should be cleared, got: {contents}"
+    );
+    assert_eq!(
+        table.get("model_reasoning_effort").and_then(TomlValue::as_str),
+        Some("high"),
+        "unrelated key model_reasoning_effort must survive, got: {contents}"
+    );
+}
+
+#[test]
+fn clear_model_and_provider_is_idempotent_when_already_absent() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+
+    // No config.toml on disk yet — clear must not error.
+    ConfigEditsBuilder::new(codex_home)
+        .clear_model_and_provider()
+        .apply_blocking()
+        .expect("persist");
+}
+
+#[test]
 fn builder_with_edits_applies_custom_paths() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

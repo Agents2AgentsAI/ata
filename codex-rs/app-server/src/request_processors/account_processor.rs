@@ -491,11 +491,15 @@ impl AccountRequestProcessor {
             };
 
             if success {
-                // Persist `model = "gpt-4o"` and `model_provider = "copilot"`
+                // Persist `model = "gpt-4.1"` and `model_provider = "copilot"`
                 // so the next launch defaults to Copilot without manual
-                // `-c model=...` flags. We only set the provider; the model is
-                // a sensible default for Copilot Free (`gpt-4o`) — users can
-                // still switch via `-c model=...` or the /model picker.
+                // `-c model=...` flags. `gpt-4.1` is GitHub's current
+                // recommended default and appears in the bundled Copilot
+                // catalog (see codex-models-manager/copilot_models.json) —
+                // `gpt-4o` is no longer listed on
+                // https://docs.github.com/en/copilot/reference/ai-models/supported-models
+                // so newly logged-in users were landing on a slug that
+                // wasn't in the /model picker.
                 //
                 // If this write fails we *must* roll back the just-saved
                 // Copilot OAuth credential. Leaving creds without the
@@ -508,7 +512,7 @@ impl AccountRequestProcessor {
                 let codex_home_for_edit = codex_home.clone();
                 let edit_result = tokio::task::spawn_blocking(move || {
                     ConfigEditsBuilder::new(&codex_home_for_edit)
-                        .set_model(Some("gpt-4o"), None, Some("copilot".to_string()))
+                        .set_model(Some("gpt-4.1"), None, Some("copilot".to_string()))
                         .apply_blocking()
                 })
                 .await;
@@ -809,6 +813,36 @@ impl AccountRequestProcessor {
             Ok(_) => {}
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));
+            }
+        }
+
+        // For providers that don't use OpenAI-style auth (today: GitHub
+        // Copilot), the TUI's login screen is gated behind
+        // `requires_openai_auth`. Leaving `model_provider = "copilot"` in
+        // config.toml after logout means the next launch skips onboarding
+        // entirely and drops the user into chat with no credentials — they
+        // observe this as "/logout didn't log me out". Clearing `model` and
+        // `model_provider` here lets the default provider take over so the
+        // login screen surfaces and the user can re-pick their provider
+        // (including Copilot again).
+        if !self.config.model_provider.requires_openai_auth {
+            let codex_home = self.config.codex_home.clone();
+            let edit_result = tokio::task::spawn_blocking(move || {
+                ConfigEditsBuilder::new(&codex_home)
+                    .clear_model_and_provider()
+                    .apply_blocking()
+            })
+            .await;
+            match edit_result {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!(
+                        "failed to clear model/model_provider from config.toml after logout: {err}"
+                    );
+                }
+                Err(join_err) => {
+                    warn!("config-clear task panicked during logout: {join_err}");
+                }
             }
         }
 

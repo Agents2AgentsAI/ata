@@ -231,6 +231,80 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
 }
 
 #[tokio::test]
+async fn logout_account_resets_model_provider_for_copilot() -> Result<()> {
+    // Regression for "/logout doesn't log me out after signing in with GitHub
+    // Copilot": logout must clear `model_provider = "copilot"` from
+    // config.toml in addition to deleting auth.json. Otherwise the next
+    // launch reads model_provider=copilot, sees requires_openai_auth=false,
+    // skips the login screen entirely, and drops the user into chat without
+    // any credentials — observed as "logout didn't do anything".
+    let codex_home = TempDir::new()?;
+
+    // Built-in `copilot` model_provider is recognized without a
+    // `[model_providers.copilot]` section — pass model_provider_id="copilot"
+    // and no extra provider config so the file matches what a real Copilot
+    // login persists.
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            model_provider_id: Some("copilot".to_string()),
+            extra_provider_config: Some(String::new()),
+            ..Default::default()
+        },
+    )?;
+
+    // Seed an auth.json that mimics a Copilot OAuth signin: only the
+    // `providers.copilot` entry, no `auth_mode`, no chatgpt tokens, no API
+    // key. This is what `complete_copilot_login` writes on disk.
+    let auth_file = codex_home.path().join("auth.json");
+    std::fs::write(
+        &auth_file,
+        serde_json::to_string_pretty(&json!({
+            "version": 2,
+            "providers": {
+                "copilot": {
+                    "type": "oauth",
+                    "access": "gho_test_access",
+                    "refresh": "gho_test_refresh",
+                },
+            },
+        }))?,
+    )?;
+
+    let config_path = codex_home.path().join("config.toml");
+    let pre_logout_config = std::fs::read_to_string(&config_path)?;
+    assert!(
+        pre_logout_config.contains("model_provider = \"copilot\""),
+        "test setup should write model_provider=copilot, got: {pre_logout_config}"
+    );
+
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let id = mcp.send_logout_account_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(id)),
+    )
+    .await??;
+    let _ok: LogoutAccountResponse = to_response(resp)?;
+
+    assert!(
+        !auth_file.exists(),
+        "auth.json should be deleted by logout, but {} still exists",
+        auth_file.display()
+    );
+
+    let post_logout_config = std::fs::read_to_string(&config_path)?;
+    assert!(
+        !post_logout_config.contains("model_provider"),
+        "model_provider must be cleared from config.toml after Copilot logout, got: {post_logout_config}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
