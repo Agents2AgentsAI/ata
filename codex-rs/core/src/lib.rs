@@ -26,6 +26,14 @@ pub mod auth_public {
     pub use crate::auth::get_provider_oauth_credential;
     pub use crate::auth::poll_copilot_access_token;
     pub use crate::auth::start_copilot_device_flow;
+    // === ATA: provider-specific login flows ===
+    // Surface the per-provider API key login + ATA constants the app-server
+    // needs to drive the four-option onboarding picker. All append-only so
+    // upstream Copilot re-exports above stay untouched on future merges.
+    pub use crate::auth::PROVIDER_ANTHROPIC;
+    pub use crate::auth::PROVIDER_GEMINI;
+    pub use crate::auth::PROVIDER_OPENAI;
+    pub use crate::auth::login_with_provider_api_key;
 }
 
 /// Re-export of the ElevenLabs TTS/STT crate. Surfaced through `codex-core`

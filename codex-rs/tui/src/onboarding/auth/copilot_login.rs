@@ -18,7 +18,7 @@ use super::SignInState;
 use super::cancel_login_attempt;
 use super::onboarding_request_id;
 
-pub(super) fn start_copilot_login(widget: &mut AuthModeWidget) {
+pub(crate) fn start_copilot_login(widget: &mut AuthModeWidget) {
     let request_id = Uuid::new_v4().to_string();
     *widget.sign_in_state.write().unwrap() =
         SignInState::CopilotDeviceCode(ContinueWithDeviceCodeState::pending(request_id.clone()));

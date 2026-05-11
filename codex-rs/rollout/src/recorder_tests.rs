@@ -1379,6 +1379,7 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             developer_instructions: None,
             final_output_json_schema: None,
             truncation_policy: None,
+            code_intel_roots: Vec::new(),
         }),
     };
     writeln!(file, "{}", serde_json::to_string(&turn_context)?)?;

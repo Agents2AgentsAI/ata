@@ -790,8 +790,8 @@ fn bundled_copilot_models_json_roundtrips() {
     let response = crate::bundled_copilot_models_response()
         .unwrap_or_else(|err| panic!("bundled copilot_models.json should parse: {err}"));
 
-    let serialized = serde_json::to_string(&response)
-        .expect("bundled copilot_models.json should serialize");
+    let serialized =
+        serde_json::to_string(&response).expect("bundled copilot_models.json should serialize");
     let roundtripped: ModelsResponse = serde_json::from_str(&serialized)
         .expect("serialized copilot_models.json should deserialize");
 

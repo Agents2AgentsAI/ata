@@ -91,6 +91,40 @@ pub enum LoginAccountParams {
         #[ts(optional = nullable)]
         chatgpt_plan_type: Option<String>,
     },
+    // === ATA: provider-specific login flows ===
+    // Variants below are ATA additions appended at the end of the enum on
+    // purpose: any future upstream variant lands ahead of them, so a
+    // three-way merge stays clean.
+    /// Persist an API key for a specific provider. Generalizes the legacy
+    /// OpenAI-only `apiKey` variant by carrying the provider id so the
+    /// processor can route to the right credential store (OpenAI, Anthropic,
+    /// Gemini, etc.).
+    #[serde(rename = "providerApiKey", rename_all = "camelCase")]
+    #[ts(rename = "providerApiKey", rename_all = "camelCase")]
+    ProviderApiKey {
+        provider_id: String,
+        #[serde(rename = "apiKey")]
+        #[ts(rename = "apiKey")]
+        api_key: String,
+    },
+    /// Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The
+    /// response carries a browser URL the client should open; the completion
+    /// notification fires once the OAuth callback exchanges tokens.
+    #[serde(rename = "geminiOauth")]
+    #[ts(rename = "geminiOauth")]
+    GeminiOauth,
+    /// Send the Supabase OTP for an ATA account email.
+    #[serde(rename = "ataSendOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataSendOtp", rename_all = "camelCase")]
+    AtaSendOtp { email: String },
+    /// Verify a Supabase OTP and persist the ATA session.
+    #[serde(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    AtaVerifyOtp { email: String, otp: String },
+    /// Sign out of the active ATA account session.
+    #[serde(rename = "ataLogout")]
+    #[ts(rename = "ataLogout")]
+    AtaLogout,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -136,6 +170,38 @@ pub enum LoginAccountResponse {
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
+    // === ATA: provider-specific login flows ===
+    /// Response for `LoginAccountParams::ProviderApiKey`. The key is persisted
+    /// synchronously, so no follow-up `AccountLoginCompletedNotification` is
+    /// emitted — the empty body means "stored successfully".
+    #[serde(rename = "providerApiKey", rename_all = "camelCase")]
+    #[ts(rename = "providerApiKey", rename_all = "camelCase")]
+    ProviderApiKey {},
+    /// Initial response for the Gemini OAuth flow. The follow-up
+    /// `AccountLoginCompletedNotification` arrives once the OAuth callback
+    /// completes.
+    #[serde(rename = "geminiOauthContinueInBrowser", rename_all = "camelCase")]
+    #[ts(rename = "geminiOauthContinueInBrowser", rename_all = "camelCase")]
+    GeminiOauthContinueInBrowser {
+        login_id: String,
+        /// URL the client should open in a browser to authorize Gemini Code
+        /// Assist access.
+        auth_url: String,
+    },
+    /// Response for `LoginAccountParams::AtaSendOtp`. Empty body — success
+    /// means the OTP email was dispatched.
+    #[serde(rename = "ataSendOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataSendOtp", rename_all = "camelCase")]
+    AtaSendOtp {},
+    /// Response for `LoginAccountParams::AtaVerifyOtp`. Carries the
+    /// authenticated email so the TUI can surface it on the success screen.
+    #[serde(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    AtaVerifyOtp { email: String },
+    /// Response for `LoginAccountParams::AtaLogout`. Empty body.
+    #[serde(rename = "ataLogout", rename_all = "camelCase")]
+    #[ts(rename = "ataLogout", rename_all = "camelCase")]
+    AtaLogout {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

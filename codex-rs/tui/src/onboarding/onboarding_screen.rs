@@ -120,8 +120,11 @@ impl OnboardingScreen {
             config.animations,
         )));
         if show_login_screen {
+            // ConfigureProviders is the closest match to the legacy
+            // "force API key" mode now that the API-key entry lives behind
+            // the provider sub-picker (OpenAI/Anthropic/Gemini/Copilot).
             let highlighted_mode = match forced_login_method {
-                Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
+                Some(ForcedLoginMethod::Api) => SignInOption::ConfigureProviders,
                 _ => SignInOption::ChatGpt,
             };
             if let Some(app_server_request_handle) = app_server_request_handle {
@@ -135,6 +138,10 @@ impl OnboardingScreen {
                     forced_login_method,
                     animations_enabled: config.animations,
                     animations_suppressed: std::cell::Cell::new(false),
+                    // === ATA: provider-picker + ATA-account state ===
+                    highlighted_provider: crate::onboarding::auth::ProviderOption::first(),
+                    highlighted_provider_auth_method:
+                        crate::onboarding::auth::ProviderAuthMethod::ApiKey,
                 }));
             } else {
                 tracing::warn!("skipping onboarding login step without app-server request handle");

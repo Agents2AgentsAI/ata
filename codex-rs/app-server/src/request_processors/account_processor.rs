@@ -240,6 +240,26 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            // === ATA: provider-specific login flows ===
+            LoginAccountParams::ProviderApiKey {
+                provider_id,
+                api_key,
+            } => {
+                self.login_provider_api_key_v2(request_id, provider_id, api_key)
+                    .await;
+            }
+            LoginAccountParams::GeminiOauth => {
+                self.login_gemini_oauth_v2(request_id).await;
+            }
+            LoginAccountParams::AtaSendOtp { email } => {
+                self.ata_send_otp_v2(request_id, email).await;
+            }
+            LoginAccountParams::AtaVerifyOtp { email, otp } => {
+                self.ata_verify_otp_v2(request_id, email, otp).await;
+            }
+            LoginAccountParams::AtaLogout => {
+                self.ata_logout_v2(request_id).await;
+            }
         }
         Ok(())
     }
@@ -1133,4 +1153,204 @@ impl AccountRequestProcessor {
 
         Ok((primary, rate_limits_by_limit_id))
     }
+}
+
+// === ATA: provider-specific login flows ===
+//
+// Handlers backing the four-option onboarding picker: per-provider API key
+// (OpenAI/Anthropic/Gemini/Copilot), Gemini OAuth (Code Assist), and the
+// Supabase email-OTP "Sign in with ATA account" flow.
+//
+// Kept in a separate impl block so future upstream changes to the main
+// `impl AccountRequestProcessor` block above merge cleanly. Each `_v2`
+// method follows the same convention as the existing `login_*_v2` methods:
+// run the underlying work, send a JSON-RPC result, and fire
+// `AccountUpdated` / `AccountLoginCompleted` notifications where relevant.
+impl AccountRequestProcessor {
+    async fn login_provider_api_key_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        provider_id: String,
+        api_key: String,
+    ) {
+        let result = self
+            .login_provider_api_key_common(provider_id.as_str(), api_key.as_str())
+            .await
+            .map(|()| LoginAccountResponse::ProviderApiKey {});
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.send_login_success_notifications(/*login_id*/ None)
+                .await;
+        }
+    }
+
+    async fn login_provider_api_key_common(
+        &self,
+        provider_id: &str,
+        api_key: &str,
+    ) -> std::result::Result<(), JSONRPCErrorError> {
+        if api_key.trim().is_empty() {
+            return Err(invalid_request("API key must not be empty."));
+        }
+        match login_with_provider_api_key(
+            &self.config.codex_home,
+            provider_id,
+            api_key,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            Ok(()) => {
+                self.auth_manager.reload().await;
+                Ok(())
+            }
+            Err(err) => Err(internal_error(format!(
+                "failed to save {provider_id} api key: {err}"
+            ))),
+        }
+    }
+
+    async fn login_gemini_oauth_v2(&self, request_id: ConnectionRequestId) {
+        // Boots the Gemini Code Assist OAuth callback server. The TUI opens
+        // the returned `auth_url` in a browser; the user finishes the OAuth
+        // flow there; the server persists the resulting credential and the
+        // task below fires `AccountLoginCompleted` with the matching
+        // `login_id`. Mirrors the Copilot device-code path.
+        let opts = codex_login::GeminiServerOptions::new(
+            self.config.codex_home.to_path_buf(),
+            self.config.cli_auth_credentials_store_mode,
+        );
+        let server = match codex_login::run_gemini_login_server(opts) {
+            Ok(server) => server,
+            Err(err) => {
+                let resp: Result<LoginAccountResponse, JSONRPCErrorError> = Err(internal_error(
+                    format!("failed to start Gemini OAuth server: {err}"),
+                ));
+                self.outgoing.send_result(request_id, resp).await;
+                return;
+            }
+        };
+
+        let login_id = Uuid::new_v4();
+        let auth_url = server.auth_url.clone();
+        let response = LoginAccountResponse::GeminiOauthContinueInBrowser {
+            login_id: login_id.to_string(),
+            auth_url: auth_url.clone(),
+        };
+        let result: Result<LoginAccountResponse, JSONRPCErrorError> = Ok(response);
+        self.outgoing.send_result(request_id, result).await;
+
+        // Drive the server to completion in a background task so the request
+        // returns immediately. Completion / failure fires
+        // AccountLoginCompletedNotification with the same login_id.
+        let outgoing = self.outgoing.clone();
+        tokio::spawn(async move {
+            let (success, error_msg) = match server.block_until_done().await {
+                Ok(()) => (true, None),
+                Err(err) => (false, Some(err.to_string())),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AccountLoginCompleted(
+                    AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    },
+                ))
+                .await;
+        });
+    }
+
+    async fn ata_send_otp_v2(&self, request_id: ConnectionRequestId, email: String) {
+        let result = self
+            .ata_send_otp_common(email.as_str())
+            .await
+            .map(|()| LoginAccountResponse::AtaSendOtp {});
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn ata_send_otp_common(&self, email: &str) -> std::result::Result<(), JSONRPCErrorError> {
+        if email.trim().is_empty() {
+            return Err(invalid_request("Email must not be empty."));
+        }
+        let ata_config = ata_account_config_from_env_or_default();
+        let client = SupabaseClient::new(ata_config.supabase_url, ata_config.supabase_anon_key);
+        let auth = SupabaseAuth::new(client);
+        match auth.sign_in_with_otp(email).await {
+            Ok(()) => Ok(()),
+            Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
+                "Supabase rejected OTP request ({status}): {message}"
+            ))),
+            Err(err) => Err(internal_error(format!("failed to send OTP: {err}"))),
+        }
+    }
+
+    async fn ata_verify_otp_v2(&self, request_id: ConnectionRequestId, email: String, otp: String) {
+        let result = self
+            .ata_verify_otp_common(email.as_str(), otp.as_str())
+            .await
+            .map(|email| LoginAccountResponse::AtaVerifyOtp { email });
+        let verified = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+        if verified {
+            // Reuse the existing account-updated emit so the TUI's
+            // /account view and onboarding success screen see the new
+            // ATA session immediately.
+            let payload = self.current_account_updated_notification();
+            self.outgoing
+                .send_server_notification(ServerNotification::AccountUpdated(payload))
+                .await;
+        }
+    }
+
+    async fn ata_verify_otp_common(
+        &self,
+        email: &str,
+        otp: &str,
+    ) -> std::result::Result<String, JSONRPCErrorError> {
+        if email.trim().is_empty() {
+            return Err(invalid_request("Email must not be empty."));
+        }
+        if otp.trim().is_empty() {
+            return Err(invalid_request("OTP must not be empty."));
+        }
+        let ata_config = ata_account_config_from_env_or_default();
+        let client = SupabaseClient::new(ata_config.supabase_url, ata_config.supabase_anon_key);
+        let auth = SupabaseAuth::new(client);
+        match auth.exchange_code_for_session(email, otp).await {
+            Ok(session) => {
+                let user_email = session.user.email.clone();
+                if let Err(err) = save_ata_session(&self.config.codex_home, &session) {
+                    return Err(internal_error(format!(
+                        "failed to persist ATA session: {err}"
+                    )));
+                }
+                Ok(user_email)
+            }
+            Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
+                "Supabase rejected OTP ({status}): {message}"
+            ))),
+            Err(err) => Err(internal_error(format!("failed to verify OTP: {err}"))),
+        }
+    }
+
+    async fn ata_logout_v2(&self, request_id: ConnectionRequestId) {
+        let result = match delete_ata_session(&self.config.codex_home) {
+            Ok(_) => Ok(LoginAccountResponse::AtaLogout {}),
+            Err(err) => Err(internal_error(format!(
+                "failed to clear ATA session: {err}"
+            ))),
+        };
+        self.outgoing.send_result(request_id, result).await;
+    }
+}
+
+/// Resolve the active `AtaAccountConfig` for ATA Supabase calls.
+///
+/// `AtaAccountConfig::default()` returns the public supabase project that
+/// ships with the binary. Once we plumb the field through `Config` proper
+/// (it lives under `config.toml` as `[ata_account]`) this helper can read
+/// from `self.config` instead.
+fn ata_account_config_from_env_or_default() -> AtaAccountConfig {
+    AtaAccountConfig::default()
 }

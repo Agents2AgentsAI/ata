@@ -72,7 +72,9 @@ model_reasoning_effort = "high"
         "model_provider should be cleared, got: {contents}"
     );
     assert_eq!(
-        table.get("model_reasoning_effort").and_then(TomlValue::as_str),
+        table
+            .get("model_reasoning_effort")
+            .and_then(TomlValue::as_str),
         Some("high"),
         "unrelated key model_reasoning_effort must survive, got: {contents}"
     );

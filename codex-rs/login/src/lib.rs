@@ -1,14 +1,19 @@
-// ATA-only Gemini OAuth (`gemini_server.rs`) and Supabase auth (`supabase_auth.rs`)
-// flows are temporarily disabled for the rust-v0.129.0 upstream merge. They depend on
-// fork-only modules (`codex_core::auth::gemini_oauth`, `codex_core::auth::storage`,
-// `codex_core::supabase`) that were relocated/removed upstream. Re-enable as a follow-up
-// per `merge_info/local_upstream_feature_analysis.md`.
+// ATA-only Supabase auth (`supabase_auth.rs`) is still temporarily disabled
+// for the rust-v0.129.0 upstream merge — the ATA email-OTP flow now lives
+// behind `app-server-protocol::v2::LoginAccountParams::AtaSendOtp/AtaVerifyOtp`
+// and is driven from the TUI's onboarding picker.
+//
+// `gemini_server.rs` was re-introduced from `main` as part of restoring the
+// four-option onboarding picker (Gemini Code Assist OAuth). It lives behind
+// `LoginAccountParams::GeminiOauth`.
 
 pub mod auth;
 pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+// === ATA: Gemini Code Assist OAuth login server. ===
+mod gemini_server;
 mod pkce;
 mod server;
 
@@ -23,6 +28,10 @@ pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
+// === ATA: Gemini OAuth public surface (used by app-server's
+//   `account/login/start` handler for `LoginAccountParams::GeminiOauth`). ===
+pub use gemini_server::GeminiServerOptions;
+pub use gemini_server::run_gemini_login_server;
 
 pub use auth::AuthConfig;
 pub use auth::AuthDotJson;
