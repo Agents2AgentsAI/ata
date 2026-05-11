@@ -1747,8 +1747,13 @@ impl BottomPane {
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
+            tracing::info!(
+                "[BOTTOM-PANE] rendering active_view id={:?}",
+                view.view_id()
+            );
             RenderableItem::Borrowed(view)
         } else {
+            tracing::info!("[BOTTOM-PANE] no active_view, rendering composer flex");
             let mut flex = FlexRenderable::new();
             if let Some(status) = &self.status {
                 flex.push(/*flex*/ 0, RenderableItem::Borrowed(status));
