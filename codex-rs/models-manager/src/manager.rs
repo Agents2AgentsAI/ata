@@ -437,23 +437,37 @@ fn find_model_by_namespaced_suffix(model: &str, candidates: &[ModelInfo]) -> Opt
     find_model_by_longest_prefix(suffix, candidates)
 }
 
+/// Maps legacy slugs to the canonical replacement so config.toml entries
+/// saved before a catalog rename keep resolving without forcing the user
+/// to re-pick the model. Returning `Some(canonical)` swaps both the
+/// lookup key and the resulting `ModelInfo.slug`, so the wire request
+/// also goes out with the new slug.
+fn migrate_legacy_slug(slug: &str) -> Option<&'static str> {
+    match slug {
+        "gemini-3.1-pro" => Some("gemini-3.1-pro-preview"),
+        "gemini-3-flash" => Some("gemini-3-flash-preview"),
+        _ => None,
+    }
+}
+
 pub(crate) fn construct_model_info_from_candidates(
     model: &str,
     candidates: &[ModelInfo],
     config: &ModelsManagerConfig,
 ) -> ModelInfo {
+    let resolved_model = migrate_legacy_slug(model).unwrap_or(model);
     // First use the normal longest-prefix match. If that misses, allow a narrowly scoped
     // retry for namespaced slugs like `custom/gpt-5.3-codex`.
-    let remote = find_model_by_longest_prefix(model, candidates)
-        .or_else(|| find_model_by_namespaced_suffix(model, candidates));
+    let remote = find_model_by_longest_prefix(resolved_model, candidates)
+        .or_else(|| find_model_by_namespaced_suffix(resolved_model, candidates));
     let model_info = if let Some(remote) = remote {
         ModelInfo {
-            slug: model.to_string(),
+            slug: resolved_model.to_string(),
             used_fallback_model_metadata: false,
             ..remote
         }
     } else {
-        model_info::model_info_from_slug(model)
+        model_info::model_info_from_slug(resolved_model)
     };
     model_info::with_config_overrides(model_info, config)
 }

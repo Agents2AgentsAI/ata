@@ -588,53 +588,6 @@
       "supports_search_tool": false
     },
     {
-      "slug": "claude-opus-4.5",
-      "display_name": "Claude Opus 4.5",
-      "description": "Anthropic Opus for complex reasoning.",
-      "default_reasoning_level": "medium",
-      "supported_reasoning_levels": [
-        {
-          "effort": "low",
-          "description": "Fast responses with lighter reasoning"
-        },
-        {
-          "effort": "medium",
-          "description": "Balances speed and reasoning depth for everyday tasks"
-        },
-        {
-          "effort": "high",
-          "description": "Greater reasoning depth for complex problems"
-        }
-      ],
-      "shell_type": "shell_command",
-      "visibility": "list",
-      "supported_in_api": true,
-      "priority": 130,
-      "availability_nux": null,
-      "upgrade": null,
-      "base_instructions": "",
-      "supports_reasoning_summaries": false,
-      "default_reasoning_summary": "none",
-      "support_verbosity": false,
-      "default_verbosity": null,
-      "apply_patch_tool_type": null,
-      "truncation_policy": {
-        "mode": "tokens",
-        "limit": 10000
-      },
-      "supports_parallel_tool_calls": false,
-      "supports_image_detail_original": false,
-      "context_window": 200000,
-      "max_context_window": 200000,
-      "auto_compact_token_limit": null,
-      "experimental_supported_tools": [],
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "supports_search_tool": false
-    },
-    {
       "slug": "claude-sonnet-4.6",
       "display_name": "Claude Sonnet 4.6",
       "description": "Anthropic balanced speed-and-intelligence model.",
@@ -772,7 +725,7 @@
       "supports_search_tool": false
     },
     {
-      "slug": "gemini-3.1-pro",
+      "slug": "gemini-3.1-pro-preview",
       "display_name": "Gemini 3.1 Pro",
       "description": "Google advanced reasoning, latest preview.",
       "default_reasoning_level": "medium",
@@ -823,7 +776,7 @@
       "supports_search_tool": false
     },
     {
-      "slug": "gemini-3-flash",
+      "slug": "gemini-3-flash-preview",
       "display_name": "Gemini 3 Flash",
       "description": "Google fast, lightweight model.",
       "default_reasoning_level": "medium",

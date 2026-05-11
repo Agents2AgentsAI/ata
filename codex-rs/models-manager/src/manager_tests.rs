@@ -280,6 +280,34 @@ async fn get_model_info_uses_custom_catalog() {
 }
 
 #[tokio::test]
+async fn get_model_info_aliases_legacy_gemini_slugs_to_preview() {
+    // Saved configs from before the `-preview` rename should keep working
+    // without forcing the user to re-pick the model. The alias both
+    // resolves the catalog entry (so no "fallback metadata" warning) and
+    // rewrites the slug used downstream (so the wire request goes out with
+    // the slug Copilot/Gemini actually accept).
+    let config = ModelsManagerConfig::default();
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![
+            remote_model("gemini-3.1-pro-preview", "Gemini 3.1 Pro", 0),
+            remote_model("gemini-3-flash-preview", "Gemini 3 Flash", 10),
+        ],
+    });
+
+    for (legacy, canonical) in [
+        ("gemini-3.1-pro", "gemini-3.1-pro-preview"),
+        ("gemini-3-flash", "gemini-3-flash-preview"),
+    ] {
+        let info = manager.get_model_info(legacy, &config).await;
+        assert!(
+            !info.used_fallback_model_metadata,
+            "legacy slug `{legacy}` should resolve via alias",
+        );
+        assert_eq!(info.slug, canonical);
+    }
+}
+
+#[tokio::test]
 async fn get_model_info_matches_namespaced_suffix() {
     let config = ModelsManagerConfig::default();
     let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);

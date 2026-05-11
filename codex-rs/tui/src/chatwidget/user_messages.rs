@@ -21,6 +21,18 @@ pub(super) struct UserMessageDisplay {
     pub(super) text_elements: Vec<TextElement>,
 }
 
+impl UserMessageDisplay {
+    /// Compare two displays on text content only, ignoring image
+    /// attachments. The optimistic submit-render uses what the user typed
+    /// (no auto-injected attachments yet), while the agent's later
+    /// committed event includes server-injected attachments (e.g. PDF
+    /// pages rasterized for Copilot chat-completions). Both should be
+    /// treated as the same bubble for dedup purposes.
+    pub(super) fn matches_text_of(&self, other: &UserMessageDisplay) -> bool {
+        self.message == other.message && self.text_elements == other.text_elements
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PendingSteerCompareKey {
     pub(super) message: String,

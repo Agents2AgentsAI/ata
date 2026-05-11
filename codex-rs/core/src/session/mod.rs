@@ -3143,6 +3143,35 @@ impl Session {
             return Err(SteerInputError::EmptyInput);
         }
 
+        // Probe for an active turn BEFORE running the input-preparation
+        // pipeline. The original ordering ran `prepare_session_file_inputs`
+        // unconditionally, which is fine when steering succeeds — but when
+        // there's no active turn we hand `input` back to the caller via
+        // `NoActiveTurn(input)`, and the caller spawns a fresh task that
+        // re-runs `run_turn` → `prepare_session_file_inputs`. With the old
+        // ordering, prepare ran TWICE (once here with side effects already
+        // applied, then once again in run_turn against the mutated input),
+        // doubling injected attachments (PDFs rasterized twice → exceeded
+        // model image caps). The probe is read-only: we only check whether
+        // an active turn exists; the real lock + invariants are still
+        // acquired below for the steering path.
+        //
+        // While we hold the probe lock, also capture the current turn's
+        // model slug so the rasterization decision in
+        // `prepare_session_file_inputs` reflects the live model (including
+        // any `/model` switch the user made) rather than the launch-time
+        // default in `config.model`.
+        let active_model_slug: String = {
+            let active = self.active_turn.lock().await;
+            let Some(at) = active.as_ref() else {
+                return Err(SteerInputError::NoActiveTurn(input));
+            };
+            let Some((_, running)) = at.tasks.first() else {
+                return Err(SteerInputError::NoActiveTurn(input));
+            };
+            running.turn_context.model_info.slug.clone()
+        };
+
         // Match codex-main's contract: PDF/file mentions in the steered
         // text must go through the same proactive-injection pipeline as
         // the run_turn path so the model receives ContentItem::InputFile
@@ -3169,6 +3198,7 @@ impl Session {
                 config.as_ref(),
                 cwd.as_path(),
                 &sandbox_policy,
+                &active_model_slug,
             )
             .await
             .map_err(|error| SteerInputError::InvalidFileInput(error.to_string()))?;

@@ -139,10 +139,7 @@ fn normalize_path_token(token: &str) -> &str {
         let after_lead =
             after_quotes.trim_start_matches(|c: char| matches!(c, '(' | '[' | '*' | '`'));
         let after_trail = after_lead.trim_end_matches(|c: char| {
-            matches!(
-                c,
-                '.' | ',' | ':' | ';' | '!' | '?' | ')' | ']' | '*' | '`'
-            )
+            matches!(c, '.' | ',' | ':' | ';' | '!' | '?' | ')' | ']' | '*' | '`')
         });
         if after_trail == current {
             return current;

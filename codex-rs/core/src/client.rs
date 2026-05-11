@@ -127,7 +127,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 
 mod anthropic;
-mod copilot;
+pub(crate) mod copilot;
 mod gemini;
 mod provider_streaming;
 use codex_protocol::error::CodexErr;

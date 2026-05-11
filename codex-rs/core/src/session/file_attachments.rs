@@ -36,6 +36,7 @@ use tracing::warn;
 
 mod cache;
 mod paths;
+mod pdf_rasterize;
 mod provider;
 
 use super::Session;
@@ -47,6 +48,8 @@ use cache::record_upload_paths;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use paths::inject_local_pdf_paths_from_text_inputs;
+use pdf_rasterize::rasterize_pdfs_for_copilot_chat_completions;
+use pdf_rasterize::should_rasterize_pdfs;
 pub(crate) use provider::file_capabilities_for_provider;
 use provider::max_raw_inline_bytes;
 use provider::upload_base_url_for_provider;
@@ -621,8 +624,44 @@ impl Session {
         config: &Config,
         cwd: &Path,
         sandbox_policy: &SandboxPolicy,
+        active_model_slug: &str,
     ) -> Result<Vec<String>, FileInputPreparationError> {
         inject_local_pdf_paths_from_text_inputs(input, cwd, sandbox_policy);
+
+        // Copilot's /chat/completions endpoint accepts only text + image_url
+        // content parts, so inline PDFs would be silently stripped before
+        // the wire. For the affected models (Claude on Copilot, Gemini on
+        // Copilot, gpt-4.x on Copilot), rasterize each PDF to per-page
+        // PNGs so the document content still reaches the model via its
+        // supported vision channel. gpt-5.x on Copilot uses /responses and
+        // bypasses this path; all non-Copilot providers also bypass it.
+        //
+        // We MUST use the per-turn active model slug (which reflects any
+        // `/model` switch the user made) rather than `config.model` (the
+        // launch-time default). Otherwise a session that started on a
+        // chat-completions model and switched to gpt-5.x would still
+        // rasterize PDFs even though /responses can ingest them natively.
+        let mut warnings: Vec<String> = Vec::new();
+        if should_rasterize_pdfs(provider, active_model_slug) {
+            match rasterize_pdfs_for_copilot_chat_completions(input, &config.codex_home).await {
+                Ok(rasters) => {
+                    for raster in rasters {
+                        if raster.skipped_pages > 0 {
+                            warnings.push(format!(
+                                "Rasterized {} pages of {} (skipped {} pages over the {}-page cap).",
+                                raster.page_paths.len(),
+                                raster.source_path.display(),
+                                raster.skipped_pages,
+                                raster.page_paths.len() + raster.skipped_pages as usize,
+                            ));
+                        }
+                    }
+                }
+                Err(e) => {
+                    warnings.push(format!("PDF rasterization failed: {e}"));
+                }
+            }
+        }
 
         let (provider_id, _) = file_capabilities_for_provider(provider, config.model.as_deref());
         self.dedup_local_files_for_provider(input, &provider_id)
@@ -637,7 +676,8 @@ impl Session {
         .await?;
         self.record_uploaded_files_and_paths(outcome.uploaded_files, input)
             .await;
-        Ok(outcome.warnings)
+        warnings.extend(outcome.warnings);
+        Ok(warnings)
     }
 
     pub(crate) async fn record_uploaded_files_and_paths(

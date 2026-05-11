@@ -51,6 +51,13 @@ use crate::client_common::ResponseStream;
 /// `/responses` endpoint. Currently any `gpt-N` with N≥5 except
 /// `gpt-5-mini` (which still ships on Chat Completions). Mirrors
 /// opencode's `shouldUseResponsesApi` so the two clients stay in sync.
+///
+/// Empirically (2026-05): Copilot's `/responses` rejects `claude-*` with
+/// `unsupported_api_for_model` at the model level, and the allow-list
+/// returned for the integrators we can reach (openai-codex-cli,
+/// copilot-cli) does not include any Gemini model on /responses. So
+/// Claude and Gemini both stay on `/chat/completions`. Use the standalone
+/// Anthropic / Gemini provider if you need native PDF for those models.
 pub(crate) fn requires_responses_api(model_slug: &str) -> bool {
     let Some(rest) = model_slug.strip_prefix("gpt-") else {
         return false;
@@ -238,10 +245,16 @@ mod tests {
         assert!(!requires_responses_api("gpt-4.1"));
         assert!(!requires_responses_api("gpt-4o"));
         assert!(!requires_responses_api("gpt-3.5-turbo"));
-        // Non-gpt vendors stay on chat completions.
+        // Claude on Copilot stays on chat completions: /responses returns
+        // `unsupported_api_for_model` at the model level.
         assert!(!requires_responses_api("claude-opus-4.7"));
         assert!(!requires_responses_api("claude-sonnet-4.6"));
-        assert!(!requires_responses_api("gemini-3.1-pro"));
+        assert!(!requires_responses_api("claude-haiku-4.5"));
+        // Gemini on Copilot stays on chat completions: the reachable
+        // integrator allow-lists do not include Gemini on /responses.
+        assert!(!requires_responses_api("gemini-3.1-pro-preview"));
+        assert!(!requires_responses_api("gemini-3-flash-preview"));
+        assert!(!requires_responses_api("gemini-2.5-pro"));
         assert!(!requires_responses_api("grok-code-fast-1"));
         // Bare or malformed slugs short-circuit to false.
         assert!(!requires_responses_api(""));

@@ -165,6 +165,7 @@ pub(crate) async fn run_turn(
                 turn_context.config.as_ref(),
                 &cwd,
                 &sandbox_policy,
+                &turn_context.model_info.slug,
             )
             .await
         {

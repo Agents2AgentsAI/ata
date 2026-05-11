@@ -6833,14 +6833,21 @@ impl ChatWidget {
                 let pending_display =
                     user_message_display_for_history(pending.user_message, &pending.history_record);
                 self.on_user_message_display(pending_display);
-            } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
+            } else if self
+                .last_rendered_user_message_display
+                .as_ref()
+                .is_none_or(|last| !last.matches_text_of(&display))
+            {
                 tracing::warn!(
                     "pending steer matched compare key but queue was empty when rendering committed user message"
                 );
                 self.on_user_message_display(display);
             }
         } else if !self.is_review_mode
-            && self.last_rendered_user_message_display.as_ref() != Some(&display)
+            && self
+                .last_rendered_user_message_display
+                .as_ref()
+                .is_none_or(|last| !last.matches_text_of(&display))
         {
             self.on_user_message_display(display);
         }
