@@ -394,6 +394,90 @@ mod tests {
         assert_eq!(key, Some("sk-ant-test".to_string()));
     }
 
+    /// Regression: saving a non-OpenAI API key (Anthropic/Gemini) must
+    /// NOT set `auth_mode = ApiKey` on the auth.json. That flag historically
+    /// meant "use the legacy top-level `openai_api_key` field", which is
+    /// empty here — leaving the flag set caused `from_auth_dot_json` to
+    /// reject the file on the next launch with "API key auth is missing a
+    /// key", forcing the user to re-authenticate every time.
+    #[test]
+    #[serial(codex_api_key)]
+    fn login_with_provider_api_key_does_not_set_legacy_auth_mode_for_non_openai() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _anthropic_guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_api_key(
+            dir.path(),
+            PROVIDER_ANTHROPIC,
+            "sk-ant-test",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("should store anthropic key");
+
+        let storage = codex_login::auth::storage::create_auth_storage(
+            dir.path().to_path_buf(),
+            AuthCredentialsStoreMode::File,
+        );
+        let auth_dot_json = storage
+            .load()
+            .expect("auth storage should load")
+            .expect("auth.json should exist after API key save");
+        assert!(
+            auth_dot_json.auth_mode.is_none(),
+            "non-OpenAI provider key must leave auth_mode unset (got {:?})",
+            auth_dot_json.auth_mode,
+        );
+        assert!(
+            auth_dot_json.openai_api_key.is_none(),
+            "non-OpenAI provider key must not populate openai_api_key (got {:?})",
+            auth_dot_json.openai_api_key,
+        );
+        assert!(
+            auth_dot_json.providers.contains_key(PROVIDER_ANTHROPIC),
+            "anthropic key should be stored under providers map"
+        );
+    }
+
+    /// OpenAI's API key still flips `auth_mode = ApiKey` so the legacy
+    /// `from_auth_dot_json` path keeps working.
+    #[test]
+    #[serial(codex_api_key)]
+    fn login_with_provider_api_key_keeps_legacy_auth_mode_for_openai() {
+        let dir = tempdir().unwrap();
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
+        let _anthropic_guard = EnvVarGuard::set(ANTHROPIC_API_KEY_ENV_VAR, "");
+        let _google_guard = EnvVarGuard::set(GOOGLE_API_KEY_ENV_VAR, "");
+
+        login_with_provider_api_key(
+            dir.path(),
+            PROVIDER_OPENAI,
+            "sk-openai",
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("should store openai key");
+
+        let storage = codex_login::auth::storage::create_auth_storage(
+            dir.path().to_path_buf(),
+            AuthCredentialsStoreMode::File,
+        );
+        let auth_dot_json = storage
+            .load()
+            .expect("auth storage should load")
+            .expect("auth.json should exist after API key save");
+        assert_eq!(
+            auth_dot_json.auth_mode,
+            Some(codex_app_server_protocol::AuthMode::ApiKey),
+            "OpenAI key save should still flip the legacy auth_mode flag",
+        );
+        assert_eq!(
+            auth_dot_json.openai_api_key.as_deref(),
+            Some("sk-openai"),
+            "OpenAI key should also populate the legacy top-level field via migrate"
+        );
+    }
+
     #[test]
     #[serial(codex_api_key)]
     fn login_with_provider_api_key_preserves_existing_providers() {

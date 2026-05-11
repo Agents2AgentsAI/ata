@@ -698,7 +698,7 @@ impl ModelClient {
         }
     }
 
-    fn build_responses_request(
+    pub(super) fn build_responses_request(
         &self,
         provider: &codex_api::Provider,
         prompt: &Prompt,
@@ -953,7 +953,7 @@ impl ModelClientSession {
     ///
     /// Keeping option construction in one place ensures request-scoped headers are consistent
     /// regardless of transport choice.
-    fn build_responses_options(
+    pub(super) fn build_responses_options(
         &self,
         turn_metadata_header: Option<&str>,
         compression: Compression,
@@ -1605,13 +1605,32 @@ impl ModelClientSession {
                 gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
             }
             WireApi::CopilotInline => {
-                copilot::stream_copilot_chat_completions(
-                    self,
-                    prompt,
-                    model_info,
-                    session_telemetry,
-                )
-                .await
+                // GitHub Copilot exposes most models via Chat Completions, but
+                // newer reasoning-tier models (`gpt-N` for N>=5, except
+                // `gpt-5-mini`) only work via the Responses API — Chat
+                // Completions returns `unsupported_api_for_model` for them.
+                // Mirrors opencode's per-model dispatch.
+                if copilot::requires_responses_api(&model_info.slug) {
+                    copilot::stream_copilot_responses_api(
+                        self,
+                        prompt,
+                        model_info,
+                        effort,
+                        summary,
+                        service_tier,
+                        turn_metadata_header,
+                        session_telemetry,
+                    )
+                    .await
+                } else {
+                    copilot::stream_copilot_chat_completions(
+                        self,
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                    )
+                    .await
+                }
             }
         }
     }

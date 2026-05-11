@@ -915,11 +915,16 @@ impl ThreadManagerState {
     /// long enough to bump the inner Arc's refcount, then drops it. Used by
     /// callers that need to await on the manager (the lock guard is sync
     /// and cannot cross `.await`).
+    ///
+    /// On lock poisoning we fall back to the inner value via
+    /// `PoisonError::into_inner` — the data is still a valid Arc; poisoning
+    /// only signals that a previous writer panicked, which doesn't
+    /// invalidate the catalog snapshot.
     pub(crate) fn snapshot_models_manager(&self) -> SharedModelsManager {
-        self.models_manager
-            .read()
-            .expect("models_manager RwLock poisoned")
-            .clone()
+        match self.models_manager.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {

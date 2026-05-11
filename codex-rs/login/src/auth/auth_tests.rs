@@ -1250,15 +1250,19 @@ fn resolved_mode_returns_none_for_provider_oauth_only_auth() {
 
 #[test]
 fn resolved_mode_prefers_explicit_auth_mode() {
-    let mut auth = AuthDotJson::default();
-    auth.auth_mode = Some(AuthMode::Chatgpt);
+    let auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        ..Default::default()
+    };
     assert_eq!(auth.resolved_mode(), Some(AuthMode::Chatgpt));
 }
 
 #[test]
 fn resolved_mode_infers_api_key_from_key_when_mode_missing() {
-    let mut auth = AuthDotJson::default();
-    auth.openai_api_key = Some("sk-test".to_string());
+    let auth = AuthDotJson {
+        openai_api_key: Some("sk-test".to_string()),
+        ..Default::default()
+    };
     assert_eq!(auth.resolved_mode(), Some(AuthMode::ApiKey));
 }
 

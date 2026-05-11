@@ -364,6 +364,10 @@ impl MultiRootState {
         Ok(root)
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Holds the shared-LSP-registry write lock across `registry.shutdown_all().await` intentionally: shutdown must observe an atomic 'last user is leaving' transition. The cache is module-private and no other code path tries to acquire it after this point, so the long hold cannot deadlock."
+    )]
     pub async fn remove_root(&self, name: &str) -> Result<(), String> {
         if name == self.primary_root {
             return Err("cannot remove the primary root".to_string());
@@ -412,6 +416,10 @@ impl MultiRootState {
         self.roots.read().await.clone()
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Snapshots LSP + treesitter registries by holding their read locks across `try_ready().await` on the inner index state. The awaited future never re-enters these RwLocks, so there is no deadlock; releasing and re-locking per-entry would race with concurrent `add_root` mutations."
+    )]
     pub async fn root_statuses(&self) -> Vec<RootStatus> {
         let roots = self.roots().await;
         #[cfg(feature = "lsp")]
@@ -481,6 +489,10 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Holds the treesitter index map read lock across `wait_ready().await` so a concurrent `add_root` can't remove the entry mid-wait. The awaited future only touches the per-root index state, never the outer map."
+    )]
     pub async fn treesitter_index_for_file(
         &self,
         file: &Path,
@@ -508,6 +520,10 @@ impl MultiRootState {
     /// - the root has no tree-sitter index,
     /// - the index is still building or has failed.
     #[cfg(feature = "treesitter")]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "The `indices` guard is dropped explicitly before the `try_ready().await` below; clippy can't see the explicit drop and assumes the worst. No deadlock risk."
+    )]
     pub async fn try_treesitter_index_for_file(
         &self,
         file: &Path,
@@ -524,6 +540,10 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Index map read guards are dropped explicitly before the inner `wait_ready().await` calls. Clippy can't see the explicit drops; the awaited futures touch only per-root state, not the outer map."
+    )]
     pub async fn treesitter_indices(
         &self,
         root_name: Option<&str>,
@@ -554,6 +574,10 @@ impl MultiRootState {
     }
 
     #[cfg(feature = "treesitter")]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Best-effort reindex: holds the index map read lock across `try_ready().await` to find the matching index. The awaited future doesn't re-enter the lock; concurrent `add_root` mutations would race with our index lookup anyway."
+    )]
     pub async fn reindex_file(&self, file: &Path) {
         // Best-effort; don't block tool calls waiting for background index build.
         let canonical_file = canonicalize_query_path(file);
@@ -740,6 +764,10 @@ impl MultiRootState {
         }
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Drains the shared LSP registry cache under its write lock before awaiting `shutdown_all` on each retained registry. The cache is module-private and shutdown only touches per-registry state, not the cache itself, so the long hold is safe."
+    )]
     pub async fn shutdown_all(&self) {
         #[cfg(feature = "lsp")]
         {

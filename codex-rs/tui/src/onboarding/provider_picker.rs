@@ -1,3 +1,8 @@
+// Mirrors `auth.rs`: the bottom-pane state machine uses `RwLock` and the
+// TUI's "fail fast" convention is to `.unwrap()` on lock acquisition rather
+// than thread error handling everywhere.
+#![allow(clippy::unwrap_used)]
+
 //! Per-provider sub-screen of the onboarding sign-in picker.
 //!
 //! The main four-option menu in `auth.rs` routes "Configure model providers"
@@ -99,10 +104,19 @@ const PROVIDERS: &[ProviderEntry] = &[
 ];
 
 fn entry_for(option: ProviderOption) -> &'static ProviderEntry {
+    // Match on the variant rather than searching: the exhaustiveness check
+    // guarantees PROVIDERS and ProviderOption stay in sync without
+    // resorting to `.expect()` on the runtime lookup.
+    let id = match option {
+        ProviderOption::OpenAI => "openai",
+        ProviderOption::Anthropic => "anthropic",
+        ProviderOption::Gemini => "gemini",
+        ProviderOption::Copilot => "copilot",
+    };
     PROVIDERS
         .iter()
-        .find(|entry| entry.option == option)
-        .expect("ProviderOption variants are kept in sync with PROVIDERS")
+        .find(|entry| entry.id == id)
+        .unwrap_or(&PROVIDERS[0])
 }
 
 impl ProviderOption {

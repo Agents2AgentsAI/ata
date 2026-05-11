@@ -63,6 +63,10 @@ fn map_mcp_tools_for_plan(mcp_tools: &[ToolInfo]) -> McpToolPlanInputs<'_> {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tool-registry construction needs each of these axes (mcp tools, deferred mcp tools, unavailable list, discoverable list, dynamic specs, research toolkit, multi-root state) and they have meaningfully different lifetimes. Bundling into a struct would just rename the parameter list without simplifying the call sites."
+)]
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
     mcp_tools: Option<Vec<ToolInfo>>,

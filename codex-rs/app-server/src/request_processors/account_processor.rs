@@ -1244,20 +1244,84 @@ impl AccountRequestProcessor {
         if api_key.trim().is_empty() {
             return Err(invalid_request("API key must not be empty."));
         }
-        match login_with_provider_api_key(
+        if let Err(err) = login_with_provider_api_key(
             &self.config.codex_home,
             provider_id,
             api_key,
             self.config.cli_auth_credentials_store_mode,
         ) {
-            Ok(()) => {
-                self.auth_manager.reload().await;
-                Ok(())
-            }
-            Err(err) => Err(internal_error(format!(
+            return Err(internal_error(format!(
                 "failed to save {provider_id} api key: {err}"
-            ))),
+            )));
         }
+        self.auth_manager.reload().await;
+
+        // For non-OpenAI providers we also flip `model_provider` in
+        // config.toml so the next launch (and the rest of this session)
+        // actually routes through the provider the user just signed into.
+        // Without this, Anthropic/Gemini logins would persist the key but
+        // the TUI would keep using the OpenAI provider — the picker would
+        // show OpenAI models and runtime calls would fail because the
+        // OpenAI key isn't set. Skipped for OpenAI itself since it's
+        // already the default; touching the config in that case is churn
+        // for no behavior change.
+        //
+        // `model` is intentionally cleared too: the previous selection was
+        // tied to the old provider's catalog (e.g. "gpt-5.5" for OpenAI)
+        // and won't exist in the new provider's catalog. The runtime
+        // falls back to the new provider's default until the user picks
+        // one via /model.
+        if provider_id != PROVIDER_OPENAI {
+            let codex_home = self.config.codex_home.clone();
+            let provider_for_edit = provider_id.to_string();
+            let edit_result = tokio::task::spawn_blocking(move || {
+                ConfigEditsBuilder::new(&codex_home)
+                    .clear_model_and_provider()
+                    .with_edits([ConfigEdit::SetModel {
+                        model: None,
+                        effort: None,
+                        model_provider: Some(provider_for_edit),
+                    }])
+                    .apply_blocking()
+            })
+            .await;
+            match edit_result {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to set model_provider={provider_id} after API key save: {err}");
+                }
+                Err(join_err) => {
+                    warn!(
+                        "config edit task panicked while setting model_provider={provider_id}: {join_err}"
+                    );
+                }
+            }
+
+            // Rebuild the live models_manager from the freshly-edited
+            // config so the `/model` picker shows the new provider's
+            // catalog this session — mirrors what the Copilot login path
+            // does after writing model_provider=copilot.
+            match self
+                .config_manager
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await
+            {
+                Ok(fresh_config) => {
+                    let new_manager = codex_core::build_models_manager(
+                        &fresh_config,
+                        Arc::clone(&self.auth_manager),
+                    );
+                    self.thread_manager.set_models_manager(new_manager);
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to reload config for models_manager refresh after {provider_id} login: {err}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn login_gemini_oauth_v2(&self, request_id: ConnectionRequestId) {

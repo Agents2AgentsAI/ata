@@ -266,6 +266,7 @@ use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::auth_public::PROVIDER_COPILOT;
+use codex_core::auth_public::PROVIDER_OPENAI;
 use codex_core::auth_public::complete_copilot_login;
 use codex_core::auth_public::copilot_logout;
 use codex_core::auth_public::get_provider_oauth_credential;

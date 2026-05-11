@@ -7,6 +7,7 @@ use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::create_auth_storage;
 
 use super::env::read_api_key_from_env;
+use super::types::PROVIDER_OPENAI;
 use super::types::ProviderCredential;
 use super::types::ProviderOauthCredential;
 
@@ -147,7 +148,13 @@ fn set_provider_credential(
         ProviderCredential::Api { .. } | ProviderCredential::ApiAndOauth { .. }
     );
     auth_dot_json.set_provider_credential(provider_id, credential);
-    if is_api_credential {
+    // `auth_mode = ApiKey` historically meant "the legacy `openai_api_key`
+    // top-level field is set" — `from_auth_dot_json` looks there. Setting
+    // it for *any* API credential broke Anthropic/Gemini logins: the next
+    // launch resolved `auth_mode = ApiKey`, found no `openai_api_key`, and
+    // bailed with "API key auth is missing a key." Limit the flag to the
+    // OpenAI provider where the legacy field is actually populated.
+    if is_api_credential && provider_id == PROVIDER_OPENAI {
         auth_dot_json.auth_mode = Some(ApiAuthMode::ApiKey);
     }
     storage.save(&auth_dot_json)
