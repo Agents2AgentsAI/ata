@@ -2759,16 +2759,18 @@ impl super::ChatWidget {
     /// Start a periodic tick that updates the TTS word highlight.
     fn start_highlight_tick(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
+            tracing::info!("[KARAOKE] start_highlight_tick: voice_mode_state is None");
             return;
         };
 
         // Don't start if already running.
         if state.highlight_tick_cancel.is_some() {
+            tracing::info!("[KARAOKE] start_highlight_tick: already running");
             return;
         }
 
-        tracing::debug!(
-            "Starting highlight tick timer, timeline has {} entries",
+        tracing::info!(
+            "[KARAOKE] start_highlight_tick: starting, timeline has {} entries",
             state.tts_alignment_timeline.len(),
         );
 
@@ -2830,10 +2832,9 @@ impl super::ChatWidget {
 
         // Diagnostic: log position and word index periodically so stuck
         // highlights can be diagnosed from logs.
-        if effective_idx != state.tts_highlight_word_idx || raw_pos_ms == 0 {
-            tracing::debug!(
-                "[KARAOKE-TICK] raw_pos={raw_pos_ms}ms pos={pos_ms}ms \
-                 word={effective_idx:?} prev={:?} timeline_len={}",
+        if effective_idx != state.tts_highlight_word_idx {
+            tracing::info!(
+                "[KARAOKE-TICK] pos={pos_ms}ms word={effective_idx:?} prev={:?} timeline_len={}",
                 state.tts_highlight_word_idx,
                 state.tts_alignment_timeline.len(),
             );
