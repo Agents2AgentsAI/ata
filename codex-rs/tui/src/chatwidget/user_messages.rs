@@ -13,6 +13,24 @@ use codex_protocol::user_input::TextElement;
 use super::ChatWidget;
 use super::append_text_with_rebased_elements;
 
+/// Length of the leading system-injected prefix to hide from chat history
+/// (the model still sees it). Currently covers voice-mode instructions.
+fn strip_voice_prefix_len(text: &str) -> usize {
+    #[cfg(not(target_os = "linux"))]
+    {
+        for prefix in crate::chatwidget::voice_mode::voice_mode_instruction_prefixes() {
+            if text.starts_with(prefix) {
+                return prefix.len();
+            }
+        }
+        if text.starts_with(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION) {
+            return crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION.len();
+        }
+    }
+    let _ = text;
+    0
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct UserMessageDisplay {
     pub(super) message: String,
@@ -102,21 +120,31 @@ impl ChatWidget {
                 UserInput::Text {
                     text,
                     text_elements: current_text_elements,
-                } => append_text_with_rebased_elements(
-                    &mut message,
-                    &mut text_elements,
-                    text,
-                    current_text_elements.iter().map(|element| {
-                        let range = element.byte_range.clone();
-                        TextElement::new(
-                            range.clone().into(),
-                            element
-                                .placeholder()
-                                .or_else(|| text.get(range.start..range.end))
-                                .map(str::to_string),
-                        )
-                    }),
-                ),
+                } => {
+                    let prefix_len = strip_voice_prefix_len(text);
+                    let display_text = &text[prefix_len..];
+                    append_text_with_rebased_elements(
+                        &mut message,
+                        &mut text_elements,
+                        display_text,
+                        current_text_elements.iter().filter_map(|element| {
+                            let range = element.byte_range.clone();
+                            if range.end <= prefix_len {
+                                return None;
+                            }
+                            let start = range.start.saturating_sub(prefix_len);
+                            let end = range.end.saturating_sub(prefix_len);
+                            let shifted = ByteRange { start, end };
+                            Some(TextElement::new(
+                                shifted,
+                                element
+                                    .placeholder()
+                                    .or_else(|| display_text.get(start..end))
+                                    .map(str::to_string),
+                            ))
+                        }),
+                    );
+                }
                 UserInput::Image { url } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path } => local_images.push(path.clone()),
                 UserInput::Skill { .. }

@@ -102,7 +102,9 @@ pub(crate) mod prompt_args;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
+mod voice_setup_view;
 pub(crate) use account_view::AccountView;
+pub(crate) use voice_setup_view::VoiceSetupView;
 pub(crate) use research_tools_view::ResearchToolsView;
 pub(crate) use research_tools_view::build_research_tool_items;
 // ATA: re-export the voice context type so voice_mode can refer to it via
@@ -1358,6 +1360,22 @@ impl BottomPane {
         &self,
     ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
         self.view_stack.last().and_then(|v| v.voice_context())
+    }
+
+    /// True iff a Space press should be intercepted as push-to-talk rather
+    /// than forwarded to the composer or active view. PTT is allowed when no
+    /// view is active (normal chat) or when the active view supports voice
+    /// (e.g. the document reader). Composer popups block PTT so Space can
+    /// operate toggles/steppers.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn ptt_space_allowed(&self) -> bool {
+        if self.composer.popup_active() {
+            return false;
+        }
+        match self.view_stack.last() {
+            None => true,
+            Some(view) => view.voice_context().is_some(),
+        }
     }
 
     #[cfg(not(target_os = "linux"))]

@@ -946,6 +946,22 @@ pub(crate) enum AppEvent {
     /// runs against the new workspace's repos.
     WorkspaceSelectionChanged,
 
+    /// Apply TTS/STT toggle settings from the voice setup popup.
+    #[cfg(not(target_os = "linux"))]
+    UpdateVoiceSettings {
+        /// When true, new sessions start with `/voice` already enabled.
+        startup_enabled: bool,
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        /// Some(None) = clear to auto-detect, Some(Some("en")) = set, None = unchanged.
+        language_code: Option<Option<String>>,
+        /// Some(speed) = set, None = unchanged.
+        speed: Option<f64>,
+        verbosity: crate::legacy_core::config::types::VoiceVerbosity,
+        tts_backend: crate::legacy_core::config::types::TtsBackend,
+    },
+
     /// Periodic tick to update the TTS word-highlight position.
     #[cfg(not(target_os = "linux"))]
     VoiceModeHighlightTick,

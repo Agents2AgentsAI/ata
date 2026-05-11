@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::legacy_core::config::types::TtsBackend;
 use crate::legacy_core::config::types::VoiceModeToml;
 use crate::legacy_core::config::types::VoiceOutput;
 use crate::legacy_core::config::types::VoiceVerbosity;
@@ -1647,10 +1648,9 @@ impl super::ChatWidget {
             .cached_elevenlabs_speed
             .or_else(|| voice_config.elevenlabs.as_ref().and_then(|e| e.speed));
         let startup_enabled = voice_config.enabled.unwrap_or(false);
+        let tts_backend = voice_config.tts_backend.unwrap_or_default();
 
-        // VoiceSetupView is not yet ported to v0.129.0; show an info message
-        // pointing the user at the toml-based config until the popup lands.
-        let _ = (
+        let view = crate::bottom_pane::VoiceSetupView::new(
             startup_enabled,
             tts_enabled,
             stt_enabled,
@@ -1658,11 +1658,10 @@ impl super::ChatWidget {
             api_key,
             language_code,
             speed,
+            tts_backend,
+            self.app_event_tx.clone(),
         );
-        self.add_info_message(
-            "Voice setup popup not yet wired in this build — edit ~/.codex/config.toml [voice_mode] for now.".to_string(),
-            None,
-        );
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     // ─── Push-to-talk handlers ──────────────────────────────────────────
@@ -1798,7 +1797,7 @@ impl super::ChatWidget {
 
         // Start voice capture.
         let last_peak_arc;
-        match crate::voice::VoiceCapture::start_realtime(&self.config, self.app_event_tx.clone()) {
+        match crate::voice::VoiceCapture::start_ptt(&self.config) {
             Ok(capture) => {
                 last_peak_arc = capture.last_peak_arc();
                 state.meter_state = Some(crate::voice::RecordingMeterState::new());
@@ -1927,6 +1926,20 @@ impl super::ChatWidget {
                 return;
             }
         };
+
+        const MIN_PTT_DURATION_SECONDS: f32 = 1.0;
+        let duration = audio.duration_seconds();
+        if duration < MIN_PTT_DURATION_SECONDS {
+            state.phase = VoiceModePhase::Idle;
+            self.app_event_tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                error: format!(
+                    "recording too short ({duration:.2}s); hold Space for at least {MIN_PTT_DURATION_SECONDS:.1}s"
+                ),
+            });
+            self.sync_voice_placeholder();
+            self.request_redraw();
+            return;
+        }
 
         let wav_bytes = match crate::voice::encode_wav_for_voice_mode(&audio) {
             Ok(b) => b,
@@ -2180,12 +2193,21 @@ impl super::ChatWidget {
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
+                let backend = vc.tts_backend.unwrap_or_default();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                    match backend {
+                        TtsBackend::Say => {
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                        }
+                        TtsBackend::Elevenlabs => {
+                            tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
+                                .await;
+                        }
+                    }
                 });
             }
 
@@ -2242,12 +2264,21 @@ impl super::ChatWidget {
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
+                let backend = vc.tts_backend.unwrap_or_default();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                    match backend {
+                        TtsBackend::Say => {
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                        }
+                        TtsBackend::Elevenlabs => {
+                            tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
+                                .await;
+                        }
+                    }
                 });
             }
 
@@ -3572,10 +3603,7 @@ impl super::ChatWidget {
         let state_ref = self.voice_mode_state.as_ref();
         let can_record = state_ref.is_some_and(|s| s.stt_enabled && !s.tts_only);
         if can_record {
-            match crate::voice::VoiceCapture::start_realtime(
-                &self.config,
-                self.app_event_tx.clone(),
-            ) {
+            match crate::voice::VoiceCapture::start_ptt(&self.config) {
                 Ok(capture) => {
                     if let Some(ref mut s) = self.voice_mode_state {
                         s.capture = Some(capture);
@@ -3651,6 +3679,22 @@ impl super::ChatWidget {
                     return;
                 }
             };
+
+            const MIN_PTT_DURATION_SECONDS: f32 = 1.0;
+            let duration = audio.duration_seconds();
+            if duration < MIN_PTT_DURATION_SECONDS {
+                if let Some(ref mut s) = self.voice_mode_state {
+                    s.phase = VoiceModePhase::Idle;
+                }
+                self.app_event_tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                    error: format!(
+                        "recording too short ({duration:.2}s); hold Space for at least {MIN_PTT_DURATION_SECONDS:.1}s"
+                    ),
+                });
+                self.sync_voice_placeholder();
+                self.request_redraw();
+                return;
+            }
 
             let wav_bytes = match crate::voice::encode_wav_for_voice_mode(&audio) {
                 Ok(b) => b,
@@ -4048,12 +4092,21 @@ impl super::ChatWidget {
             let spawn_gen = gen_ref.load(Ordering::SeqCst);
             in_flight.fetch_add(1, Ordering::SeqCst);
             let proxy = build_elevenlabs_proxy(&self.auth_manager);
+            let backend = vc.tts_backend.unwrap_or_default();
 
             let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
             state.tts_worker_tx = Some(worker_tx);
 
             tokio::spawn(async move {
-                tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                match backend {
+                    TtsBackend::Say => {
+                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                    }
+                    TtsBackend::Elevenlabs => {
+                        tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
+                            .await;
+                    }
+                }
             });
         }
 
@@ -4576,6 +4629,103 @@ pub(crate) enum TtsWorkerCommand {
     SendText(String),
     /// Flush remaining audio and shut down the connection.
     Finish,
+}
+
+/// Long-lived TTS worker that shells out to the macOS `say` command per
+/// sentence. No PCM streaming, no karaoke alignment, no audio chunk events
+/// — `say` plays directly to system audio. We just emit
+/// `VoiceModeTtsFinished` when the queue drains so the state machine returns
+/// to Idle.
+async fn say_worker_loop(
+    voice_config: crate::legacy_core::config::types::VoiceModeToml,
+    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<TtsWorkerCommand>,
+    event_tx: crate::app_event_sender::AppEventSender,
+    in_flight: Arc<AtomicUsize>,
+    gen_ref: Arc<AtomicUsize>,
+    my_gen: usize,
+) {
+    use tokio::process::Command;
+
+    let speed = voice_config
+        .elevenlabs
+        .as_ref()
+        .and_then(|e| e.speed)
+        .unwrap_or(1.0);
+    let wpm = ((175.0_f64) * speed).clamp(80.0, 400.0) as u32;
+
+    let mut current: Option<tokio::process::Child> = None;
+
+    loop {
+        if gen_ref.load(Ordering::SeqCst) != my_gen {
+            break;
+        }
+        match cmd_rx.recv().await {
+            Some(TtsWorkerCommand::SendText(text)) => {
+                if gen_ref.load(Ordering::SeqCst) != my_gen {
+                    break;
+                }
+                if text.trim().is_empty() {
+                    continue;
+                }
+                // Wait for the previous sentence so playback is sequential.
+                if let Some(mut child) = current.take() {
+                    let _ = child.wait().await;
+                }
+                let child = Command::new("say")
+                    .arg("-r")
+                    .arg(wpm.to_string())
+                    .arg("--")
+                    .arg(&text)
+                    .spawn();
+                match child {
+                    Ok(c) => {
+                        current = Some(c);
+                    }
+                    Err(err) => {
+                        tracing::error!("`say` spawn failed: {err}");
+                        event_tx.send(AppEvent::VoiceModeTtsError {
+                            error: format!("`say` failed: {err}"),
+                        });
+                        break;
+                    }
+                }
+            }
+            Some(TtsWorkerCommand::Finish) | None => {
+                if let Some(mut child) = current.take() {
+                    let _ = child.wait().await;
+                }
+                break;
+            }
+        }
+    }
+
+    // If we exited due to generation change, kill any in-flight speech so the
+    // user hears the barge-in cleanly.
+    if let Some(mut child) = current.take() {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+        event_tx.send(AppEvent::VoiceModeTtsFinished);
+    }
+}
+
+/// True iff macOS `say` is available on PATH and we should use it.
+#[allow(dead_code)]
+fn say_backend_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("which")
+            .arg("say")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.

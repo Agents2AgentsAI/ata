@@ -30,6 +30,9 @@ pub enum SlashCommand {
     ReadingView,
     #[cfg(not(target_os = "linux"))]
     Voice,
+    #[cfg(not(target_os = "linux"))]
+    #[strum(serialize = "voice-setup")]
+    VoiceSetup,
     Memories,
     Skills,
     Hooks,
@@ -138,7 +141,9 @@ impl SlashCommand {
             SlashCommand::Account => "sign in / out of your ATA account",
             SlashCommand::ReadingView => "configure the reading-view display mode",
             #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice => "open the voice mode setup popup",
+            SlashCommand::Voice => "toggle voice mode for this ATA session",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT, API key, language)",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
@@ -256,6 +261,8 @@ impl SlashCommand {
             SlashCommand::Theme => false,
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => true,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => true,
         }
     }
 

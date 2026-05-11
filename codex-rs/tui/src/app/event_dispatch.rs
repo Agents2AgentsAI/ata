@@ -1797,6 +1797,78 @@ impl App {
                 );
             }
             #[cfg(not(target_os = "linux"))]
+            AppEvent::UpdateVoiceSettings {
+                startup_enabled,
+                tts_enabled,
+                stt_enabled,
+                elevenlabs_api_key,
+                language_code,
+                speed,
+                verbosity,
+                tts_backend,
+            } => {
+                use crate::legacy_core::config::edit as edit;
+                let verbosity_str = match verbosity {
+                    crate::legacy_core::config::types::VoiceVerbosity::Concise => "concise",
+                    crate::legacy_core::config::types::VoiceVerbosity::Verbose => "verbose",
+                };
+                let backend_str = match tts_backend {
+                    crate::legacy_core::config::types::TtsBackend::Elevenlabs => "elevenlabs",
+                    crate::legacy_core::config::types::TtsBackend::Say => "say",
+                };
+                let mut edits: Vec<edit::ConfigEdit> = vec![
+                    edit::voice_mode_enabled_edit(startup_enabled),
+                    edit::voice_mode_tts_edit(tts_enabled),
+                    edit::voice_mode_stt_edit(stt_enabled),
+                    edit::voice_mode_verbosity_edit(verbosity_str),
+                    edit::voice_mode_tts_backend_edit(backend_str),
+                ];
+                if let Some(ref key) = elevenlabs_api_key {
+                    edits.push(edit::voice_mode_elevenlabs_api_key_edit(key));
+                }
+                if let Some(ref lang) = language_code {
+                    match lang {
+                        Some(code) => {
+                            edits.push(edit::voice_mode_elevenlabs_language_edit(code));
+                        }
+                        None => {
+                            edits.push(edit::voice_mode_elevenlabs_language_clear());
+                        }
+                    }
+                }
+                if let Some(speed_val) = speed {
+                    edits.push(edit::voice_mode_elevenlabs_speed_edit(speed_val));
+                }
+                if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(edits)
+                    .apply()
+                    .await
+                {
+                    tracing::error!(error = %err, "failed to persist voice settings");
+                }
+                if let Some(key) = elevenlabs_api_key {
+                    self.chat_widget.update_elevenlabs_api_key(key);
+                }
+                self.chat_widget
+                    .update_elevenlabs_voice_settings(language_code, speed);
+                self.chat_widget
+                    .apply_voice_settings(tts_enabled, stt_enabled, verbosity);
+                if !tts_enabled && !stt_enabled {
+                    self.chat_widget.deactivate_voice_mode_if_active();
+                    self.chat_widget.clear_tts_only_state();
+                }
+                if (tts_enabled || stt_enabled)
+                    && !self
+                        .config
+                        .features
+                        .enabled(codex_features::Feature::VoiceMode)
+                {
+                    self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
+                        updates: vec![(codex_features::Feature::VoiceMode, true)],
+                    });
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeHighlightTick => {
                 self.chat_widget.on_voice_highlight_tick();
             }

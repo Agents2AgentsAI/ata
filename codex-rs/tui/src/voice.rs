@@ -15,8 +15,30 @@ use tracing::error;
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
 
+/// PCM buffer captured during a PTT recording. For realtime mode `data` is
+/// always empty (frames are streamed through `AppEventSender` instead).
+pub struct RecordedAudio {
+    pub data: Vec<i16>,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+impl RecordedAudio {
+    pub fn duration_seconds(&self) -> f32 {
+        if self.sample_rate == 0 || self.channels == 0 {
+            return 0.0;
+        }
+        let frames = self.data.len() / usize::from(self.channels).max(1);
+        frames as f32 / self.sample_rate as f32
+    }
+}
+
 pub struct VoiceCapture {
     stream: Option<cpal::Stream>,
+    sample_rate: u32,
+    channels: u16,
+    /// `Some` for PTT (`start_ptt`), `None` for streaming realtime mode.
+    data: Option<Arc<Mutex<Vec<i16>>>>,
     stopped: Arc<AtomicBool>,
     last_peak: Arc<AtomicU16>,
 }
@@ -44,21 +66,58 @@ impl VoiceCapture {
 
         Ok(Self {
             stream: Some(stream),
+            sample_rate,
+            channels,
+            data: None,
             stopped,
             last_peak,
         })
     }
 
-    pub fn stop(mut self) -> Result<Vec<i16>, String> {
+    /// Start capture that buffers raw mic samples locally for later retrieval
+    /// (used by PTT → WAV → ElevenLabs STT). Does not stream to the agent.
+    pub fn start_ptt(config: &Config) -> Result<Self, String> {
+        let (device, config) = select_realtime_input_device_and_config(config)?;
+
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let last_peak = Arc::new(AtomicU16::new(0));
+
+        let stream =
+            build_ptt_input_stream(&device, &config, Arc::clone(&data), last_peak.clone())?;
+        stream
+            .play()
+            .map_err(|e| format!("failed to start input stream: {e}"))?;
+
+        Ok(Self {
+            stream: Some(stream),
+            sample_rate,
+            channels,
+            data: Some(data),
+            stopped,
+            last_peak,
+        })
+    }
+
+    pub fn stop(mut self) -> Result<RecordedAudio, String> {
         // Mark stopped so any metering task can exit cleanly.
         self.stopped.store(true, Ordering::SeqCst);
         // Dropping the stream stops capture.
         self.stream.take();
-        // v0.129.0's VoiceCapture pushes audio frames through the
-        // AppEventSender as they arrive, so there is no local buffer to
-        // return. Voice mode's PTT path will see an empty buffer for now;
-        // wire-up of in-memory PCM accumulation is tracked as follow-up.
-        Ok(Vec::new())
+        let data = match self.data.take() {
+            Some(buf) => buf
+                .lock()
+                .map_err(|_| "failed to lock audio buffer".to_string())?
+                .clone(),
+            None => Vec::new(),
+        };
+        Ok(RecordedAudio {
+            data,
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+        })
     }
 
     pub fn stopped_flag(&self) -> Arc<AtomicBool> {
@@ -186,6 +245,69 @@ fn build_realtime_input_stream(
                 None,
             )
             .map_err(|e| format!("failed to build input stream: {e}")),
+        _ => Err("unsupported input sample format".to_string()),
+    }
+}
+
+fn build_ptt_input_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    data: Arc<Mutex<Vec<i16>>>,
+    last_peak: Arc<AtomicU16>,
+) -> Result<cpal::Stream, String> {
+    match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[f32], _| {
+                        let peak = peak_f32(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend(input.iter().copied().map(f32_to_i16));
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[i16], _| {
+                        let peak = peak_i16(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend_from_slice(input);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[u16], _| {
+                        let mut samples = Vec::with_capacity(input.len());
+                        let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.append(&mut samples);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
         _ => Err("unsupported input sample format".to_string()),
     }
 }
@@ -410,19 +532,22 @@ impl RealtimeAudioPlayer {
     pub(crate) fn set_playback_speed(&self, _speed: f64) {}
 }
 
-/// Encode a 16 kHz mono PCM buffer into a WAV blob suitable for upload to
+/// Encode a captured PCM buffer into a WAV blob suitable for upload to
 /// ElevenLabs STT. Used by voice_mode after a PTT release.
-pub(crate) fn encode_wav_for_voice_mode(pcm: &[i16]) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    if audio.sample_rate == 0 || audio.channels == 0 {
+        return Err("invalid recorded audio: zero sample rate or channels".to_string());
+    }
     let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
+        channels: audio.channels,
+        sample_rate: audio.sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut buf: Vec<u8> = Vec::with_capacity(44 + pcm.len() * 2);
+    let mut buf: Vec<u8> = Vec::with_capacity(44 + audio.data.len() * 2);
     let cursor = std::io::Cursor::new(&mut buf);
     let mut writer = hound::WavWriter::new(cursor, spec).map_err(|e| format!("hound init: {e}"))?;
-    for &sample in pcm {
+    for &sample in &audio.data {
         writer
             .write_sample(sample)
             .map_err(|e| format!("hound write: {e}"))?;

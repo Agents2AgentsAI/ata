@@ -185,6 +185,7 @@ pub mod types {
     pub use super::ata::DEFAULT_ATA_SUPABASE_ANON_KEY;
     pub use super::ata::DEFAULT_ATA_SUPABASE_URL;
     pub use super::ata::RelayMode;
+    pub use super::ata::TtsBackend;
     pub use super::ata::VoiceModeToml;
     pub use super::ata::VoiceOutput;
     pub use super::ata::VoiceVerbosity;
