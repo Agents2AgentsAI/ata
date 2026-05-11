@@ -1801,6 +1801,10 @@ fn outgoing_call_key(call: &CallHierarchyOutgoingCall) -> (String, (u32, u32, u3
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::await_holding_invalid_type,
+    reason = "tests serialize on PATH_MUTEX/ENV_MUTEX across async setup"
+)]
 mod tests {
     use super::*;
     use std::collections::HashMap;

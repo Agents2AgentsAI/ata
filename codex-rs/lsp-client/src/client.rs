@@ -467,6 +467,10 @@ impl LspClient {
     // -----------------------------------------------------------------------
 
     /// Notify the server about a file being opened or changed (full-document sync).
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "file_versions guard is dropped explicitly before each notify await"
+    )]
     pub async fn notify_open(&self, path: &Path) -> Result<(), LspError> {
         let metadata = tokio::fs::metadata(path).await.map_err(LspError::Io)?;
         if metadata.len() > MAX_SYNC_FILE_SIZE {
@@ -878,6 +882,10 @@ impl LspClient {
     // -----------------------------------------------------------------------
 
     /// Graceful shutdown: shutdown request (2s) → exit notification → kill.
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "child guard is taken/dropped before any further await"
+    )]
     pub async fn shutdown(&self) {
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.send_request("shutdown", None)).await;
         let _ = self.send_notification("exit", None).await;
@@ -1030,6 +1038,10 @@ impl LspClient {
         self.write_message(body).await
     }
 
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "trace file lock must serialize across the async write"
+    )]
     async fn trace_event(
         &self,
         kind: &'static str,
@@ -1231,6 +1243,10 @@ fn workspace_symbol_to_info(sym: WorkspaceSymbol) -> Option<SymbolInformation> {
     })
 }
 
+#[allow(
+    clippy::await_holding_invalid_type,
+    reason = "writer lock must serialize header+body across the async stdin write"
+)]
 async fn write_framed_message(
     writer: &Arc<Mutex<ChildStdin>>,
     body: &[u8],
