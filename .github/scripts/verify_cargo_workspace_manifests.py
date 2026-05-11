@@ -39,6 +39,17 @@ MANIFEST_FEATURE_EXCEPTIONS = {
         "java": ("dep:tree-sitter-java",),
         "scala": ("dep:tree-sitter-scala",),
     },
+    # ATA: codex-core gates its code-intel surface (LSP + treesitter
+    # integration introduced upstream around v0.130) behind matching
+    # features so a slim build can skip the heavy native deps. Default
+    # build keeps both on; CI also exercises `--all-features` so the
+    # gates do not hide warnings.
+    "codex-rs/core/Cargo.toml": {
+        "default": ("code-intel",),
+        "lsp": ("dep:codex-lsp-client",),
+        "treesitter": ("dep:codex-treesitter",),
+        "code-intel": ("lsp", "treesitter"),
+    },
 }
 OPTIONAL_DEPENDENCY_EXCEPTIONS = {
     # ATA: paired with the per-language feature gates above.
@@ -49,6 +60,9 @@ OPTIONAL_DEPENDENCY_EXCEPTIONS = {
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-rust"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-scala"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-typescript"),
+    # ATA: paired with codex-core's lsp/treesitter feature gates above.
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-lsp-client"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-treesitter"),
 }
 INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 

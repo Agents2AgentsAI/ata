@@ -475,6 +475,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "lsp": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -599,6 +602,9 @@
               "type": "boolean"
             },
             "tool_suggest": {
+              "type": "boolean"
+            },
+            "treesitter": {
               "type": "boolean"
             },
             "tui_app_server": {
@@ -4139,6 +4145,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "lsp": {
+          "type": "boolean"
+        },
         "memories": {
           "type": "boolean"
         },
@@ -4263,6 +4272,9 @@
           "type": "boolean"
         },
         "tool_suggest": {
+          "type": "boolean"
+        },
+        "treesitter": {
           "type": "boolean"
         },
         "tui_app_server": {

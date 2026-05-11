@@ -22,4 +22,9 @@ verificationUri: string,
 /**
  * One-time code the user must enter on the verification page.
  */
-userCode: string, } | { "type": "chatgptAuthTokens", };
+userCode: string, } | { "type": "chatgptAuthTokens", } | { "type": "providerApiKey", } | { "type": "geminiOauthContinueInBrowser", loginId: string,
+/**
+ * URL the client should open in a browser to authorize Gemini Code
+ * Assist access.
+ */
+authUrl: string, } | { "type": "ataSendOtp", } | { "type": "ataVerifyOtp", email: string, } | { "type": "ataLogout", };

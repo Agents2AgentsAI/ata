@@ -118,6 +118,104 @@
       ],
       "title": "ChatgptAuthTokensv2::LoginAccountResponse",
       "type": "object"
+    },
+    {
+      "description": "Response for `LoginAccountParams::ProviderApiKey`. The key is persisted synchronously, so no follow-up `AccountLoginCompletedNotification` is emitted — the empty body means \"stored successfully\".",
+      "properties": {
+        "type": {
+          "enum": [
+            "providerApiKey"
+          ],
+          "title": "ProviderApiKeyv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "ProviderApiKeyv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "description": "Initial response for the Gemini OAuth flow. The follow-up `AccountLoginCompletedNotification` arrives once the OAuth callback completes.",
+      "properties": {
+        "authUrl": {
+          "description": "URL the client should open in a browser to authorize Gemini Code Assist access.",
+          "type": "string"
+        },
+        "loginId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "geminiOauthContinueInBrowser"
+          ],
+          "title": "GeminiOauthContinueInBrowserv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "authUrl",
+        "loginId",
+        "type"
+      ],
+      "title": "GeminiOauthContinueInBrowserv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "description": "Response for `LoginAccountParams::AtaSendOtp`. Empty body — success means the OTP email was dispatched.",
+      "properties": {
+        "type": {
+          "enum": [
+            "ataSendOtp"
+          ],
+          "title": "AtaSendOtpv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AtaSendOtpv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "description": "Response for `LoginAccountParams::AtaVerifyOtp`. Carries the authenticated email so the TUI can surface it on the success screen.",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "ataVerifyOtp"
+          ],
+          "title": "AtaVerifyOtpv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "type"
+      ],
+      "title": "AtaVerifyOtpv2::LoginAccountResponse",
+      "type": "object"
+    },
+    {
+      "description": "Response for `LoginAccountParams::AtaLogout`. Empty body.",
+      "properties": {
+        "type": {
+          "enum": [
+            "ataLogout"
+          ],
+          "title": "AtaLogoutv2::LoginAccountResponseType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AtaLogoutv2::LoginAccountResponse",
+      "type": "object"
     }
   ],
   "title": "LoginAccountResponse"

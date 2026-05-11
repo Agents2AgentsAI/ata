@@ -985,6 +985,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
+    let lsp_root = codex_home.path().join("lsp").abs();
     assert_eq!(
         config.permissions.file_system_sandbox_policy(),
         FileSystemSandboxPolicy::restricted(vec![
@@ -1012,12 +1013,18 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                 },
                 access: FileSystemAccessMode::Write,
             },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: lsp_root.clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
         ]),
     );
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
+            writable_roots: vec![memories_root, lsp_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1185,6 +1192,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
     .await?;
 
     let memories_root = codex_home.path().join("memories").abs();
+    let lsp_root = codex_home.path().join("lsp").abs();
     assert!(
         config
             .permissions
@@ -1194,7 +1202,7 @@ async fn permission_profile_override_applies_runtime_roots_to_legacy_projection(
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![memories_root],
+            writable_roots: vec![memories_root, lsp_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1831,6 +1839,9 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     let memories_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
         codex_home.path().join("memories"),
     )?)?;
+    let lsp_root = AbsolutePathBuf::from_absolute_path(std::fs::canonicalize(
+        codex_home.path().join("lsp"),
+    )?)?;
     assert!(
         config
             .permissions
@@ -1840,7 +1851,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
     assert_eq!(
         &config.legacy_sandbox_policy(),
         &SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![external_write_path, memories_root],
+            writable_roots: vec![external_write_path, memories_root, lsp_root],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

@@ -106,6 +106,111 @@
       ],
       "title": "ChatgptAuthTokensv2::LoginAccountParams",
       "type": "object"
+    },
+    {
+      "description": "Persist an API key for a specific provider. Generalizes the legacy OpenAI-only `apiKey` variant by carrying the provider id so the processor can route to the right credential store (OpenAI, Anthropic, Gemini, etc.).",
+      "properties": {
+        "apiKey": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "providerApiKey"
+          ],
+          "title": "ProviderApiKeyv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "apiKey",
+        "providerId",
+        "type"
+      ],
+      "title": "ProviderApiKeyv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The response carries a browser URL the client should open; the completion notification fires once the OAuth callback exchanges tokens.",
+      "properties": {
+        "type": {
+          "enum": [
+            "geminiOauth"
+          ],
+          "title": "GeminiOauthv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "GeminiOauthv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "Send the Supabase OTP for an ATA account email.",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "ataSendOtp"
+          ],
+          "title": "AtaSendOtpv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "type"
+      ],
+      "title": "AtaSendOtpv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "Verify a Supabase OTP and persist the ATA session.",
+      "properties": {
+        "email": {
+          "type": "string"
+        },
+        "otp": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "ataVerifyOtp"
+          ],
+          "title": "AtaVerifyOtpv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "email",
+        "otp",
+        "type"
+      ],
+      "title": "AtaVerifyOtpv2::LoginAccountParams",
+      "type": "object"
+    },
+    {
+      "description": "Sign out of the active ATA account session.",
+      "properties": {
+        "type": {
+          "enum": [
+            "ataLogout"
+          ],
+          "title": "AtaLogoutv2::LoginAccountParamsType",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "AtaLogoutv2::LoginAccountParams",
+      "type": "object"
     }
   ],
   "title": "LoginAccountParams"

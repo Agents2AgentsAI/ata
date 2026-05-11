@@ -227,8 +227,10 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
         BTreeSet::from([
             "config.toml".to_string(),
             "installation_id".to_string(),
+            "lsp".to_string(),
             "memories".to_string(),
             "skills".to_string(),
+            "workspaces".to_string(),
         ]),
         "non-local thread persistence should not create unexpected files in codex_home"
     );

@@ -297,7 +297,7 @@ pub fn build_tool_registry_builder(
                     tracing::warn!(
                         tool = def.native_name,
                         error = %err,
-                        "skipping research tool with unparseable schema"
+                        "skipping research tool with unparsable schema"
                     );
                     continue;
                 }

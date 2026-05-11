@@ -167,6 +167,12 @@ prepare_rusty_v8_env() {
 
 cd "${cargo_rs_dir}"
 
+# Mirror the `tests` job env in .github/workflows/ata-ci-platform.yml: a larger
+# thread stack is needed both for rustc on `--all-features` builds and for the
+# test runtime itself (several agent/session-spawn futures overflow the default
+# 2 MiB thread stack otherwise).
+export RUST_MIN_STACK="${RUST_MIN_STACK:-16777216}"
+
 if [[ $tests_only -eq 0 ]]; then
   require just "brew install just"
   require python3 "install Python 3.x"
