@@ -40,15 +40,14 @@ fn displayable_range(text: &str) -> (usize, usize) {
         return (start, start);
     }
 
-    // Reading-view Tab-to-ask wraps the question with a "[The user is reading…]"
-    // header and a "<!-- READER_TOOL_INSTRUCTIONS -->" trailer. The selection
-    // variant inserts a "The user selected specific text…" block between the
-    // question and the trailer. Strip the header, then cut at whichever
-    // sentinel appears first after the question.
+    // Reading-view Tab-to-ask wraps the user question with a system context
+    // block. The agent answers via inline section patches, not chat replies,
+    // so hide the question + system context entirely from the chat history —
+    // otherwise the chat pane competes with the reading view for screen
+    // space and the user sees their own question echoed twice (once in the
+    // section, once in chat).
     if text[start..].starts_with("[The user is reading ") {
-        if let Some(eol) = text[start..].find("]\n\n") {
-            start += eol + "]\n\n".len();
-        }
+        return (start, start);
     }
     const READER_INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
     const SELECTION_SUFFIX: &str = "\n\nThe user selected specific text from the section";
