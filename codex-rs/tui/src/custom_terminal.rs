@@ -275,6 +275,23 @@ where
         &mut self.buffers[1 - self.current]
     }
 
+    /// Fill the previous buffer with a sentinel symbol so that ratatui's
+    /// diff renderer treats every cell of the next frame as changed and
+    /// emits writes for every cell — even cells whose new value happens
+    /// to be the default space. Use after a resize where the terminal
+    /// (tmux pane reflow, full-screen toggle) may have left stale cells
+    /// in the visible area that ratatui doesn't otherwise know about.
+    pub(crate) fn force_full_repaint_next_frame(&mut self) {
+        let prev = self.previous_buffer_mut();
+        let area = *prev.area();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &mut prev[(x, y)];
+                cell.set_symbol("\u{FFFE}"); // private-use sentinel
+            }
+        }
+    }
+
     /// Gets the backend
     pub const fn backend(&self) -> &B {
         &self.backend

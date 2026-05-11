@@ -878,6 +878,7 @@ impl Tui {
     pub fn draw_with_resize_reflow(
         &mut self,
         height: u16,
+        force_full_repaint: bool,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -903,8 +904,26 @@ impl Tui {
             )?;
             needs_full_repaint |= flushed_history;
 
-            if needs_full_repaint {
-                terminal.invalidate_viewport();
+            if needs_full_repaint || force_full_repaint {
+                terminal.force_full_repaint_next_frame();
+                // Also directly nuke every cell in the visible viewport via
+                // explicit ANSI writes. Belt + suspenders for tmux pane
+                // reflow which can leave stale cells that ratatui's diff
+                // doesn't reach. We MUST do this AFTER any clear-screen
+                // ANSI from earlier in the resize pipeline, otherwise the
+                // clear undoes our writes; doing it inline here guarantees
+                // the order before ratatui's draw.
+                let area = terminal.viewport_area;
+                let backend = terminal.backend_mut();
+                for y in area.top()..area.bottom() {
+                    let _ = crossterm::queue!(
+                        backend,
+                        crossterm::cursor::MoveTo(area.left(), y),
+                        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+                        crossterm::style::Print(" ".repeat(area.width as usize)),
+                    );
+                }
+                let _ = std::io::Write::flush(backend);
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.

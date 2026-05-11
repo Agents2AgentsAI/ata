@@ -1150,14 +1150,24 @@ See the Codex keymap documentation for supported actions and examples."
                             );
                         }
                     }
-                    // On resize while the reader is active, hard-clear so any
-                    // reflow artifacts left behind by the terminal are wiped.
-                    // Detect on the Resize event AND on Draw when the size
-                    // differs from what we last saw — tmux pane zoom/unzoom
-                    // can ship the new size without a clean SIGWINCH, and
-                    // tmux reflows its alt-screen buffer leaving stale cells
-                    // that `\033[J` (clear-after-cursor) does not wipe.
+                    // On any size change while the reader is active, poison
+                    // the previous_buffer so ratatui's diff treats every
+                    // cell as changed in the next frame. Without this, cells
+                    // that the reader doesn't paint to (e.g. trailing
+                    // padding) match the default-space cells in
+                    // previous_buffer and the diff skips them, leaving the
+                    // terminal's stale cells visible.
                     if reader_active {
+                        let current_size = tui.terminal.size().ok();
+                        let last_size = tui.terminal.last_known_screen_size;
+                        let size_changed = current_size.is_some_and(|s| {
+                            s.width != last_size.width || s.height != last_size.height
+                        });
+                        if matches!(event, TuiEvent::Resize) || size_changed {
+                            tui.terminal.force_full_repaint_next_frame();
+                        }
+                    }
+                    if reader_active && tui.is_alt_screen_active() {
                         let current_size = tui.terminal.size().ok();
                         let last_size = tui.terminal.last_known_screen_size;
                         let size_changed = current_size.is_some_and(|s| {
@@ -1215,8 +1225,18 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    // When the reader is active and we just detected a
+                    // resize, force the next frame to fully repaint so
+                    // tmux's reflow can't leak stale cells through
+                    // ratatui's diff renderer.
+                    let force_full_repaint = reader_active
+                        && (matches!(event, TuiEvent::Resize)
+                            || tui.terminal.size().is_ok_and(|s| {
+                                let last = tui.terminal.last_known_screen_size;
+                                s.width != last.width || s.height != last.height
+                            }));
                     if terminal_resize_reflow_enabled {
-                        tui.draw_with_resize_reflow(desired_height, |frame| {
+                        tui.draw_with_resize_reflow(desired_height, force_full_repaint, |frame| {
                             let area = frame.area();
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
