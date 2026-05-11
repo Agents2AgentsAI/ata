@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -15,10 +16,12 @@ from openai_codex.generated.v2_all import (
     MessagePhase,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
+    TurnStartParams,
     TurnStatus,
 )
 from openai_codex.models import InitializeResponse, Notification
 from openai_codex.api import (
+    ApprovalMode,
     AsyncCodex,
     AsyncThread,
     AsyncTurnHandle,
@@ -29,6 +32,22 @@ from openai_codex.api import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _approval_settings(params: list[Any]) -> list[dict[str, object]]:
+    """Return serialized approval settings from captured Pydantic params."""
+    return [
+        {
+            key: value
+            for key, value in param.model_dump(
+                by_alias=True,
+                exclude_none=True,
+                mode="json",
+            ).items()
+            if key in {"approvalPolicy", "approvalsReviewer"}
+        }
+        for param in params
+    ]
 
 
 def _delta_notification(
@@ -229,6 +248,150 @@ def test_async_codex_initializes_only_once_under_concurrency() -> None:
     asyncio.run(scenario())
 
 
+def _approval_mode_turn_params(approval_mode: ApprovalMode) -> TurnStartParams:
+    """Build real generated turn params from one public approval mode."""
+    approval_policy, approvals_reviewer = public_api_module._approval_mode_settings(
+        approval_mode
+    )
+    return TurnStartParams(
+        thread_id="thread-1",
+        input=[],
+        approval_policy=approval_policy,
+        approvals_reviewer=approvals_reviewer,
+    )
+
+
+class CapturingApprovalClient:
+    """Collect wrapper params at the app-server client boundary."""
+
+    def __init__(self) -> None:
+        self.params: list[Any] = []
+
+    def thread_start(self, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id="thread-1"))
+
+    def thread_resume(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+    def thread_fork(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=f"{thread_id}-fork"))
+
+    def turn_start(
+        self,
+        thread_id: str,
+        input: object,  # noqa: A002
+        *,
+        params: Any,
+    ) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(turn=SimpleNamespace(id=f"{thread_id}-turn"))
+
+
+class CapturingAsyncApprovalClient:
+    """Async mirror of CapturingApprovalClient for public async wrappers."""
+
+    def __init__(self) -> None:
+        self.params: list[Any] = []
+
+    async def thread_start(self, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id="thread-1"))
+
+    async def thread_resume(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=thread_id))
+
+    async def thread_fork(self, thread_id: str, params: Any) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(thread=SimpleNamespace(id=f"{thread_id}-fork"))
+
+    async def turn_start(
+        self,
+        thread_id: str,
+        input: object,  # noqa: A002
+        *,
+        params: Any,
+    ) -> SimpleNamespace:
+        self.params.append(params)
+        return SimpleNamespace(turn=SimpleNamespace(id=f"{thread_id}-turn"))
+
+
+def test_approval_modes_serialize_to_expected_start_params() -> None:
+    """ApprovalMode should map to the app-server params sent for new work."""
+    assert {
+        mode.value: _approval_settings([_approval_mode_turn_params(mode)])[0]
+        for mode in ApprovalMode
+    } == {
+        "deny_all": {"approvalPolicy": "never"},
+        "auto_review": {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+        },
+    }
+
+
+def test_unknown_approval_mode_is_rejected() -> None:
+    """Invalid approval modes should fail before params are constructed."""
+    with pytest.raises(ValueError, match="deny_all, auto_review"):
+        public_api_module._approval_mode_settings("allow_all")  # type: ignore[arg-type]
+
+
+def test_approval_defaults_preserve_existing_sync_thread_settings() -> None:
+    """Only thread creation should write approval defaults unless callers override."""
+    client = CapturingApprovalClient()
+    codex = Codex.__new__(Codex)
+    codex._client = client
+
+    started = codex.thread_start(approval_mode=ApprovalMode.deny_all)
+    started.turn([])
+    codex.thread_resume("existing-thread")
+    codex.thread_fork("existing-thread")
+    started.turn([], approval_mode=ApprovalMode.auto_review)
+
+    assert _approval_settings(client.params) == [
+        {"approvalPolicy": "never"},
+        {},
+        {},
+        {},
+        {
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+        },
+    ]
+
+
+def test_approval_defaults_preserve_existing_async_thread_settings() -> None:
+    """Async wrappers should follow the same approval override semantics."""
+
+    async def scenario() -> None:
+        client = CapturingAsyncApprovalClient()
+        codex = AsyncCodex()
+        codex._client = client  # type: ignore[assignment]
+        codex._initialized = True
+
+        started = await codex.thread_start(approval_mode=ApprovalMode.deny_all)
+        await started.turn([])
+        await codex.thread_resume("existing-thread")
+        await codex.thread_fork("existing-thread")
+        await started.turn([], approval_mode=ApprovalMode.auto_review)
+
+        assert _approval_settings(client.params) == [
+            {"approvalPolicy": "never"},
+            {},
+            {},
+            {},
+            {
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "auto_review",
+            },
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
     """Two sync TurnHandle streams should advance independently on one client."""
     client = AppServerClient()
@@ -262,6 +425,7 @@ def test_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
 
 def test_async_turn_streams_can_consume_multiple_turns_on_one_client() -> None:
     """Two async TurnHandle streams should advance independently on one client."""
+
     async def scenario() -> None:
         """Interleave two async streams backed by separate per-turn queues."""
         codex = AsyncCodex()
@@ -323,6 +487,7 @@ def test_turn_run_returns_completed_turn_payload() -> None:
 
 
 def test_thread_run_accepts_string_input_and_returns_run_result() -> None:
+    """Sync Thread.run should preserve approval settings unless explicitly overridden."""
     client = AppServerClient()
     item_notification = _item_completed_notification(text="Hello.")
     usage_notification = _token_usage_notification()
@@ -346,12 +511,20 @@ def test_thread_run_accepts_string_input_and_returns_run_result() -> None:
 
     result = Thread(client, "thread-1").run("hello")
 
-    assert seen["thread_id"] == "thread-1"
-    assert seen["wire_input"] == [{"type": "text", "text": "hello"}]
-    assert result == RunResult(
-        final_response="Hello.",
-        items=[item_notification.payload.item],
-        usage=usage_notification.payload.token_usage,
+    assert (
+        seen["thread_id"],
+        seen["wire_input"],
+        _approval_settings([seen["params"]]),
+        result,
+    ) == (
+        "thread-1",
+        [{"type": "text", "text": "hello"}],
+        [{}],
+        RunResult(
+            final_response="Hello.",
+            items=[item_notification.payload.item],
+            usage=usage_notification.payload.token_usage,
+        ),
     )
 
 
@@ -522,7 +695,8 @@ def test_stream_text_registers_and_consumes_turn_notifications() -> None:
 
 
 def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
-    """Async Thread.run should normalize string input and collect routed results."""
+    """Async Thread.run should preserve approvals while collecting routed results."""
+
     async def scenario() -> None:
         """Feed item, usage, and completion events through the async turn stream."""
         codex = AsyncCodex()
@@ -559,12 +733,20 @@ def test_async_thread_run_accepts_string_input_and_returns_run_result() -> None:
 
         result = await AsyncThread(codex, "thread-1").run("hello")
 
-        assert seen["thread_id"] == "thread-1"
-        assert seen["wire_input"] == [{"type": "text", "text": "hello"}]
-        assert result == RunResult(
-            final_response="Hello async.",
-            items=[item_notification.payload.item],
-            usage=usage_notification.payload.token_usage,
+        assert (
+            seen["thread_id"],
+            seen["wire_input"],
+            _approval_settings([seen["params"]]),
+            result,
+        ) == (
+            "thread-1",
+            [{"type": "text", "text": "hello"}],
+            [{}],
+            RunResult(
+                final_response="Hello async.",
+                items=[item_notification.payload.item],
+                usage=usage_notification.payload.token_usage,
+            ),
         )
 
     asyncio.run(scenario())
@@ -574,6 +756,7 @@ def test_async_thread_run_uses_last_completed_assistant_message_as_final_respons
     None
 ):
     """Async run should use the last final assistant message as the response text."""
+
     async def scenario() -> None:
         """Feed two completed agent messages through the async per-turn stream."""
         codex = AsyncCodex()
@@ -621,6 +804,7 @@ def test_async_thread_run_uses_last_completed_assistant_message_as_final_respons
 
 def test_async_thread_run_returns_none_when_only_commentary_messages_complete() -> None:
     """Async Thread.run should ignore commentary-only messages for final text."""
+
     async def scenario() -> None:
         """Feed a commentary item and completion through the async turn stream."""
         codex = AsyncCodex()

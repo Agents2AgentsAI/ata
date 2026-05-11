@@ -22,7 +22,6 @@ from openai_codex import (
     TextInput,
 )
 from openai_codex.types import (
-    AskForApproval,
     Personality,
     ReasoningSummary,
 )
@@ -46,7 +45,6 @@ PROMPT = (
     "Analyze a safe rollout plan for enabling a feature flag in production. "
     "Return JSON matching the requested schema."
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
 
 
 async def main() -> None:
@@ -55,7 +53,6 @@ async def main() -> None:
 
         turn = await thread.turn(
             TextInput(PROMPT),
-            approval_policy=APPROVAL_POLICY,
             output_schema=OUTPUT_SCHEMA,
             personality=Personality.pragmatic,
             summary=SUMMARY,

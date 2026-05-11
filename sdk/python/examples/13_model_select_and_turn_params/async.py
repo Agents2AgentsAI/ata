@@ -16,7 +16,6 @@ from openai_codex import (
     TextInput,
 )
 from openai_codex.types import (
-    AskForApproval,
     Personality,
     ReasoningEffort,
     ReasoningSummary,
@@ -75,7 +74,6 @@ SANDBOX_POLICY = SandboxPolicy.model_validate(
         "access": {"type": "fullAccess"},
     }
 )
-APPROVAL_POLICY = AskForApproval.model_validate("never")
 
 
 async def main() -> None:
@@ -106,7 +104,6 @@ async def main() -> None:
 
         second_turn = await thread.turn(
             TextInput("Return JSON for a safe feature-flag rollout plan."),
-            approval_policy=APPROVAL_POLICY,
             cwd=str(Path.cwd()),
             effort=selected_effort,
             model=selected_model.model,

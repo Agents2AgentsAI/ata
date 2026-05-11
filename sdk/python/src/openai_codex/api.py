@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import AsyncIterator, Iterator
+from enum import Enum
+from typing import AsyncIterator, Iterator, NoReturn
 
 from .async_client import AsyncAppServerClient
 from .client import AppServerClient, AppServerConfig
 from .generated.v2_all import (
     ApprovalsReviewer,
     AskForApproval,
+    AskForApprovalValue,
     ModelListResponse,
     Personality,
     ReasoningEffort,
@@ -67,6 +69,47 @@ def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
     if len(parts) == 2:
         return parts[0], parts[1]
     return raw, None
+
+
+class ApprovalMode(str, Enum):
+    """High-level approval behavior for escalated permission requests."""
+
+    deny_all = "deny_all"
+    auto_review = "auto_review"
+
+
+def _approval_mode_settings(
+    approval_mode: ApprovalMode,
+) -> tuple[AskForApproval, ApprovalsReviewer | None]:
+    """Map the public approval mode to generated app-server start params."""
+    if not isinstance(approval_mode, ApprovalMode):
+        supported = ", ".join(mode.value for mode in ApprovalMode)
+        raise ValueError(f"approval_mode must be one of: {supported}")
+
+    match approval_mode:
+        case ApprovalMode.auto_review:
+            return (
+                AskForApproval(root=AskForApprovalValue.on_request),
+                ApprovalsReviewer.auto_review,
+            )
+        case ApprovalMode.deny_all:
+            return AskForApproval(root=AskForApprovalValue.never), None
+        case _:
+            return _assert_never_approval_mode(approval_mode)
+
+
+def _assert_never_approval_mode(approval_mode: NoReturn) -> NoReturn:
+    """Make approval mode mapping exhaustive for static type checkers."""
+    raise AssertionError(f"Unhandled approval mode: {approval_mode!r}")
+
+
+def _approval_mode_override_settings(
+    approval_mode: ApprovalMode | None,
+) -> tuple[AskForApproval | None, ApprovalsReviewer | None]:
+    """Map an optional public approval mode to app-server override params."""
+    if approval_mode is None:
+        return None, None
+    return _approval_mode_settings(approval_mode)
 
 
 class Codex:
@@ -140,8 +183,7 @@ class Codex:
     def thread_start(
         self,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -156,6 +198,7 @@ class Codex:
         session_start_source: ThreadStartSource | None = None,
         thread_source: ThreadSource | None = None,
     ) -> Thread:
+        approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
         params = ThreadStartParams(
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -208,8 +251,7 @@ class Codex:
         self,
         thread_id: str,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -220,6 +262,9 @@ class Codex:
         sandbox: SandboxMode | None = None,
         service_tier: str | None = None,
     ) -> Thread:
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -241,8 +286,7 @@ class Codex:
         self,
         thread_id: str,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -254,6 +298,9 @@ class Codex:
         service_tier: str | None = None,
         thread_source: ThreadSource | None = None,
     ) -> Thread:
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -341,8 +388,7 @@ class AsyncCodex:
     async def thread_start(
         self,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode = ApprovalMode.auto_review,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -358,6 +404,7 @@ class AsyncCodex:
         thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
+        approval_policy, approvals_reviewer = _approval_mode_settings(approval_mode)
         params = ThreadStartParams(
             approval_policy=approval_policy,
             approvals_reviewer=approvals_reviewer,
@@ -411,8 +458,7 @@ class AsyncCodex:
         self,
         thread_id: str,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -424,6 +470,9 @@ class AsyncCodex:
         service_tier: str | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = ThreadResumeParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -445,8 +494,7 @@ class AsyncCodex:
         self,
         thread_id: str,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         base_instructions: str | None = None,
         config: JsonObject | None = None,
         cwd: str | None = None,
@@ -459,6 +507,9 @@ class AsyncCodex:
         thread_source: ThreadSource | None = None,
     ) -> AsyncThread:
         await self._ensure_initialized()
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = ThreadForkParams(
             thread_id=thread_id,
             approval_policy=approval_policy,
@@ -502,8 +553,7 @@ class Thread:
         self,
         input: RunInput,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -515,8 +565,7 @@ class Thread:
     ) -> RunResult:
         turn = self.turn(
             _normalize_run_input(input),
-            approval_policy=approval_policy,
-            approvals_reviewer=approvals_reviewer,
+            approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
             model=model,
@@ -537,8 +586,7 @@ class Thread:
         self,
         input: Input,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -549,6 +597,9 @@ class Thread:
         summary: ReasoningSummary | None = None,
     ) -> TurnHandle:
         wire_input = _to_wire_input(input)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
@@ -587,8 +638,7 @@ class AsyncThread:
         self,
         input: RunInput,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -600,8 +650,7 @@ class AsyncThread:
     ) -> RunResult:
         turn = await self.turn(
             _normalize_run_input(input),
-            approval_policy=approval_policy,
-            approvals_reviewer=approvals_reviewer,
+            approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
             model=model,
@@ -622,8 +671,7 @@ class AsyncThread:
         self,
         input: Input,
         *,
-        approval_policy: AskForApproval | None = None,
-        approvals_reviewer: ApprovalsReviewer | None = None,
+        approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -635,6 +683,9 @@ class AsyncThread:
     ) -> AsyncTurnHandle:
         await self._codex._ensure_initialized()
         wire_input = _to_wire_input(input)
+        approval_policy, approvals_reviewer = _approval_mode_override_settings(
+            approval_mode
+        )
         params = TurnStartParams(
             thread_id=self.id,
             input=wire_input,
