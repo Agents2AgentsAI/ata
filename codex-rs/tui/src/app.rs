@@ -1133,8 +1133,17 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     // On resize while the reader is active, hard-clear so any
                     // reflow artifacts left behind by the terminal are wiped.
-                    if matches!(event, TuiEvent::Resize) && reader_active {
-                        let _ = tui.terminal.clear();
+                    // Detect on the Resize event AND on Draw when the size
+                    // differs from what we last saw — tmux pane zoom/unzoom
+                    // can ship the new size without a clean SIGWINCH.
+                    if reader_active {
+                        let current_size = tui.terminal.size().ok();
+                        let last_size = tui.terminal.last_known_screen_size;
+                        let size_changed = current_size
+                            .is_some_and(|s| s.width != last_size.width || s.height != last_size.height);
+                        if matches!(event, TuiEvent::Resize) || size_changed {
+                            let _ = tui.terminal.clear();
+                        }
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
