@@ -926,42 +926,6 @@ impl Tui {
                 draw_fn(frame);
             })
         })?;
-        // OUTSIDE the sync_update wrapper: brute-force re-emit every cell
-        // from current_buffer directly to the backend. sync_update can
-        // hide intermediate writes from terminals that don't fully
-        // support it (some tmux versions defer/drop bytes inside the
-        // BSU/ESU pair on resize). By doing this outside the wrapper, the
-        // writes go directly to tmux as ordinary bytes which it must
-        // process and store in its pane buffer.
-        if force_full_repaint {
-            let area = self.terminal.viewport_area;
-            let buf = self.terminal.current_buffer().clone();
-            let backend = self.terminal.backend_mut();
-            let _ = crossterm::queue!(
-                backend,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-            );
-            for y in area.top()..area.bottom() {
-                let _ = crossterm::queue!(
-                    backend,
-                    crossterm::cursor::MoveTo(area.left(), y),
-                );
-                for x in area.left()..area.right() {
-                    let cell = &buf[(x, y)];
-                    let _ = crossterm::queue!(
-                        backend,
-                        crossterm::style::SetForegroundColor(cell.fg.into()),
-                        crossterm::style::SetBackgroundColor(cell.bg.into()),
-                        crossterm::style::Print(cell.symbol()),
-                    );
-                }
-            }
-            let _ = crossterm::queue!(
-                backend,
-                crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-            );
-            let _ = std::io::Write::flush(backend);
-        }
         Ok(())
     }
 

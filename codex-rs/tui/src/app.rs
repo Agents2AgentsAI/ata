@@ -476,6 +476,11 @@ pub(crate) struct App {
     /// document reader. Tracks the transition so we leave alt-screen when the
     /// reader closes.
     reader_alt_screen_active: bool,
+    /// Countdown of frames remaining to force-full-repaint. Set to a small
+    /// number on resize so we keep forcing fresh writes for several frames,
+    /// outlasting any tmux pane reflow that might be overwriting our cells
+    /// asynchronously after the resize event fires.
+    pub(crate) force_repaint_frames: u8,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
@@ -893,6 +898,7 @@ See the Codex keymap documentation for supported actions and examples."
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
             reader_alt_screen_active: false,
+            force_repaint_frames: 0,
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
@@ -1226,15 +1232,29 @@ See the Codex keymap documentation for supported actions and examples."
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
                     // When the reader is active and we just detected a
-                    // resize, force the next frame to fully repaint so
-                    // tmux's reflow can't leak stale cells through
-                    // ratatui's diff renderer.
-                    let force_full_repaint = reader_active
+                    // resize, force MULTIPLE consecutive frames to fully
+                    // repaint. tmux's pane reflow can run asynchronously
+                    // and overwrite our cells after the resize event
+                    // fires; by forcing a few frames in a row we
+                    // out-wait that reflow and leave our content as the
+                    // last-written state.
+                    let resize_detected = reader_active
                         && (matches!(event, TuiEvent::Resize)
                             || tui.terminal.size().is_ok_and(|s| {
                                 let last = tui.terminal.last_known_screen_size;
                                 s.width != last.width || s.height != last.height
                             }));
+                    if resize_detected {
+                        self.force_repaint_frames = 6;
+                    }
+                    let force_full_repaint = self.force_repaint_frames > 0;
+                    if self.force_repaint_frames > 0 {
+                        self.force_repaint_frames -= 1;
+                        // Schedule a follow-up frame so we keep repainting
+                        // even when no other input arrives. 33ms ≈ 30fps.
+                        tui.frame_requester()
+                            .schedule_frame_in(std::time::Duration::from_millis(33));
+                    }
                     if terminal_resize_reflow_enabled {
                         tui.draw_with_resize_reflow(desired_height, force_full_repaint, |frame| {
                             let area = frame.area();
