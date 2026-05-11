@@ -1115,6 +1115,16 @@ See the Codex keymap documentation for supported actions and examples."
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
                     }
+                    // On resize while the document reader is active, scrollback
+                    // above the viewport can bleed into the new viewport area
+                    // (terminal reflow + ratatui inline-viewport tracking
+                    // desync). Force a hard clear + full repaint to avoid the
+                    // character-smashing pattern.
+                    if matches!(event, TuiEvent::Resize)
+                        && self.chat_widget.is_document_reader_active()
+                    {
+                        let _ = tui.terminal.clear();
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
