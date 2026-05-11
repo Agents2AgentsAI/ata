@@ -1164,13 +1164,16 @@ See the Codex keymap documentation for supported actions and examples."
                             s.width != last_size.width || s.height != last_size.height
                         });
                         if matches!(event, TuiEvent::Resize) || size_changed {
-                            // tmux reflows its per-pane alt-screen buffer on
-                            // pane zoom/unzoom and can leak normal-screen
-                            // content into the new size. Bouncing alt-screen
-                            // (leave + re-enter) forces tmux to discard the
-                            // stale alt-screen state and start fresh.
-                            let _ = tui.leave_alt_screen();
-                            let _ = tui.enter_alt_screen();
+                            // Write spaces to every cell so tmux's alt-screen
+                            // buffer is positively wiped before ratatui's
+                            // diff renderer takes over. The Clear ANSI plus
+                            // a per-row blank write defeats tmux's reflow
+                            // bringing in stale rows. We deliberately do NOT
+                            // bounce alt-screen — leaving it momentarily
+                            // exposes the normal screen and re-entering can
+                            // carry that content into the new alt-screen
+                            // buffer.
+                            let size = tui.terminal.size().ok();
                             let backend = tui.terminal.backend_mut();
                             let _ = crossterm::queue!(
                                 backend,
@@ -1178,6 +1181,21 @@ See the Codex keymap documentation for supported actions and examples."
                                 crossterm::terminal::Clear(
                                     crossterm::terminal::ClearType::All
                                 ),
+                            );
+                            if let Some(size) = size {
+                                for y in 0..size.height {
+                                    let _ = crossterm::queue!(
+                                        backend,
+                                        crossterm::cursor::MoveTo(0, y),
+                                        crossterm::style::Print(
+                                            " ".repeat(size.width as usize)
+                                        ),
+                                    );
+                                }
+                            }
+                            let _ = crossterm::queue!(
+                                backend,
+                                crossterm::cursor::MoveTo(0, 0),
                             );
                             let _ = std::io::Write::flush(backend);
                         }
