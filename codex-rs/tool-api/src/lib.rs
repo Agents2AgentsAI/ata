@@ -1,17 +1,14 @@
-//! Reusable executable-tool contracts shared between hosts and tool owners.
+//! Minimal function-tool contracts shared between hosts and extension-owned
+//! tool crates.
 
 mod bundle;
 mod call;
 mod error;
-mod output;
+mod spec;
 
-pub use bundle::BoolFuture;
 pub use bundle::ToolBundle;
-pub use bundle::ToolDefinition;
 pub use bundle::ToolExecutor;
 pub use bundle::ToolFuture;
 pub use call::ToolCall;
-pub use call::ToolInput;
 pub use error::ToolError;
-pub use output::JsonToolOutput;
-pub use output::ToolOutput;
+pub use spec::FunctionToolSpec;

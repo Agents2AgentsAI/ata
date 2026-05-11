@@ -2,126 +2,86 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use codex_tools::ToolName;
-use codex_tools::ToolSpec;
+use serde_json::Value;
 
+use crate::FunctionToolSpec;
 use crate::ToolCall;
 use crate::ToolError;
-use crate::ToolOutput;
 
-/// Future returned by one executable-tool invocation.
-pub type ToolFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Box<dyn ToolOutput>, ToolError>> + Send + 'a>>;
+/// Future returned by one contributed function-tool invocation.
+pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + 'a>>;
 
-/// Future returned by one mutability probe.
-pub type BoolFuture<'a> = Pin<Box<dyn Future<Output = bool> + Send + 'a>>;
-
-/// Model-visible definition plus executable implementation for one tool.
+/// Model-visible definition plus executable implementation for one contributed
+/// function tool.
 #[derive(Clone)]
-pub struct ToolBundle<C> {
-    definition: ToolDefinition,
-    executor: Arc<dyn ToolExecutor<C>>,
+pub struct ToolBundle {
+    spec: FunctionToolSpec,
+    executor: Arc<dyn ToolExecutor>,
 }
 
-impl<C> ToolBundle<C> {
-    /// Creates one executable tool bundle.
-    pub fn new(name: ToolName, spec: ToolSpec, executor: Arc<dyn ToolExecutor<C>>) -> Self {
-        Self {
-            definition: ToolDefinition {
-                name,
-                spec,
-                supports_parallel_tool_calls: false,
-            },
-            executor,
-        }
+impl ToolBundle {
+    /// Creates one contributed function-tool bundle.
+    pub fn new(spec: FunctionToolSpec, executor: Arc<dyn ToolExecutor>) -> Self {
+        Self { spec, executor }
     }
 
-    /// Marks this tool as safe for the host to run in parallel with peers.
-    #[must_use]
-    pub fn allow_parallel_calls(mut self) -> Self {
-        self.definition.supports_parallel_tool_calls = true;
-        self
+    /// Returns the contributed function-tool spec.
+    pub fn spec(&self) -> &FunctionToolSpec {
+        &self.spec
     }
 
-    /// Returns the model-visible tool definition.
-    pub fn definition(&self) -> &ToolDefinition {
-        &self.definition
+    /// Returns the contributed function-tool name.
+    pub fn tool_name(&self) -> &str {
+        self.spec.name.as_str()
     }
 
     /// Returns the executable implementation.
-    pub fn executor(&self) -> Arc<dyn ToolExecutor<C>> {
+    pub fn executor(&self) -> Arc<dyn ToolExecutor> {
         Arc::clone(&self.executor)
     }
 }
 
-/// Model-visible metadata owned by an executable tool bundle.
-#[derive(Clone)]
-pub struct ToolDefinition {
-    pub name: ToolName,
-    pub spec: ToolSpec,
-    pub supports_parallel_tool_calls: bool,
-}
-
-/// Executable behavior for one contributed tool.
+/// Executable behavior for one contributed function tool.
 ///
-/// Implementations should keep host-specific needs inside `C`; tool owners that
-/// do not require host state can implement the trait for any `C`.
-pub trait ToolExecutor<C>: Send + Sync {
-    fn execute<'a>(&'a self, call: ToolCall<C>) -> ToolFuture<'a>;
-
-    /// Returns whether the call may mutate user state.
-    ///
-    /// Hosts can use this conservative signal for serialization or approval
-    /// policy. Read-only tools should override this default.
-    fn is_mutating<'a>(&'a self, _call: &'a ToolCall<C>) -> BoolFuture<'a> {
-        Box::pin(async { true })
-    }
+/// Implementations receive the model-supplied call id and JSON arguments and
+/// return the JSON value that should be exposed to the model.
+pub trait ToolExecutor: Send + Sync {
+    fn execute<'a>(&'a self, call: ToolCall) -> ToolFuture<'a>;
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::task::Context;
-    use std::task::Poll;
-    use std::task::Wake;
-    use std::task::Waker;
 
-    use super::*;
-    use crate::JsonToolOutput;
-    use crate::ToolInput;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
 
-    struct DefaultMutatingExecutor;
+    use super::ToolBundle;
+    use super::ToolExecutor;
+    use super::ToolFuture;
+    use crate::FunctionToolSpec;
+    use crate::ToolCall;
 
-    impl ToolExecutor<()> for DefaultMutatingExecutor {
-        fn execute<'a>(&'a self, _call: ToolCall<()>) -> ToolFuture<'a> {
-            Box::pin(async {
-                Ok(Box::new(JsonToolOutput::new(serde_json::json!(null))) as Box<dyn ToolOutput>)
-            })
+    struct StubExecutor;
+
+    impl ToolExecutor for StubExecutor {
+        fn execute<'a>(&'a self, _call: ToolCall) -> ToolFuture<'a> {
+            Box::pin(async { Ok(json!({ "ok": true })) })
         }
     }
 
-    struct NoopWaker;
-
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
     #[test]
-    fn contributed_tools_default_to_mutating() {
-        let call = ToolCall {
-            context: (),
-            call_id: "call-default-mutating".to_string(),
-            input: ToolInput::Function {
-                arguments: "{}".to_string(),
+    fn bundle_derives_name_from_function_spec() {
+        let bundle = ToolBundle::new(
+            FunctionToolSpec {
+                name: "echo".to_string(),
+                description: "Echo arguments.".to_string(),
+                strict: false,
+                parameters: json!({ "type": "object" }),
             },
-        };
-        let mut future = DefaultMutatingExecutor.is_mutating(&call);
-        let waker = Waker::from(Arc::new(NoopWaker));
-        let mut context = Context::from_waker(&waker);
+            Arc::new(StubExecutor),
+        );
 
-        assert!(matches!(
-            future.as_mut().poll(&mut context),
-            Poll::Ready(true)
-        ));
+        assert_eq!(bundle.tool_name(), "echo");
     }
 }
