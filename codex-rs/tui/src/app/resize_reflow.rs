@@ -98,7 +98,11 @@ impl App {
         if display.is_empty() {
             return;
         }
-        if self.overlay.is_some() {
+        // When an overlay owns the screen, OR when the reading view has taken
+        // over the alternate screen, queue lines instead of inserting them —
+        // otherwise history insertion scrolls into the active buffer and
+        // corrupts the reader's rendering.
+        if self.overlay.is_some() || self.reader_alt_screen_active {
             self.deferred_history_lines.extend(display);
         } else {
             tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
@@ -187,7 +191,7 @@ impl App {
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
-            } else if self.overlay.is_some() {
+            } else if self.overlay.is_some() || self.reader_alt_screen_active {
                 self.deferred_history_lines.extend(display);
             } else {
                 tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());

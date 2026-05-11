@@ -1130,6 +1130,16 @@ See the Codex keymap documentation for supported actions and examples."
                     } else if !reader_active && self.reader_alt_screen_active {
                         let _ = tui.leave_alt_screen();
                         self.reader_alt_screen_active = false;
+                        // Flush any history lines that arrived while the
+                        // reader owned the screen, now that the inline
+                        // viewport is back.
+                        let pending = std::mem::take(&mut self.deferred_history_lines);
+                        if !pending.is_empty() {
+                            tui.insert_history_lines_with_wrap_policy(
+                                pending,
+                                self.history_line_wrap_policy(),
+                            );
+                        }
                     }
                     // On resize while the reader is active, hard-clear so any
                     // reflow artifacts left behind by the terminal are wiped.
