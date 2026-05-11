@@ -5,5 +5,9 @@ use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 
 pub(crate) fn thread_extensions() -> Arc<ExtensionRegistry<Config>> {
-    Arc::new(ExtensionRegistryBuilder::<Config>::new().build())
+    Arc::new(
+        ExtensionRegistryBuilder::<Config>::new()
+            .with_extension(codex_git_attribution::extension())
+            .build(),
+    )
 }

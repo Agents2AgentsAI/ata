@@ -16,7 +16,6 @@ use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
-use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -2711,13 +2710,6 @@ impl Session {
             AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
         {
             developer_sections.push(plugin_instructions.render());
-        }
-        if turn_context.features.enabled(Feature::CodexGitCommit)
-            && let Some(commit_message_instruction) = commit_message_trailer_instruction(
-                turn_context.config.commit_attribution.as_deref(),
-            )
-        {
-            developer_sections.push(commit_message_instruction);
         }
         for contributor in self.services.extensions.context_contributors() {
             for fragment in contributor.contribute(
