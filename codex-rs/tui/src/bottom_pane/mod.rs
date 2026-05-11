@@ -1282,7 +1282,7 @@ impl BottomPane {
         self.view_stack
             .last()
             .and_then(|v| v.view_id())
-            .is_some_and(|id| id == "document_reader")
+            .is_some_and(|id| id == document_reader::DOCUMENT_READER_VIEW_ID)
     }
 
     pub(crate) fn update_document_section(

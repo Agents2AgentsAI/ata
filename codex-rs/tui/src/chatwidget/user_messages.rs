@@ -87,6 +87,27 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
+        // Strip system-injected wrappers (voice-mode preambles, reading-view
+        // question wrappers, document-closed feedback) so they never reach
+        // chat history rendering. The agent still sees the raw message.
+        let (vis_start, vis_end) = displayable_range(&message);
+        let message = message[vis_start..vis_end].to_string();
+        let text_elements: Vec<TextElement> = text_elements
+            .into_iter()
+            .filter_map(|element| {
+                let range = element.byte_range.clone();
+                if range.end <= vis_start || range.start >= vis_end {
+                    return None;
+                }
+                let new_start = range.start.saturating_sub(vis_start);
+                let new_end = range.end.min(vis_end).saturating_sub(vis_start);
+                Some(element.map_range(|_| ByteRange {
+                    start: new_start,
+                    end: new_end,
+                }))
+            })
+            .collect();
+
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();
