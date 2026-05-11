@@ -475,7 +475,7 @@ impl AccountRequestProcessor {
         let device_for_task = device.clone();
 
         tokio::spawn(async move {
-            let (success, error_msg) = tokio::select! {
+            let (mut success, mut error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
                     (false, Some("Login was not completed".to_string()))
                 }
@@ -491,13 +491,20 @@ impl AccountRequestProcessor {
             };
 
             if success {
-                auth_manager.reload().await;
-
                 // Persist `model = "gpt-4o"` and `model_provider = "copilot"`
                 // so the next launch defaults to Copilot without manual
                 // `-c model=...` flags. We only set the provider; the model is
                 // a sensible default for Copilot Free (`gpt-4o`) — users can
                 // still switch via `-c model=...` or the /model picker.
+                //
+                // If this write fails we *must* roll back the just-saved
+                // Copilot OAuth credential. Leaving creds without the
+                // matching provider config strands the user: the next launch
+                // re-enters bootstrap with `model_provider = "openai"`,
+                // `requires_openai_auth = true`, and an auth.json holding
+                // only `providers.copilot` — which used to surface as
+                // "email and plan type are required for chatgpt
+                // authentication" during TUI bootstrap.
                 let codex_home_for_edit = codex_home.clone();
                 let edit_result = tokio::task::spawn_blocking(move || {
                     ConfigEditsBuilder::new(&codex_home_for_edit)
@@ -505,11 +512,29 @@ impl AccountRequestProcessor {
                         .apply_blocking()
                 })
                 .await;
-                if let Ok(Err(err)) = edit_result {
+                let edit_err = match edit_result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(err)) => Some(err.to_string()),
+                    Err(join_err) => Some(format!("config edit task panicked: {join_err}")),
+                };
+                if let Some(err) = edit_err {
                     warn!(
                         "failed to persist model_provider=copilot to config.toml after login: {err}"
                     );
+                    if let Err(rollback_err) = copilot_logout(&codex_home, store_mode) {
+                        warn!(
+                            "failed to roll back Copilot credentials after config write failure: {rollback_err}"
+                        );
+                    }
+                    success = false;
+                    error_msg = Some(format!(
+                        "Signed in to GitHub Copilot but could not update config: {err}. Please retry."
+                    ));
                 }
+
+                // Reload regardless: on success the manager picks up new
+                // creds; on rollback it picks up the now-empty auth.json.
+                auth_manager.reload().await;
             }
 
             outgoing_clone

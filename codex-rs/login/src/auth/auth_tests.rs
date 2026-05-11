@@ -1,5 +1,7 @@
 use super::*;
 use crate::auth::storage::FileAuthStorage;
+use crate::auth::storage::ProviderCredential;
+use crate::auth::storage::ProviderOauthCredential;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use codex_app_server_protocol::AuthMode;
@@ -362,7 +364,8 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         /*chatgpt_base_url*/ None,
     )
     .await
-    .expect("updated auth should parse");
+    .expect("updated auth should parse")
+    .expect("updated auth.json should resolve to a codex auth");
 
     let manager = AuthManager::from_auth_for_testing(auth.clone());
     let error = RefreshTokenFailedError::new(
@@ -1215,4 +1218,99 @@ async fn missing_plan_type_maps_to_unknown() {
     .expect("auth available");
 
     pretty_assertions::assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Unknown));
+}
+
+fn copilot_oauth_only_auth() -> AuthDotJson {
+    let mut auth = AuthDotJson::default();
+    auth.set_provider_credential(
+        "copilot",
+        ProviderCredential::Oauth {
+            credential: ProviderOauthCredential {
+                access: "gho_test_access".to_string(),
+                refresh: "gho_test_refresh".to_string(),
+                expires: None,
+                email: None,
+                project_id: None,
+                managed_project_id: None,
+            },
+        },
+    );
+    auth
+}
+
+#[test]
+fn resolved_mode_returns_none_for_provider_oauth_only_auth() {
+    // Regression: a Copilot-only auth.json must NOT silently resolve to
+    // `Chatgpt`. Doing so previously caused `account_state()` to fail with
+    // "email and plan type are required for chatgpt authentication"
+    // during TUI bootstrap.
+    let auth = copilot_oauth_only_auth();
+    assert_eq!(auth.resolved_mode(), None);
+}
+
+#[test]
+fn resolved_mode_prefers_explicit_auth_mode() {
+    let mut auth = AuthDotJson::default();
+    auth.auth_mode = Some(AuthMode::Chatgpt);
+    assert_eq!(auth.resolved_mode(), Some(AuthMode::Chatgpt));
+}
+
+#[test]
+fn resolved_mode_infers_api_key_from_key_when_mode_missing() {
+    let mut auth = AuthDotJson::default();
+    auth.openai_api_key = Some("sk-test".to_string());
+    assert_eq!(auth.resolved_mode(), Some(AuthMode::ApiKey));
+}
+
+#[test]
+fn resolved_mode_returns_none_for_empty_auth() {
+    let auth = AuthDotJson::default();
+    assert_eq!(auth.resolved_mode(), None);
+}
+
+#[tokio::test]
+async fn load_auth_returns_none_for_copilot_only_auth_json() {
+    // End-to-end: persist a Copilot-only auth.json on disk, then verify
+    // `load_auth` returns `Ok(None)` — i.e. the cached codex auth is empty
+    // and downstream `account_state()` won't fabricate a Chatgpt branch.
+    let codex_home = tempdir().unwrap();
+    let storage = create_auth_storage(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+    );
+    storage
+        .save(&copilot_oauth_only_auth())
+        .expect("save copilot-only auth.json");
+
+    let loaded = super::load_auth(
+        codex_home.path(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("load_auth should not error on a copilot-only auth.json");
+
+    assert!(
+        loaded.is_none(),
+        "copilot-only auth.json must resolve to no codex auth, got {loaded:?}"
+    );
+}
+
+#[tokio::test]
+async fn from_auth_dot_json_returns_none_for_copilot_only_auth() {
+    let codex_home = tempdir().unwrap();
+    let result = CodexAuth::from_auth_dot_json(
+        codex_home.path(),
+        copilot_oauth_only_auth(),
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect("from_auth_dot_json should not error on provider-OAuth-only input");
+
+    assert!(
+        result.is_none(),
+        "copilot-only auth.json must not produce a CodexAuth, got {result:?}"
+    );
 }

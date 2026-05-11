@@ -267,6 +267,7 @@ use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
 use codex_core::auth_public::PROVIDER_COPILOT;
 use codex_core::auth_public::complete_copilot_login;
+use codex_core::auth_public::copilot_logout;
 use codex_core::auth_public::get_provider_oauth_credential;
 use codex_core::auth_public::poll_copilot_access_token;
 use codex_core::auth_public::start_copilot_device_flow;

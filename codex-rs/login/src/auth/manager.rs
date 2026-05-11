@@ -201,14 +201,21 @@ impl CodexAuth {
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
-    ) -> std::io::Result<Self> {
-        let auth_mode = auth_dot_json.resolved_mode();
+    ) -> std::io::Result<Option<Self>> {
+        // An auth.json that holds only provider-OAuth credentials (e.g. a
+        // GitHub Copilot signin) has no codex-backed auth to construct. Treat
+        // that as "not signed in" rather than fabricating a `Chatgpt` variant
+        // with empty tokens — which would later make `account_state()` fail
+        // with "email and plan type are required for chatgpt authentication".
+        let Some(auth_mode) = auth_dot_json.resolved_mode() else {
+            return Ok(None);
+        };
         let client = create_client();
         if auth_mode == ApiAuthMode::ApiKey {
             let Some(api_key) = auth_dot_json.openai_api_key.as_deref() else {
                 return Err(std::io::Error::other("API key auth is missing a key."));
             };
-            return Ok(Self::from_api_key(api_key));
+            return Ok(Some(Self::from_api_key(api_key)));
         }
         if auth_mode == ApiAuthMode::AgentIdentity {
             let Some(agent_identity) = auth_dot_json.agent_identity else {
@@ -216,7 +223,9 @@ impl CodexAuth {
                     "agent identity auth is missing an agent identity token.",
                 ));
             };
-            return Self::from_agent_identity_jwt(&agent_identity, chatgpt_base_url).await;
+            return Self::from_agent_identity_jwt(&agent_identity, chatgpt_base_url)
+                .await
+                .map(Some);
         }
 
         let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
@@ -228,10 +237,10 @@ impl CodexAuth {
         match auth_mode {
             ApiAuthMode::Chatgpt => {
                 let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
-                Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
+                Ok(Some(Self::Chatgpt(ChatgptAuth { state, storage })))
             }
             ApiAuthMode::ChatgptAuthTokens => {
-                Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
+                Ok(Some(Self::ChatgptAuthTokens(ChatgptAuthTokens { state })))
             }
             ApiAuthMode::ApiKey => unreachable!("api key mode is handled above"),
             ApiAuthMode::AgentIdentity => unreachable!("agent identity mode is handled above"),
@@ -734,14 +743,17 @@ async fn load_auth(
         AuthCredentialsStoreMode::Ephemeral,
     );
     if let Some(auth_dot_json) = ephemeral_storage.load()? {
-        let auth = CodexAuth::from_auth_dot_json(
+        // Ephemeral takes precedence even if it resolves to `None` (e.g., a
+        // provider-OAuth-only file with no codex auth): the caller explicitly
+        // routed creds through the ephemeral channel, so don't silently fall
+        // back to whatever is on disk in the persistent store.
+        return CodexAuth::from_auth_dot_json(
             codex_home,
             auth_dot_json,
             AuthCredentialsStoreMode::Ephemeral,
             chatgpt_base_url,
         )
-        .await?;
-        return Ok(Some(auth));
+        .await;
     }
 
     // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
@@ -762,14 +774,13 @@ async fn load_auth(
         None => return Ok(None),
     };
 
-    let auth = CodexAuth::from_auth_dot_json(
+    CodexAuth::from_auth_dot_json(
         codex_home,
         auth_dot_json,
         auth_credentials_store_mode,
         chatgpt_base_url,
     )
-    .await?;
-    Ok(Some(auth))
+    .await
 }
 
 // Persist refreshed tokens into auth storage and update last_refresh.
@@ -964,21 +975,32 @@ impl AuthDotJson {
         Self::from_external_tokens(&external)
     }
 
-    fn resolved_mode(&self) -> ApiAuthMode {
+    /// Resolved Codex auth mode for this auth.json, or `None` if the file
+    /// holds no codex-backed credential (e.g., a Copilot-only auth.json with
+    /// just `providers.copilot` set). Returning `None` avoids the historic
+    /// trap where any empty/auth_mode-less file silently resolved to
+    /// `Chatgpt`, which downstream code then tried to read email/plan from.
+    fn resolved_mode(&self) -> Option<ApiAuthMode> {
         if let Some(mode) = self.auth_mode {
-            return mode;
+            return Some(mode);
         }
         if self.openai_api_key.is_some() {
-            return ApiAuthMode::ApiKey;
+            return Some(ApiAuthMode::ApiKey);
         }
-        ApiAuthMode::Chatgpt
+        if self.tokens.is_some() {
+            return Some(ApiAuthMode::Chatgpt);
+        }
+        if self.agent_identity.is_some() {
+            return Some(ApiAuthMode::AgentIdentity);
+        }
+        None
     }
 
     fn storage_mode(
         &self,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
     ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
+        if self.resolved_mode() == Some(ApiAuthMode::ChatgptAuthTokens) {
             AuthCredentialsStoreMode::Ephemeral
         } else {
             auth_credentials_store_mode
