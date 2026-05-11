@@ -1125,7 +1125,16 @@ See the Codex keymap documentation for supported actions and examples."
                     // terminal (no scrollback bleed, no resize ghosts).
                     let reader_active = self.chat_widget.is_document_reader_active();
                     if reader_active && !self.reader_alt_screen_active {
-                        let _ = tui.enter_alt_screen();
+                        let alt_ok = tui.is_alt_screen_active();
+                        match tui.enter_alt_screen() {
+                            Ok(()) => tracing::info!(
+                                "[READER-ALT] enter_alt_screen ok (was_active={alt_ok}, now_active={})",
+                                tui.is_alt_screen_active()
+                            ),
+                            Err(err) => {
+                                tracing::warn!("[READER-ALT] enter_alt_screen failed: {err}")
+                            }
+                        }
                         self.reader_alt_screen_active = true;
                     } else if !reader_active && self.reader_alt_screen_active {
                         let _ = tui.leave_alt_screen();
