@@ -3858,6 +3858,12 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
     let mut current_content = String::new();
 
     for line in content.lines() {
+        // Hidden machine-readable section metadata emitted by the server
+        // (foldable flag, agent summary). Strip before rendering.
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- CODEX_SECTION_META ") && trimmed.ends_with(" -->") {
+            continue;
+        }
         if let Some(heading_text) = line.strip_prefix("## ") {
             // Flush the previous section.
             sections.push(DocumentSection {
