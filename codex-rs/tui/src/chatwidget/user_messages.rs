@@ -34,6 +34,12 @@ fn displayable_range(text: &str) -> (usize, usize) {
         }
     }
 
+    // Reading-view close feedback ("[The user closed the document reader…]")
+    // is a pure system message — no user text inside. Hide the entire body.
+    if text[start..].starts_with("[The user closed the document reader") {
+        return (start, start);
+    }
+
     // Reading-view Tab-to-ask wraps the question with a "[The user is reading…]"
     // header and a "<!-- READER_TOOL_INSTRUCTIONS -->" trailer. The selection
     // variant inserts a "The user selected specific text…" block between the
