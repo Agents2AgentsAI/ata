@@ -256,7 +256,7 @@ where
     }
 
     /// Gets the current buffer as a reference.
-    fn current_buffer(&self) -> &Buffer {
+    pub(crate) fn current_buffer(&self) -> &Buffer {
         &self.buffers[self.current]
     }
 

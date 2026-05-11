@@ -906,24 +906,6 @@ impl Tui {
 
             if needs_full_repaint || force_full_repaint {
                 terminal.force_full_repaint_next_frame();
-                // Also directly nuke every cell in the visible viewport via
-                // explicit ANSI writes. Belt + suspenders for tmux pane
-                // reflow which can leave stale cells that ratatui's diff
-                // doesn't reach. We MUST do this AFTER any clear-screen
-                // ANSI from earlier in the resize pipeline, otherwise the
-                // clear undoes our writes; doing it inline here guarantees
-                // the order before ratatui's draw.
-                let area = terminal.viewport_area;
-                let backend = terminal.backend_mut();
-                for y in area.top()..area.bottom() {
-                    let _ = crossterm::queue!(
-                        backend,
-                        crossterm::cursor::MoveTo(area.left(), y),
-                        crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
-                        crossterm::style::Print(" ".repeat(area.width as usize)),
-                    );
-                }
-                let _ = std::io::Write::flush(backend);
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
@@ -943,7 +925,44 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })?;
+        // OUTSIDE the sync_update wrapper: brute-force re-emit every cell
+        // from current_buffer directly to the backend. sync_update can
+        // hide intermediate writes from terminals that don't fully
+        // support it (some tmux versions defer/drop bytes inside the
+        // BSU/ESU pair on resize). By doing this outside the wrapper, the
+        // writes go directly to tmux as ordinary bytes which it must
+        // process and store in its pane buffer.
+        if force_full_repaint {
+            let area = self.terminal.viewport_area;
+            let buf = self.terminal.current_buffer().clone();
+            let backend = self.terminal.backend_mut();
+            let _ = crossterm::queue!(
+                backend,
+                crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+            );
+            for y in area.top()..area.bottom() {
+                let _ = crossterm::queue!(
+                    backend,
+                    crossterm::cursor::MoveTo(area.left(), y),
+                );
+                for x in area.left()..area.right() {
+                    let cell = &buf[(x, y)];
+                    let _ = crossterm::queue!(
+                        backend,
+                        crossterm::style::SetForegroundColor(cell.fg.into()),
+                        crossterm::style::SetBackgroundColor(cell.bg.into()),
+                        crossterm::style::Print(cell.symbol()),
+                    );
+                }
+            }
+            let _ = crossterm::queue!(
+                backend,
+                crossterm::style::SetAttribute(crossterm::style::Attribute::Reset),
+            );
+            let _ = std::io::Write::flush(backend);
+        }
+        Ok(())
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {
