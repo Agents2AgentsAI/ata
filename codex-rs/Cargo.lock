@@ -2817,6 +2817,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-extension-api"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-tools",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codex-external-agent-migration"
 version = "0.0.0"
 dependencies = [

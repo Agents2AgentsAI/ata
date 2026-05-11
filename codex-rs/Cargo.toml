@@ -45,6 +45,7 @@ members = [
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
+    "ext/extension-api",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -160,6 +161,7 @@ codex-exec = { path = "exec" }
 codex-file-system = { path = "file-system" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
+codex-extension-api = { path = "ext/extension-api" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -468,6 +470,7 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
+    "codex-extension-api",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
