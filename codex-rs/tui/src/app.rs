@@ -472,6 +472,10 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
+    /// True iff we've entered the alternate screen specifically for the
+    /// document reader. Tracks the transition so we leave alt-screen when the
+    /// reader closes.
+    reader_alt_screen_active: bool,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
@@ -888,6 +892,7 @@ See the Codex keymap documentation for supported actions and examples."
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
+            reader_alt_screen_active: false,
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
@@ -1115,14 +1120,20 @@ See the Codex keymap documentation for supported actions and examples."
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
                     }
-                    // On resize while the document reader is active, scrollback
-                    // above the viewport can bleed into the new viewport area
-                    // (terminal reflow + ratatui inline-viewport tracking
-                    // desync). Force a hard clear + full repaint to avoid the
-                    // character-smashing pattern.
-                    if matches!(event, TuiEvent::Resize)
-                        && self.chat_widget.is_document_reader_active()
-                    {
+                    // Mirror the document reader's open/closed state into
+                    // the alternate screen so the reader owns the full
+                    // terminal (no scrollback bleed, no resize ghosts).
+                    let reader_active = self.chat_widget.is_document_reader_active();
+                    if reader_active && !self.reader_alt_screen_active {
+                        let _ = tui.enter_alt_screen();
+                        self.reader_alt_screen_active = true;
+                    } else if !reader_active && self.reader_alt_screen_active {
+                        let _ = tui.leave_alt_screen();
+                        self.reader_alt_screen_active = false;
+                    }
+                    // On resize while the reader is active, hard-clear so any
+                    // reflow artifacts left behind by the terminal are wiped.
+                    if matches!(event, TuiEvent::Resize) && reader_active {
                         let _ = tui.terminal.clear();
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
