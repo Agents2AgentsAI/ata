@@ -22,6 +22,8 @@ use tempfile::TempDir;
 const FAKE_LSP_PY: &str = r#"
 import sys, json
 
+opened_documents = set()
+
 def read_message():
     headers = {}
     while True:
@@ -52,7 +54,8 @@ root_uri = 'file:///'
 def handle_request(msg):
     global root_uri
     method = msg.get('method', '')
-    req_id = msg.get('id')
+    # Some real servers, including jdtls, use string IDs in responses.
+    req_id = str(msg.get('id'))
 
     if method == 'initialize':
         root_uri = msg.get('params', {}).get('rootUri', root_uri)
@@ -102,6 +105,34 @@ def handle_request(msg):
                 }
             }
         })
+    elif method == 'textDocument/documentSymbol':
+        params = msg.get('params', {})
+        uri = params.get('textDocument', {}).get('uri', '')
+        if uri not in opened_documents:
+            send_message({
+                'jsonrpc': '2.0',
+                'id': req_id,
+                'result': None
+            })
+        else:
+            send_message({
+                'jsonrpc': '2.0',
+                'id': req_id,
+                'result': [
+                    {
+                        'name': 'hello',
+                        'kind': 12,
+                        'location': {
+                            'uri': uri,
+                            'range': {
+                                'start': {'line': 0, 'character': 0},
+                                'end': {'line': 0, 'character': 5}
+                            }
+                        },
+                        'containerName': None
+                    }
+                ]
+            })
     elif method == 'workspace/symbol':
         params = msg.get('params', {})
         query = params.get('query', '')
@@ -226,6 +257,7 @@ def handle_notification(msg):
 
     if method == 'textDocument/didOpen':
         uri = msg['params']['textDocument']['uri']
+        opened_documents.add(uri)
         # Publish diagnostics with one error.
         send_message({
             'jsonrpc': '2.0',
@@ -267,6 +299,66 @@ while True:
         handle_notification(msg)
 "#;
 
+#[cfg(unix)]
+const FORKING_FAKE_LSP_PY: &str = r#"
+import json
+import subprocess
+import sys
+
+helper_pid_path = sys.argv[1]
+helper = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(60)"],
+    start_new_session=False,
+)
+with open(helper_pid_path, "w", encoding="utf-8") as handle:
+    handle.write(str(helper.pid))
+
+def read_message():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        decoded = line.decode("ascii")
+        if decoded == "\r\n":
+            break
+        if ": " in decoded:
+            key, value = decoded.strip().split(": ", 1)
+            headers[key] = value
+    if "Content-Length" not in headers:
+        return None
+    length = int(headers["Content-Length"])
+    body = sys.stdin.buffer.read(length)
+    return json.loads(body)
+
+def send_message(msg):
+    body = json.dumps(msg).encode("utf-8")
+    header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+    sys.stdout.buffer.write(header)
+    sys.stdout.buffer.write(body)
+    sys.stdout.buffer.flush()
+
+while True:
+    msg = read_message()
+    if msg is None:
+        break
+
+    if msg.get("method") == "initialize":
+        send_message({
+            "jsonrpc": "2.0",
+            "id": str(msg.get("id")),
+            "result": {"capabilities": {"textDocumentSync": 1}},
+        })
+    elif msg.get("method") == "shutdown":
+        send_message({
+            "jsonrpc": "2.0",
+            "id": str(msg.get("id")),
+            "result": None,
+        })
+    elif msg.get("method") == "exit":
+        sys.exit(0)
+"#;
+
 /// Returns the Python interpreter command for the current platform.
 fn python_command() -> &'static str {
     if cfg!(windows) { "python" } else { "python3" }
@@ -299,6 +391,47 @@ fn fake_config(script: &Path) -> LspServerConfig {
         root_strategy: Default::default(),
         post_root_hook: Default::default(),
     }
+}
+
+#[cfg(unix)]
+fn forking_fake_config(script: &Path, helper_pid_path: &Path) -> LspServerConfig {
+    LspServerConfig {
+        extensions: vec![".rs".into()],
+        command: vec![
+            python_command().into(),
+            script.to_string_lossy().to_string(),
+            helper_pid_path.to_string_lossy().to_string(),
+        ],
+        command_candidates: Vec::new(),
+        env: HashMap::new(),
+        root_markers: vec!["Cargo.toml".into()],
+        initialization_options: None,
+        disabled: false,
+        install: None,
+        root_strategy: Default::default(),
+        post_root_hook: Default::default(),
+    }
+}
+
+#[cfg(unix)]
+fn write_forking_server(dir: &TempDir) -> PathBuf {
+    let script_path = dir.path().join("forking_fake_lsp.py");
+    let mut file =
+        std::fs::File::create(&script_path).unwrap_or_else(|e| panic!("create script: {e}"));
+    file.write_all(FORKING_FAKE_LSP_PY.as_bytes())
+        .unwrap_or_else(|e| panic!("write script: {e}"));
+    script_path
+}
+
+#[cfg(unix)]
+fn pid_exists(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -512,6 +645,7 @@ async fn workspace_symbol_autospawns_clients() {
     let root = dir.path();
 
     std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    std::fs::write(root.join("main.rs"), "fn hello() {}\n").unwrap();
 
     let mut servers = HashMap::new();
     servers.insert("fake".to_string(), config);
@@ -522,6 +656,32 @@ async fn workspace_symbol_autospawns_clients() {
         symbols.iter().any(|s| s.name == "hello_symbol"),
         "expected 'hello_symbol' from workspace/symbol response, got: {symbols:?}",
     );
+
+    registry.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn server_registry_document_symbol_syncs_before_query() {
+    let dir = TempDir::new().unwrap();
+    let script = write_fake_server(&dir);
+    let config = fake_config(&script);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+    let file_path = root.join("main.rs");
+    std::fs::write(&file_path, "fn hello() {}\n").unwrap();
+
+    let mut servers = HashMap::new();
+    servers.insert("fake".to_string(), config);
+    let registry = Arc::new(ServerRegistry::new(servers, root.to_path_buf(), None));
+
+    let symbols = registry.document_symbol(&file_path).await;
+    let Some(codex_lsp_client::lsp_types::DocumentSymbolResponse::Flat(symbols)) = symbols else {
+        panic!("expected flat document symbols response");
+    };
+
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0].name, "hello");
 
     registry.shutdown_all().await;
 }
@@ -683,4 +843,48 @@ async fn code_action_resolve_populates_edit() {
     );
 
     client.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_kills_process_group_helpers() {
+    let dir = TempDir::new().unwrap();
+    let helper_pid_path = dir.path().join("helper.pid");
+    let script = write_forking_server(&dir);
+    let config = forking_fake_config(&script, &helper_pid_path);
+    let root = dir.path();
+
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+
+    let client = LspClient::create("fake-forking", &config, root)
+        .await
+        .expect("spawn");
+
+    let helper_pid = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&helper_pid_path)
+                && let Ok(pid) = contents.trim().parse::<u32>()
+                && pid_exists(pid)
+            {
+                break pid;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("helper pid file");
+    assert!(
+        pid_exists(helper_pid),
+        "helper process should exist before shutdown"
+    );
+
+    client.shutdown().await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while pid_exists(helper_pid) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("helper process should terminate with lsp shutdown");
 }

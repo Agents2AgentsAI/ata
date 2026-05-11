@@ -80,6 +80,13 @@ const VARIABLES_QUERY: &str = r#"
   pattern: (identifier) @var.name)
 "#;
 
+const CONDITION_EXPRESSIONS_QUERY: &str = r#"
+(if_expression) @condition.expr
+(while_expression) @condition.expr
+(match_expression) @condition.expr
+(for_expression) @condition.expr
+"#;
+
 const NON_CODE_QUERY: &str = r#"
 (line_comment) @skip
 (block_comment) @skip
@@ -104,7 +111,17 @@ fn is_test_symbol(name: &str, file: &str) -> bool {
 }
 
 fn variable_name_filter(name: &str) -> bool {
-    !name.is_empty() && name != "_" && name != "self"
+    if name.is_empty() || name == "_" || name == "self" {
+        return false;
+    }
+    // In Rust, local variables are snake_case. PascalCase identifiers captured
+    // inside patterns (e.g. `Some`, `None`, `Ok`, `Err`) are enum constructors,
+    // not variables.
+    let first = name.as_bytes()[0];
+    if first.is_ascii_uppercase() {
+        return false;
+    }
+    true
 }
 
 pub fn config() -> LanguageConfig {
@@ -113,6 +130,7 @@ pub fn config() -> LanguageConfig {
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        condition_expressions_query: CONDITION_EXPRESSIONS_QUERY,
         non_code_query: NON_CODE_QUERY,
         definition_matcher: is_definition_line,
         test_symbol_matcher: is_test_symbol,

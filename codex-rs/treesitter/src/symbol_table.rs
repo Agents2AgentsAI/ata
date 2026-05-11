@@ -70,13 +70,17 @@ impl SymbolTable {
     }
 
     pub fn get(&self, file: &str, name: &str) -> Option<Symbol> {
-        let keys = self.by_file.get(file)?;
-        keys.iter().find_map(|key| {
-            self.symbols
-                .get(key)
-                .filter(|entry| entry.value().name == name)
-                .map(|entry| entry.value().clone())
-        })
+        let mut matches = self.matching_symbols_in_file(file, name);
+        if matches.len() == 1 {
+            matches.pop()
+        } else {
+            None
+        }
+    }
+
+    pub fn get_at(&self, file: &str, name: &str, byte_offset: usize) -> Option<Symbol> {
+        let key = self.lookup_key_at(file, name, byte_offset)?;
+        self.symbols.get(&key).map(|entry| entry.value().clone())
     }
 
     pub fn set_definition(
@@ -108,6 +112,23 @@ impl SymbolTable {
         Err(format!("symbol '{name}' not found in '{file}'"))
     }
 
+    pub fn set_definition_at(
+        &self,
+        file: &str,
+        name: &str,
+        byte_offset: usize,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        let Some(key) = self.lookup_key_at(file, name, byte_offset) else {
+            return Err(format!(
+                "symbol '{name}' not found at byte offset {byte_offset} in '{file}'"
+            ));
+        };
+
+        self.set_definition_by_key(&key, definition, overwrite)
+    }
+
     pub fn set_definition_by_key(
         &self,
         key: &str,
@@ -131,6 +152,25 @@ impl SymbolTable {
         keys.iter()
             .filter_map(|key| self.symbols.get(key).map(|entry| entry.value().clone()))
             .collect()
+    }
+
+    pub fn matching_symbols_in_file(&self, file: &str, name: &str) -> Vec<Symbol> {
+        let Some(keys) = self.by_file.get(file) else {
+            return Vec::new();
+        };
+
+        let mut matches: Vec<Symbol> = keys
+            .iter()
+            .filter_map(|key| self.symbols.get(key).map(|entry| entry.value().clone()))
+            .filter(|symbol| symbol.name == name)
+            .collect();
+        matches.sort_by(|a, b| {
+            a.line_range
+                .0
+                .cmp(&b.line_range.0)
+                .then(a.byte_range.0.cmp(&b.byte_range.0))
+        });
+        matches
     }
 
     pub fn all_symbols(&self) -> Vec<Symbol> {
@@ -164,6 +204,7 @@ impl SymbolTable {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Vec<Symbol> {
+        let query = strip_kind_prefix(query);
         let query_lower = query.to_lowercase();
         let mut ranked: Vec<(Symbol, bool, bool)> = self
             .symbols
@@ -200,10 +241,77 @@ impl SymbolTable {
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
     }
+
+    fn lookup_key_at(&self, file: &str, name: &str, byte_offset: usize) -> Option<String> {
+        let exact_key = Self::make_key(file, name, byte_offset);
+        if self.symbols.contains_key(&exact_key) {
+            return Some(exact_key);
+        }
+
+        let keys = self.by_file.get(file)?;
+        let mut best_match: Option<(String, usize, usize)> = None;
+
+        for key in keys.iter() {
+            let Some(entry) = self.symbols.get(key) else {
+                continue;
+            };
+            let symbol = entry.value();
+            if symbol.name != name {
+                continue;
+            }
+
+            let (start, end) = symbol.byte_range;
+            let contains_offset = if start == end {
+                byte_offset == start
+            } else {
+                start <= byte_offset && byte_offset < end
+            };
+            if !contains_offset {
+                continue;
+            }
+
+            let span = end.saturating_sub(start);
+            match &best_match {
+                Some((_, best_span, best_start))
+                    if span > *best_span || (span == *best_span && start <= *best_start) => {}
+                _ => {
+                    best_match = Some((key.clone(), span, start));
+                }
+            }
+        }
+
+        best_match.map(|(key, _, _)| key)
+    }
 }
 
 fn is_test_symbol(symbol: &Symbol) -> bool {
     queries::is_test_symbol(symbol.language, &symbol.name, &symbol.file)
+}
+
+fn strip_kind_prefix(query: &str) -> &str {
+    const PREFIXES: &[&str] = &[
+        "class ",
+        "def ",
+        "fn ",
+        "func ",
+        "function ",
+        "struct ",
+        "enum ",
+        "trait ",
+        "interface ",
+        "type ",
+        "const ",
+        "var ",
+        "let ",
+    ];
+
+    for prefix in PREFIXES {
+        if query.len() >= prefix.len() && query[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            return query[prefix.len()..].trim_start();
+        }
+    }
+
+    query
 }
 
 #[cfg(test)]
@@ -212,12 +320,22 @@ mod tests {
     use crate::symbol::SymbolKind;
 
     fn make_symbol(name: &str, file: &str, language: Language) -> Symbol {
+        make_symbol_at(name, file, language, 0, 10)
+    }
+
+    fn make_symbol_at(
+        name: &str,
+        file: &str,
+        language: Language,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Symbol {
         Symbol {
             name: name.to_string(),
             name_lower: name.to_lowercase(),
             kind: SymbolKind::Function,
             file: file.to_string(),
-            byte_range: (0, 10),
+            byte_range: (byte_start, byte_end),
             line_range: (1, 1),
             language,
             signature: name.to_string(),
@@ -253,5 +371,89 @@ mod tests {
 
         table.remove_file("pkg/foo_test.go");
         assert!(table.test_symbols().is_empty());
+    }
+
+    #[test]
+    fn search_ignores_kind_prefixes() {
+        let table = SymbolTable::new();
+        let mut symbol = make_symbol("Memory", "src/memory.py", Language::Python);
+        symbol.kind = SymbolKind::Class;
+        table.insert(symbol);
+
+        let results = table.search("class Memory", 10);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "Memory");
+    }
+
+    #[test]
+    fn get_at_prefers_exact_byte_start_key_for_duplicate_names() {
+        let table = SymbolTable::new();
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            12,
+            48,
+        ));
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            96,
+            140,
+        ));
+
+        let symbol = table
+            .get_at("src/lib.rs", "duplicate", 96)
+            .expect("exact key lookup should resolve the later symbol");
+
+        assert_eq!(symbol.byte_range, (96, 140));
+    }
+
+    #[test]
+    fn get_at_uses_smallest_enclosing_range_when_offset_is_inside_symbol() {
+        let table = SymbolTable::new();
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            10,
+            90,
+        ));
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            30,
+            60,
+        ));
+
+        let symbol = table
+            .get_at("src/lib.rs", "duplicate", 40)
+            .expect("enclosing symbol lookup should resolve");
+
+        assert_eq!(symbol.byte_range, (30, 60));
+    }
+
+    #[test]
+    fn get_returns_none_when_file_contains_duplicate_symbol_names() {
+        let table = SymbolTable::new();
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            12,
+            48,
+        ));
+        table.insert(make_symbol_at(
+            "duplicate",
+            "src/lib.rs",
+            Language::Rust,
+            96,
+            140,
+        ));
+
+        assert!(table.get("src/lib.rs", "duplicate").is_none());
     }
 }

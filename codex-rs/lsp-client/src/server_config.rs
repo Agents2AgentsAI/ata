@@ -31,6 +31,8 @@ pub enum PostRootHook {
     /// Probe for a Python virtual environment and inject `pythonPath` into
     /// initialization options.
     PythonVenvProbe,
+    /// Force jdtls to use a managed workspace data directory.
+    JdtlsDataDir,
 }
 
 /// Configuration for a single LSP server.
@@ -104,7 +106,20 @@ impl LspServerConfig {
     }
 
     pub fn with_install(mut self, method: InstallMethod) -> Self {
-        self.install = Some(InstallConfig { method });
+        self.install = Some(InstallConfig {
+            method,
+            skip_preflight: false,
+        });
+        self
+    }
+
+    /// Like [`with_install`] but also skips the preflight `--version` check.
+    /// Use for JVM-based servers where `--version` starts a full runtime.
+    pub fn with_install_skip_preflight(mut self, method: InstallMethod) -> Self {
+        self.install = Some(InstallConfig {
+            method,
+            skip_preflight: true,
+        });
         self
     }
 
@@ -164,6 +179,14 @@ impl LspServerConfig {
 pub struct InstallConfig {
     /// The installation method to use.
     pub method: InstallMethod,
+
+    /// When `true`, skip the preflight `--version` check before the first
+    /// real spawn.  Needed for JVM-based servers (e.g. jdtls) where
+    /// `binary --version` starts a full JVM that cannot finish within the
+    /// 500 ms preflight window and gets killed, leaving workspace locks
+    /// that break the subsequent real spawn.
+    #[serde(default)]
+    pub skip_preflight: bool,
 }
 
 /// Supported installation methods.

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::hash::Hash;
 use std::path::Path;
@@ -10,13 +11,19 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::RwLock;
+use std::time::Duration;
+use std::time::Instant;
 
+use fd_lock::RwLock as FileRwLock;
 use lsp_types::request::GotoImplementationResponse;
 use lsp_types::*;
 use serde_json::Value;
+use sha1::Digest;
+use sha1::Sha1;
 use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinSet;
+use tokio::time::sleep;
 use tracing;
 
 use crate::client::LspClient;
@@ -33,6 +40,24 @@ type ClientKey = (String, PathBuf);
 const PREFLIGHT_VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 const PREFLIGHT_OUTPUT_MAX_BYTES: usize = 8 * 1024;
 const CALL_HIERARCHY_SERVER_ID_KEY: &str = "__codex_server_id";
+const INSTALL_LOCK_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const INSTALL_LOCK_TIMEOUT: Duration = Duration::from_secs(600);
+const CODE_ACTION_SERVER_ID_KEY: &str = "__codex_code_action_server_id";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegistryLimits {
+    pub max_sub_roots_per_server: usize,
+    pub max_lsp_clients_per_registry: usize,
+}
+
+impl Default for RegistryLimits {
+    fn default() -> Self {
+        Self {
+            max_sub_roots_per_server: 5,
+            max_lsp_clients_per_registry: 20,
+        }
+    }
+}
 
 #[derive(Debug)]
 enum PreflightResult {
@@ -84,25 +109,74 @@ fn codex_home_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".ata"))
 }
 
+fn managed_lsp_root() -> Option<PathBuf> {
+    codex_home_dir().map(|codex_home| codex_home.join("lsp"))
+}
+
 fn managed_lsp_bin_dirs() -> Vec<PathBuf> {
-    let Some(codex_home) = codex_home_dir() else {
+    let Some(lsp_root) = managed_lsp_root() else {
         return Vec::new();
     };
     let dirs = vec![
-        codex_home.join("lsp").join("bin"),
-        codex_home.join("lsp").join("npm").join("bin"),
-        codex_home.join("lsp").join("pip").join("bin"),
+        lsp_root.join("bin"),
+        lsp_root.join("gem").join("bin"),
+        lsp_root.join("npm").join("bin"),
+        lsp_root.join("pip").join("bin"),
     ];
     #[cfg(windows)]
     {
         let mut dirs = dirs;
-        dirs.push(codex_home.join("lsp").join("pip").join("Scripts"));
+        dirs.push(lsp_root.join("pip").join("Scripts"));
         dirs
     }
     #[cfg(not(windows))]
     {
         dirs
     }
+}
+
+fn install_lock_name(server_id: &str) -> String {
+    let mut sanitized = String::with_capacity(server_id.len());
+    for ch in server_id.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    if sanitized.is_empty() {
+        "server".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn open_install_lock(
+    server_id: &str,
+) -> std::io::Result<Option<(PathBuf, FileRwLock<std::fs::File>)>> {
+    let Some(lsp_root) = managed_lsp_root() else {
+        return Ok(None);
+    };
+    let lock_path = lsp_root
+        .join(".install-locks")
+        .join(format!("{}.lock", install_lock_name(server_id)));
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+    Ok(Some((lock_path, FileRwLock::new(lock_file))))
+}
+
+fn sha1_short(path: &Path) -> String {
+    let mut hasher = Sha1::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    format!("{digest:x}")[..12].to_string()
 }
 
 fn program_has_path_separator(program: &str) -> bool {
@@ -156,6 +230,24 @@ fn resolve_command_variant(variant: &[String]) -> Option<Vec<String>> {
     Some(out)
 }
 
+fn install_skips_preflight(config: &LspServerConfig) -> bool {
+    config
+        .install
+        .as_ref()
+        .is_some_and(|install| install.skip_preflight)
+}
+
+fn build_runtime_config(
+    config: &LspServerConfig,
+    resolved_command: Vec<String>,
+    root: &Path,
+) -> LspServerConfig {
+    let mut runtime_config = config.clone();
+    runtime_config.command = resolved_command;
+    apply_post_root_hook(&mut runtime_config, root);
+    runtime_config
+}
+
 /// Callback type for handling auto-install.
 ///
 /// The callback is expected to *perform the install* (including any user
@@ -165,6 +257,74 @@ fn resolve_command_variant(variant: &[String]) -> Option<Vec<String>> {
 pub type InstallRunnerFn = Arc<
     dyn Fn(&str, &[String]) -> std::pin::Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
 >;
+
+/// Deduplicates install attempts across multiple [`ServerRegistry`] instances.
+///
+/// When multiple workspace roots each have their own `ServerRegistry`, they may
+/// independently detect that the same global tool (e.g. `rust-analyzer` via
+/// `rustup component add`) needs installing. Without coordination, each registry
+/// prompts the user and runs the install command separately.
+///
+/// `InstallTracker` is shared (via `Arc`) across all registries and ensures that
+/// only one install attempt per `server_id` is in flight at a time. Subsequent
+/// requests for the same server wait for the first attempt to complete and reuse
+/// its result.
+pub struct InstallTracker {
+    /// In-flight install attempts keyed by server_id.
+    in_flight: StdMutex<HashMap<String, Arc<tokio::sync::Notify>>>,
+    /// Server IDs that were successfully installed this session.
+    installed: StdMutex<HashSet<String>>,
+}
+
+impl InstallTracker {
+    pub fn new() -> Self {
+        Self {
+            in_flight: StdMutex::new(HashMap::new()),
+            installed: StdMutex::new(HashSet::new()),
+        }
+    }
+
+    /// Check whether `server_id` was already installed this session.
+    fn is_installed(&self, server_id: &str) -> bool {
+        lock_unpoisoned(&self.installed).contains(server_id)
+    }
+
+    /// Try to claim the install slot for `server_id`.
+    ///
+    /// Returns `Ok(notify)` if this caller should perform the install (and must
+    /// call [`finish_install`] afterwards). Returns `Err(notify)` if another
+    /// caller is already installing — the caller should `notified().await` and
+    /// then check [`is_installed`].
+    fn begin_install(
+        &self,
+        server_id: &str,
+    ) -> Result<Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>> {
+        let mut in_flight = lock_unpoisoned(&self.in_flight);
+        if let Some(existing) = in_flight.get(server_id) {
+            Err(existing.clone())
+        } else {
+            let notify = Arc::new(tokio::sync::Notify::new());
+            in_flight.insert(server_id.to_string(), notify.clone());
+            Ok(notify)
+        }
+    }
+
+    /// Mark an install as finished and wake any waiters.
+    fn finish_install(&self, server_id: &str, success: bool) {
+        if success {
+            lock_unpoisoned(&self.installed).insert(server_id.to_string());
+        }
+        if let Some(notify) = lock_unpoisoned(&self.in_flight).remove(server_id) {
+            notify.notify_waiters();
+        }
+    }
+}
+
+impl Default for InstallTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Manages a pool of LSP clients.
 pub struct ServerRegistry {
@@ -181,6 +341,10 @@ pub struct ServerRegistry {
     workspace_root: PathBuf,
     /// Optional install confirmation callback.
     install_confirm: RwLock<Option<InstallRunnerFn>>,
+    /// Shared tracker to deduplicate installs across registries.
+    install_tracker: Option<Arc<InstallTracker>>,
+    /// Configurable caps for client fan-out and sub-root discovery.
+    limits: RegistryLimits,
 }
 
 impl std::fmt::Debug for ServerRegistry {
@@ -199,6 +363,55 @@ impl ServerRegistry {
         workspace_root: PathBuf,
         install_confirm: Option<InstallRunnerFn>,
     ) -> Self {
+        Self::new_with_limits(
+            servers,
+            workspace_root,
+            install_confirm,
+            RegistryLimits::default(),
+        )
+    }
+
+    /// Create a new registry with explicit runtime limits.
+    pub fn new_with_limits(
+        servers: HashMap<String, LspServerConfig>,
+        workspace_root: PathBuf,
+        install_confirm: Option<InstallRunnerFn>,
+        limits: RegistryLimits,
+    ) -> Self {
+        Self::with_install_tracker_and_limits(
+            servers,
+            workspace_root,
+            install_confirm,
+            None,
+            limits,
+        )
+    }
+
+    /// Create a new registry with a shared [`InstallTracker`] for cross-registry
+    /// install deduplication.
+    pub fn with_install_tracker(
+        servers: HashMap<String, LspServerConfig>,
+        workspace_root: PathBuf,
+        install_confirm: Option<InstallRunnerFn>,
+        install_tracker: Option<Arc<InstallTracker>>,
+    ) -> Self {
+        Self::with_install_tracker_and_limits(
+            servers,
+            workspace_root,
+            install_confirm,
+            install_tracker,
+            RegistryLimits::default(),
+        )
+    }
+
+    /// Create a new registry with a shared [`InstallTracker`] and explicit limits.
+    pub fn with_install_tracker_and_limits(
+        servers: HashMap<String, LspServerConfig>,
+        workspace_root: PathBuf,
+        install_confirm: Option<InstallRunnerFn>,
+        install_tracker: Option<Arc<InstallTracker>>,
+        limits: RegistryLimits,
+    ) -> Self {
         Self {
             servers,
             clients: AsyncMutex::new(HashMap::new()),
@@ -206,6 +419,8 @@ impl ServerRegistry {
             spawning: StdMutex::new(HashMap::new()),
             workspace_root,
             install_confirm: RwLock::new(install_confirm),
+            install_tracker,
+            limits,
         }
     }
 
@@ -250,6 +465,19 @@ impl ServerRegistry {
     /// Number of currently running LSP clients in this registry.
     pub async fn running_client_count(&self) -> usize {
         self.clients.lock().await.len()
+    }
+
+    /// Whether a matching client for `file` is already running.
+    pub async fn has_running_client_for(&self, file: &Path) -> bool {
+        let clients = self.clients.lock().await;
+        self.servers.iter().any(|(server_id, config)| {
+            if config.disabled || !config.matches_path(file) {
+                return false;
+            }
+            let root = nearest_root(file, &self.workspace_root, &config.root_markers);
+            let root = refine_root(&root, &self.workspace_root, &config.root_strategy);
+            clients.contains_key(&(server_id.clone(), root))
+        })
     }
 
     fn resolve_start_command(&self, config: &LspServerConfig) -> Option<Vec<String>> {
@@ -310,6 +538,7 @@ impl ServerRegistry {
     /// Returns a list of (server_id, client) pairs.
     pub async fn get_clients(&self, file: &Path) -> Vec<(String, Arc<LspClient>)> {
         let mut result = Vec::new();
+        let mut spawn_candidates = Vec::new();
 
         for (server_id, config) in &self.servers {
             if config.disabled || !config.matches_path(file) {
@@ -334,8 +563,25 @@ impl ServerRegistry {
                 }
             }
 
+            spawn_candidates.push((server_id.clone(), config, root, key));
+        }
+
+        let running_clients = self.clients.lock().await.len();
+        if running_clients >= self.limits.max_lsp_clients_per_registry {
+            tracing::warn!(
+                limit = self.limits.max_lsp_clients_per_registry,
+                running = running_clients,
+                "LSP client cap reached during on-demand spawn"
+            );
+            return result;
+        }
+
+        let remaining_capacity = self.limits.max_lsp_clients_per_registry - running_clients;
+        let skipped_spawns = spawn_candidates.len().saturating_sub(remaining_capacity);
+        for (server_id, config, root, key) in spawn_candidates.into_iter().take(remaining_capacity)
+        {
             // Try to spawn (with dedup).
-            match self.spawn_client(server_id, config, &root, &key).await {
+            match self.spawn_client(&server_id, config, &root, &key).await {
                 Ok(client) => {
                     result.push((server_id.clone(), client));
                 }
@@ -348,6 +594,14 @@ impl ServerRegistry {
                     self.broken.lock().await.insert(key, e.to_string());
                 }
             }
+        }
+
+        if skipped_spawns > 0 {
+            tracing::warn!(
+                limit = self.limits.max_lsp_clients_per_registry,
+                skipped = skipped_spawns,
+                "LSP client cap prevented some on-demand spawns"
+            );
         }
 
         result
@@ -482,7 +736,11 @@ impl ServerRegistry {
 
             // Binary exists on PATH, but may be a shim (e.g. rustup proxy) that fails
             // because the actual component isn't installed.
-            if config.install.is_some()
+            // Skip the preflight for servers that opt out (e.g. JVM-based servers
+            // where --version starts a heavy runtime and gets killed by the timeout).
+            let skip_preflight = install_skips_preflight(config);
+            if !skip_preflight
+                && config.install.is_some()
                 && let Some(binary_name) = binary.as_deref()
                 && which::which(binary_name).is_ok()
                 && let PreflightResult::NeedsInstall(reason) = self
@@ -500,64 +758,53 @@ impl ServerRegistry {
                 }
             }
 
-            let mut runtime_config = config.clone();
-            runtime_config.command = resolved_command;
-            apply_post_root_hook(&mut runtime_config, root);
+            let runtime_config = build_runtime_config(config, resolved_command, root);
             let create_result = LspClient::create(server_id, &runtime_config, root).await;
 
-            // If the process exited immediately (broken shim), try auto-install and retry.
-            match create_result {
-                Err(LspError::ProcessExitedImmediately {
-                    ref status,
-                    ref stderr,
-                }) if config.install.is_some() => {
-                    tracing::warn!(
-                        server = %server_id,
-                        %status,
-                        "server binary appears to be a broken shim, \
-                         attempting auto-install. stderr: {stderr}"
-                    );
+            let recovery_reason = if config.install.is_some() {
+                if let Err(error) = &create_result {
+                    self.recovery_install_reason(error, binary.as_deref(), config, root)
+                        .await
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(reason) = recovery_reason {
+                if let Some(binary_name) = binary.as_deref() {
+                    match &create_result {
+                        Err(LspError::ProcessExitedImmediately { status, stderr }) => {
+                            tracing::warn!(
+                                server = %server_id,
+                                binary = %binary_name,
+                                %status,
+                                "server exited immediately; recovery indicates missing install ({reason}); attempting auto-install. stderr: {stderr}"
+                            );
+                        }
+                        Err(LspError::ServerExited { details }) => {
+                            tracing::warn!(
+                                server = %server_id,
+                                binary = %binary_name,
+                                "server exited during init; recovery indicates missing install ({reason}); attempting auto-install. details: {details}"
+                            );
+                        }
+                        _ => {}
+                    }
                     if let Some(recovered) = self
-                        .attempt_recovery_install(server_id, config, binary.as_deref(), root)
+                        .attempt_recovery_install(server_id, config, Some(binary_name), root)
                         .await
                     {
                         recovered
                     } else {
                         create_result
                     }
+                } else {
+                    create_result
                 }
-                // Some shims don't exit within the 30ms early-death window but still
-                // terminate before responding to `initialize`.
-                Err(LspError::ServerExited) if config.install.is_some() => {
-                    if let Some(binary) = binary.as_deref() {
-                        match self.preflight_version_check(binary, config, root).await {
-                            PreflightResult::NeedsInstall(reason) => {
-                                tracing::warn!(
-                                    server = %server_id,
-                                    binary = %binary,
-                                    "server exited during init; preflight indicates missing install ({reason}); attempting auto-install"
-                                );
-                                if let Some(recovered) = self
-                                    .attempt_recovery_install(
-                                        server_id,
-                                        config,
-                                        Some(binary),
-                                        root,
-                                    )
-                                    .await
-                                {
-                                    recovered
-                                } else {
-                                    create_result
-                                }
-                            }
-                            _ => create_result,
-                        }
-                    } else {
-                        create_result
-                    }
-                }
-                other => other,
+            } else {
+                create_result
             }
         }
         .await;
@@ -575,6 +822,9 @@ impl ServerRegistry {
     }
 
     /// Attempt to auto-install a server binary.
+    ///
+    /// When an [`InstallTracker`] is present, this coordinates with other
+    /// registries so only one install per `server_id` is attempted at a time.
     async fn try_auto_install(
         &self,
         server_id: &str,
@@ -585,20 +835,110 @@ impl ServerRegistry {
             return false;
         };
 
+        // Fast path: another registry already installed this server.
+        if let Some(tracker) = &self.install_tracker {
+            if tracker.is_installed(server_id) {
+                return self.binary_available(binary);
+            }
+
+            // Coordinate with other registries: only one installs at a time.
+            match tracker.begin_install(server_id) {
+                Ok(notify) => {
+                    // We own the install slot — run the actual install below.
+                    let result = self.run_install(server_id, install_config, binary).await;
+                    tracker.finish_install(server_id, result);
+                    // Notify is dropped via finish_install; also drop our Arc.
+                    drop(notify);
+                    return result;
+                }
+                Err(wait) => {
+                    // Another registry is installing — wait for it.
+                    wait.notified().await;
+                    return self.binary_available(binary);
+                }
+            }
+        }
+
+        // No tracker (standalone registry) — install directly.
+        self.run_install(server_id, install_config, binary).await
+    }
+
+    /// Actually perform the install via the runner callback.
+    async fn run_install(
+        &self,
+        server_id: &str,
+        install_config: &crate::server_config::InstallConfig,
+        binary: &str,
+    ) -> bool {
         let cmd = install_config.method.install_command(binary);
 
         let runner = self.install_confirm.read().ok().and_then(|g| g.clone());
         let Some(runner) = runner else {
-            // No runner callback — skip auto-install.
             return false;
         };
 
+        let binary_was_available = self.binary_available(binary);
+
         let prompt = format!("Install {server_id} via `{}`?", cmd.join(" "));
+        let lock = match open_install_lock(server_id) {
+            Ok(lock) => lock,
+            Err(error) => {
+                tracing::warn!(
+                    server = %server_id,
+                    "failed to prepare auto-install lock: {error}"
+                );
+                None
+            }
+        };
+
+        if let Some((lock_path, mut install_lock)) = lock {
+            let deadline = Instant::now() + INSTALL_LOCK_TIMEOUT;
+            let _install_guard = loop {
+                match install_lock.try_write() {
+                    Ok(guard) => break Some(guard),
+                    Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            tracing::warn!(
+                                server = %server_id,
+                                lock = %lock_path.display(),
+                                timeout_secs = INSTALL_LOCK_TIMEOUT.as_secs(),
+                                "timed out waiting for auto-install lock"
+                            );
+                            return !binary_was_available && self.binary_available(binary);
+                        }
+                        sleep(INSTALL_LOCK_POLL_INTERVAL).await;
+                    }
+                    Err(source) => {
+                        tracing::warn!(
+                            server = %server_id,
+                            lock = %lock_path.display(),
+                            "failed to acquire auto-install lock: {source}"
+                        );
+                        break None;
+                    }
+                }
+            };
+
+            if !binary_was_available && self.binary_available(binary) {
+                tracing::debug!(
+                    server = %server_id,
+                    lock = %lock_path.display(),
+                    "auto-install skipped because binary became available while waiting"
+                );
+                return true;
+            }
+
+            if !runner(&prompt, &cmd).await {
+                return false;
+            }
+
+            return self.binary_available(binary);
+        }
+
         if !runner(&prompt, &cmd).await {
             return false;
         }
 
-        // Verify the binary is now available.
         self.binary_available(binary)
     }
 
@@ -614,9 +954,34 @@ impl ServerRegistry {
             return None;
         }
         let re_resolved = self.resolve_start_command(config)?;
-        let mut retry_config = config.clone();
-        retry_config.command = re_resolved;
+        let retry_config = build_runtime_config(config, re_resolved, root);
         Some(LspClient::create(server_id, &retry_config, root).await)
+    }
+
+    async fn recovery_install_reason(
+        &self,
+        error: &LspError,
+        binary: Option<&str>,
+        config: &LspServerConfig,
+        root: &Path,
+    ) -> Option<&'static str> {
+        let binary = binary?;
+        match error {
+            LspError::ProcessExitedImmediately { stderr, .. } => {
+                output_indicates_missing_install(binary, stderr)
+            }
+            LspError::ServerExited { .. } => {
+                if install_skips_preflight(config) {
+                    None
+                } else {
+                    match self.preflight_version_check(binary, config, root).await {
+                        PreflightResult::NeedsInstall(reason) => Some(reason),
+                        _ => None,
+                    }
+                }
+            }
+            _ => None,
+        }
     }
 
     async fn preflight_version_check(
@@ -758,11 +1123,16 @@ impl ServerRegistry {
     }
 
     pub async fn document_symbol(&self, path: &Path) -> Option<DocumentSymbolResponse> {
-        self.first_match(
-            path,
-            |client| async move { client.document_symbol(path).await },
-        )
-        .await
+        let clients = self.get_clients(path).await;
+        for (_, client) in &clients {
+            let _ = client.ensure_open(path).await;
+        }
+        for (_, client) in clients {
+            if let Some(result) = client.document_symbol(path).await {
+                return Some(result);
+            }
+        }
+        None
     }
 
     pub async fn workspace_symbol(&self, query: &str) -> Vec<SymbolInformation> {
@@ -806,72 +1176,146 @@ impl ServerRegistry {
             .map(|(id, config)| (id.clone(), config.clone()))
             .collect();
 
-        // Skip servers that already have a running client (from warmup or prior
-        // file-based operations) — workspace_symbol fans out to ALL clients.
-        let running_server_ids: std::collections::HashSet<String> = {
-            let clients = self.clients.lock().await;
-            clients.keys().map(|(sid, _)| sid.clone()).collect()
-        };
-
         for (server_id, config) in &all_servers {
-            if running_server_ids.contains(server_id) {
-                continue;
-            }
-
             // Try workspace_root first, then walk subdirectories for root markers.
-            let root = if dir_has_any_marker(&self.workspace_root, &config.root_markers) {
-                self.workspace_root.clone()
-            } else if let Some(sub_root) =
-                Self::find_sub_root(&self.workspace_root, &config.root_markers, 3)
-            {
-                sub_root
-            } else {
-                continue;
-            };
+            let roots: Vec<PathBuf> =
+                if dir_has_any_marker(&self.workspace_root, &config.root_markers) {
+                    vec![self.workspace_root.clone()]
+                } else {
+                    let found = self.find_sub_roots(&self.workspace_root, &config.root_markers, 3);
+                    if found.is_empty() {
+                        continue;
+                    }
+                    found
+                };
 
-            let key: ClientKey = (server_id.clone(), root.clone());
-
-            if self.broken.lock().await.contains_key(&key) {
-                continue;
+            if self.clients.lock().await.len() >= self.limits.max_lsp_clients_per_registry {
+                tracing::warn!(
+                    limit = self.limits.max_lsp_clients_per_registry,
+                    "LSP client cap reached; skipping remaining servers"
+                );
+                break;
             }
 
-            {
-                let clients = self.clients.lock().await;
-                if clients.contains_key(&key) {
+            for root in roots {
+                if !config.extensions.is_empty()
+                    && !Self::has_matching_files(&root, &config.extensions, 3)
+                {
                     continue;
                 }
-            }
 
-            match self.spawn_client(server_id, config, &root, &key).await {
-                Ok(_) => {}
-                Err(e) => {
+                if self.clients.lock().await.len() >= self.limits.max_lsp_clients_per_registry {
                     tracing::warn!(
-                        server = %server_id,
-                        root = %root.display(),
-                        "failed to spawn LSP client for workspace_symbol: {e}"
+                        limit = self.limits.max_lsp_clients_per_registry,
+                        "LSP client cap reached while prewarming workspace roots"
                     );
-                    self.broken.lock().await.insert(key, e.to_string());
+                    break;
+                }
+
+                let key: ClientKey = (server_id.clone(), root.clone());
+
+                if self.broken.lock().await.contains_key(&key) {
+                    continue;
+                }
+
+                {
+                    let clients = self.clients.lock().await;
+                    if clients.contains_key(&key) {
+                        continue;
+                    }
+                }
+
+                match self.spawn_client(server_id, config, &root, &key).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            server = %server_id,
+                            root = %root.display(),
+                            "failed to spawn LSP client for workspace_symbol: {e}"
+                        );
+                        self.broken.lock().await.insert(key, e.to_string());
+                    }
                 }
             }
         }
     }
 
-    /// Walk subdirectories of `dir` up to `max_depth` levels looking for the
-    /// first directory that contains any of the given root markers.
-    fn find_sub_root(dir: &Path, markers: &[String], max_depth: usize) -> Option<PathBuf> {
-        Self::walk_for_sub_root(dir, markers, 0, max_depth)
+    /// Walk subdirectories of `dir` up to `max_depth` levels looking for all
+    /// directories that contain any of the given root markers.
+    fn find_sub_roots(&self, dir: &Path, markers: &[String], max_depth: usize) -> Vec<PathBuf> {
+        let mut results = Vec::new();
+        Self::walk_for_sub_roots(dir, markers, 0, max_depth, &mut results);
+        if results.len() > self.limits.max_sub_roots_per_server {
+            tracing::warn!(
+                found = results.len(),
+                limit = self.limits.max_sub_roots_per_server,
+                "LSP sub-root discovery capped"
+            );
+            results.truncate(self.limits.max_sub_roots_per_server);
+        }
+        results
     }
 
-    fn walk_for_sub_root(
+    fn has_matching_files(dir: &Path, extensions: &[String], max_depth: usize) -> bool {
+        Self::scan_for_extensions(dir, extensions, 0, max_depth)
+    }
+
+    fn scan_for_extensions(
+        dir: &Path,
+        extensions: &[String],
+        depth: usize,
+        max_depth: usize,
+    ) -> bool {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        let mut subdirs = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+                    && extensions
+                        .iter()
+                        .any(|extension| !extension.starts_with('.') && extension == file_name)
+                {
+                    return true;
+                }
+                if let Some(ext) = path.extension().and_then(|extension| extension.to_str()) {
+                    let dotted = format!(".{ext}");
+                    if extensions.iter().any(|extension| extension == &dotted) {
+                        return true;
+                    }
+                }
+            } else if path.is_dir() && depth < max_depth {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !name_str.starts_with('.') && name_str != "node_modules" {
+                    subdirs.push(path);
+                }
+            }
+        }
+        for subdir in subdirs {
+            if Self::scan_for_extensions(&subdir, extensions, depth + 1, max_depth) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn walk_for_sub_roots(
         dir: &Path,
         markers: &[String],
         depth: usize,
         max_depth: usize,
-    ) -> Option<PathBuf> {
+        results: &mut Vec<PathBuf>,
+    ) {
         if depth > max_depth {
-            return None;
+            return;
         }
-        let entries = std::fs::read_dir(dir).ok()?;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
         let mut subdirs = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
@@ -883,16 +1327,15 @@ impl ServerRegistry {
                 continue;
             }
             if dir_has_any_marker(&path, markers) {
-                return Some(path);
+                results.push(path);
+                // Don't recurse into a found root — it is itself a project root.
+                continue;
             }
             subdirs.push(path);
         }
         for sub in subdirs {
-            if let Some(found) = Self::walk_for_sub_root(&sub, markers, depth + 1, max_depth) {
-                return Some(found);
-            }
+            Self::walk_for_sub_roots(&sub, markers, depth + 1, max_depth, results);
         }
-        None
     }
 
     pub async fn implementation(
@@ -1032,28 +1475,56 @@ impl ServerRegistry {
         only: Option<Vec<CodeActionKind>>,
         diagnostics: Vec<Diagnostic>,
     ) -> Vec<CodeActionOrCommand> {
-        let clients = self.client_handles_for_path(path).await;
-
+        let clients = self.get_clients(path).await;
         if clients.is_empty() {
             return Vec::new();
         }
+
         let path = path.to_path_buf();
-        self.fan_out_all(clients, "code_action", move |client| {
+        let mut tasks = JoinSet::new();
+        for (server_id, client) in clients {
             let path = path.clone();
-            let range = range;
             let only = only.clone();
             let diagnostics = diagnostics.clone();
-            async move { client.code_action(&path, range, only, diagnostics).await }
-        })
-        .await
+            tasks.spawn(async move {
+                let mut actions = client.code_action(&path, range, only, diagnostics).await;
+                for action in &mut actions {
+                    attach_code_action_server_id(action, &server_id);
+                }
+                actions
+            });
+        }
+
+        let mut all = Vec::new();
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(mut items) => all.append(&mut items),
+                Err(e) => tracing::debug!("code_action query task failed: {e}"),
+            }
+        }
+        all
     }
 
     /// Resolve a code action (populate its `edit` field) via `codeAction/resolve`.
     ///
     /// `path` is used to route to the correct language server.
     pub async fn code_action_resolve(&self, path: &Path, action: CodeAction) -> Option<CodeAction> {
+        let mut request_action = action.clone();
+        if let Some(server_id) = code_action_server_id(&action) {
+            clear_code_action_server_id(&mut request_action);
+            let client = self.get_clients(path).await.into_iter().find_map(
+                |(candidate_server_id, client)| {
+                    (candidate_server_id == server_id).then_some(client)
+                },
+            );
+            return match client {
+                Some(client) => client.code_action_resolve(request_action).await,
+                None => None,
+            };
+        }
+
         self.first_match(path, |client| {
-            let action = action.clone();
+            let action = request_action.clone();
             async move { client.code_action_resolve(action).await }
         })
         .await
@@ -1072,6 +1543,27 @@ impl ServerRegistry {
         for client in clients {
             client.shutdown().await;
         }
+    }
+
+    /// Emergency: shut down up to `count` clients to relieve FD pressure.
+    /// Returns the number of clients actually shut down.
+    pub async fn shed_clients(&self, count: usize) -> usize {
+        let to_shed: Vec<Arc<LspClient>> = {
+            let mut map = self.clients.lock().await;
+            let keys: Vec<ClientKey> = map.keys().take(count).cloned().collect();
+            let mut removed = Vec::with_capacity(keys.len());
+            for key in &keys {
+                if let Some(client) = map.remove(key) {
+                    removed.push(client);
+                }
+            }
+            removed
+        };
+        let shed_count = to_shed.len();
+        for client in to_shed {
+            client.shutdown().await;
+        }
+        shed_count
     }
 }
 
@@ -1095,6 +1587,29 @@ fn apply_post_root_hook(config: &mut LspServerConfig, root: &Path) {
                         );
                     }
                 }
+            }
+        }
+        PostRootHook::JdtlsDataDir => {
+            if !config.command.iter().any(|arg| arg == "-data") {
+                let data_dir = codex_home_dir()
+                    .unwrap_or_else(std::env::temp_dir)
+                    .join("lsp")
+                    .join("jdtls-data")
+                    .join(sha1_short(root));
+                let config_dir = data_dir.join("config");
+
+                let _ = std::fs::create_dir_all(&data_dir);
+                let _ = std::fs::create_dir_all(&config_dir);
+                config.command.push("-data".into());
+                config.command.push(data_dir.to_string_lossy().to_string());
+                config.command.push("-configuration".into());
+                config
+                    .command
+                    .push(config_dir.to_string_lossy().to_string());
+                config.command.push(format!(
+                    "--jvm-arg=-Dosgi.configuration.area={}",
+                    config_dir.to_string_lossy()
+                ));
             }
         }
     }
@@ -1208,6 +1723,45 @@ fn clear_call_hierarchy_server_id(item: &mut CallHierarchyItem) {
     }
 }
 
+fn attach_code_action_server_id(action: &mut CodeActionOrCommand, server_id: &str) {
+    let CodeActionOrCommand::CodeAction(action) = action else {
+        return;
+    };
+    let mut data = match action.data.take() {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            let mut map = serde_json::Map::new();
+            map.insert("value".to_string(), other);
+            map
+        }
+        None => serde_json::Map::new(),
+    };
+    data.insert(
+        CODE_ACTION_SERVER_ID_KEY.to_string(),
+        Value::String(server_id.to_string()),
+    );
+    action.data = Some(Value::Object(data));
+}
+
+fn code_action_server_id(action: &CodeAction) -> Option<&str> {
+    action
+        .data
+        .as_ref()
+        .and_then(Value::as_object)
+        .and_then(|map| map.get(CODE_ACTION_SERVER_ID_KEY))
+        .and_then(Value::as_str)
+}
+
+fn clear_code_action_server_id(action: &mut CodeAction) {
+    let Some(Value::Object(map)) = action.data.as_mut() else {
+        return;
+    };
+    map.remove(CODE_ACTION_SERVER_ID_KEY);
+    if map.is_empty() {
+        action.data = None;
+    }
+}
+
 fn range_key(range: &Range) -> (u32, u32, u32, u32) {
     (
         range.start.line,
@@ -1252,14 +1806,41 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     #[cfg(unix)]
-    use std::sync::Mutex;
-    #[cfg(unix)]
     use std::sync::atomic::AtomicUsize;
     #[cfg(unix)]
     use std::sync::atomic::Ordering;
 
     #[cfg(unix)]
-    static PATH_MUTEX: Mutex<()> = Mutex::new(());
+    static PATH_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, old }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.old {
+                Some(value) => unsafe {
+                    std::env::set_var(self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(self.key);
+                },
+            }
+        }
+    }
 
     fn rust_analyzer_like_rustup_error() -> &'static str {
         "error: Unknown binary 'rust-analyzer' in official toolchain '1.93.0-aarch64-apple-darwin'.\n\
@@ -1346,17 +1927,23 @@ help: run `rustup component add rust-analyzer`\n"
     }
 
     #[cfg(unix)]
-    fn write_executable(dir: &tempfile::TempDir, name: &str, contents: &str) -> std::path::PathBuf {
+    fn write_executable_at(dir: &Path, name: &str, contents: &str) -> std::path::PathBuf {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
 
-        let path = dir.path().join(name);
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(contents.as_bytes()).unwrap();
         let mut perm = f.metadata().unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&path, perm).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn write_executable(dir: &tempfile::TempDir, name: &str, contents: &str) -> std::path::PathBuf {
+        write_executable_at(dir.path(), name, contents)
     }
 
     #[cfg(unix)]
@@ -1387,9 +1974,12 @@ help: run `rustup component add rust-analyzer`\n"
 
     #[cfg(unix)]
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)] // Intentional: serializes tests that mutate PATH
     async fn spawn_client_prompts_install_on_preflight_needs_install_and_decline() {
-        let _path_lock = PATH_MUTEX.lock().unwrap();
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _codex_home_guard =
+            EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let _path_lock = PATH_MUTEX.lock().await;
         let temp_bin = tempfile::TempDir::new().unwrap();
         let _guard = PathGuard::prepend(temp_bin.path());
 
@@ -1402,7 +1992,7 @@ if [ \"$1\" = \"--version\" ]; then\n\
 EOF\n\
   exit 1\n\
 fi\n\
-sleep 60\n",
+echo 'unexpected invocation without --version' >&2\nexit 1\n",
             out = rust_analyzer_like_rustup_error()
         );
         let _path = write_executable(&temp_bin, "rust-analyzer", &script);
@@ -1423,6 +2013,7 @@ sleep 60\n",
                 method: crate::server_config::InstallMethod::Cargo {
                     package: Some("rust-analyzer".into()),
                 },
+                skip_preflight: false,
             }),
             root_strategy: Default::default(),
             post_root_hook: Default::default(),
@@ -1505,5 +2096,518 @@ sleep 60\n",
         let opts = config.initialization_options.unwrap();
         let python_path = opts["python"]["pythonPath"].as_str().unwrap();
         assert!(python_path.contains(".venv/bin/python3"));
+    }
+
+    #[test]
+    fn apply_post_root_hook_injects_jdtls_data_dir() {
+        let _env_lock = ENV_MUTEX.blocking_lock();
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+
+        let mut config = LspServerConfig::new(vec![".java".into()], vec!["jdtls".into()], vec![]);
+        config.post_root_hook = crate::server_config::PostRootHook::JdtlsDataDir;
+
+        apply_post_root_hook(&mut config, root.path());
+
+        let data_flag = config
+            .command
+            .iter()
+            .position(|arg| arg == "-data")
+            .unwrap();
+        let expected_dir = codex_home
+            .path()
+            .join("lsp")
+            .join("jdtls-data")
+            .join(sha1_short(root.path()));
+        let expected_config_dir = expected_dir.join("config");
+        assert_eq!(
+            config.command[data_flag + 1],
+            expected_dir.to_string_lossy()
+        );
+        assert!(config.command.contains(&"-data".to_string()));
+        let config_flag = config
+            .command
+            .iter()
+            .position(|arg| arg == "-configuration")
+            .unwrap();
+        assert_eq!(
+            config.command[config_flag + 1],
+            expected_config_dir.to_string_lossy()
+        );
+        let jvm_arg = config
+            .command
+            .iter()
+            .find(|arg| arg.starts_with("--jvm-arg=-Dosgi.configuration.area="));
+        assert!(jvm_arg.is_some(), "should inject -Dosgi.configuration.area");
+        let config_path = &jvm_arg.unwrap()["--jvm-arg=-Dosgi.configuration.area=".len()..];
+        assert!(
+            config_path.ends_with("/config") || config_path.ends_with("\\config"),
+            "config dir should be under data dir, got {config_path}"
+        );
+        assert!(
+            Path::new(config_path).exists(),
+            "config dir should be created"
+        );
+        assert!(expected_dir.exists());
+        assert!(expected_config_dir.exists());
+    }
+
+    #[cfg(unix)]
+    fn installable_server_config(binary: &str) -> LspServerConfig {
+        installable_server_config_with_skip_preflight(binary, false)
+    }
+
+    #[cfg(unix)]
+    fn installable_server_config_with_skip_preflight(
+        binary: &str,
+        skip_preflight: bool,
+    ) -> LspServerConfig {
+        let mut config = LspServerConfig::new(vec![".java".into()], vec![binary.into()], vec![]);
+        config.install = Some(crate::server_config::InstallConfig {
+            method: crate::server_config::InstallMethod::Brew {
+                formula: Some(binary.into()),
+            },
+            skip_preflight,
+        });
+        config
+    }
+
+    #[cfg(unix)]
+    fn node_missing_module_output(binary: &str) -> String {
+        format!("Error: Cannot find module '{binary}'\n")
+    }
+
+    #[test]
+    fn apply_post_root_hook_preserves_existing_jdtls_data_dir() {
+        let root = tempfile::TempDir::new().unwrap();
+
+        let mut config = LspServerConfig::new(
+            vec![".java".into()],
+            vec!["jdtls".into(), "-data".into(), "/custom/data".into()],
+            vec![],
+        );
+        config.post_root_hook = crate::server_config::PostRootHook::JdtlsDataDir;
+
+        apply_post_root_hook(&mut config, root.path());
+
+        assert_eq!(
+            config.command,
+            vec!["jdtls", "-data", "/custom/data"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_install_reason_skips_preflight_for_skip_preflight_servers() {
+        let _path_lock = PATH_MUTEX.lock().await;
+        let temp_bin = tempfile::TempDir::new().unwrap();
+        let _guard = PathGuard::prepend(temp_bin.path());
+        let root = tempfile::TempDir::new().unwrap();
+        let marker = root.path().join("skip-preflight-marker");
+        let binary = "test-skip-preflight-recovery";
+        let script = format!(
+            "#!/bin/sh\n\
+if [ \"$1\" = \"--version\" ]; then\n\
+  touch \"{marker}\"\n\
+fi\n\
+exit 1\n",
+            marker = marker.display()
+        );
+        write_executable(&temp_bin, binary, &script);
+
+        let config = installable_server_config_with_skip_preflight(binary, true);
+        let registry = ServerRegistry::new(HashMap::new(), root.path().to_path_buf(), None);
+
+        let reason = registry
+            .recovery_install_reason(
+                &LspError::ServerExited {
+                    details: "server exited".into(),
+                },
+                Some(binary),
+                &config,
+                root.path(),
+            )
+            .await;
+
+        assert_eq!(reason, None);
+        assert!(
+            !marker.exists(),
+            "skip-preflight recovery should not invoke `{binary} --version`"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_install_reason_runs_preflight_for_server_exited_when_allowed() {
+        let _path_lock = PATH_MUTEX.lock().await;
+        let temp_bin = tempfile::TempDir::new().unwrap();
+        let _guard = PathGuard::prepend(temp_bin.path());
+        let root = tempfile::TempDir::new().unwrap();
+        let marker = root.path().join("preflight-marker");
+        let binary = "test-server-exited-preflight";
+        let script = format!(
+            "#!/bin/sh\n\
+if [ \"$1\" = \"--version\" ]; then\n\
+  touch \"{marker}\"\n\
+  cat <<'EOF' >&2\n\
+{out}EOF\n\
+  exit 1\n\
+fi\n\
+exit 0\n",
+            marker = marker.display(),
+            out = node_missing_module_output(binary)
+        );
+        write_executable(&temp_bin, binary, &script);
+
+        let config = installable_server_config(binary);
+        let registry = ServerRegistry::new(HashMap::new(), root.path().to_path_buf(), None);
+
+        let reason = registry
+            .recovery_install_reason(
+                &LspError::ServerExited {
+                    details: "server exited".into(),
+                },
+                Some(binary),
+                &config,
+                root.path(),
+            )
+            .await;
+
+        assert_eq!(reason, Some("node shim: cannot find module"));
+        assert!(
+            marker.exists(),
+            "non-skip-preflight recovery should run preflight"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_client_does_not_prompt_install_on_generic_process_exit_for_skip_preflight() {
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _codex_home_guard =
+            EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let _path_lock = PATH_MUTEX.lock().await;
+        let temp_bin = tempfile::TempDir::new().unwrap();
+        let _guard = PathGuard::prepend(temp_bin.path());
+        let root = tempfile::TempDir::new().unwrap();
+        let binary = "test-generic-process-exit";
+        write_executable(
+            &temp_bin,
+            binary,
+            "#!/bin/sh\necho 'generic failure' >&2\nexit 1\n",
+        );
+
+        let config = installable_server_config_with_skip_preflight(binary, true);
+        let called = Arc::new(AtomicUsize::new(0));
+        let called2 = called.clone();
+        let runner: InstallRunnerFn = Arc::new(move |_prompt, _cmd| {
+            called2.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { false })
+        });
+
+        let mut servers = HashMap::new();
+        let server_id = "generic-exit";
+        servers.insert(server_id.to_string(), config.clone());
+        let registry = ServerRegistry::new(servers, root.path().to_path_buf(), Some(runner));
+        let key: ClientKey = (server_id.to_string(), root.path().to_path_buf());
+
+        let res = registry
+            .spawn_client(server_id, &config, root.path(), &key)
+            .await;
+
+        assert!(matches!(
+            res,
+            Err(LspError::ProcessExitedImmediately { .. })
+        ));
+        assert_eq!(called.load(Ordering::SeqCst), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_client_process_exit_with_missing_install_signal_attempts_install() {
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _codex_home_guard =
+            EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let _path_lock = PATH_MUTEX.lock().await;
+        let temp_bin = tempfile::TempDir::new().unwrap();
+        let _guard = PathGuard::prepend(temp_bin.path());
+        let root = tempfile::TempDir::new().unwrap();
+        let binary = "test-process-exit-missing-install";
+        let script = format!(
+            "#!/bin/sh\n\
+cat <<'EOF' >&2\n\
+{out}EOF\n\
+exit 1\n",
+            out = node_missing_module_output(binary)
+        );
+        write_executable(&temp_bin, binary, &script);
+
+        let config = installable_server_config_with_skip_preflight(binary, true);
+        let called = Arc::new(AtomicUsize::new(0));
+        let called2 = called.clone();
+        let runner: InstallRunnerFn = Arc::new(move |_prompt, _cmd| {
+            called2.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move { false })
+        });
+
+        let mut servers = HashMap::new();
+        let server_id = "process-exit-missing-install";
+        servers.insert(server_id.to_string(), config.clone());
+        let registry = ServerRegistry::new(servers, root.path().to_path_buf(), Some(runner));
+        let key: ClientKey = (server_id.to_string(), root.path().to_path_buf());
+
+        let res = registry
+            .spawn_client(server_id, &config, root.path(), &key)
+            .await;
+
+        assert!(matches!(
+            res,
+            Err(LspError::ProcessExitedImmediately { .. })
+        ));
+        assert_eq!(called.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_retry_applies_post_root_hook() {
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let root = tempfile::TempDir::new().unwrap();
+        let broken_bin_dir = tempfile::TempDir::new().unwrap();
+        let binary = "test-jdtls-retry-hook";
+        let broken_script = format!(
+            "#!/bin/sh\n\
+cat <<'EOF' >&2\n\
+{out}EOF\n\
+exit 1\n",
+            out = node_missing_module_output(binary)
+        );
+        let broken_path = write_executable(&broken_bin_dir, "broken-jdtls", &broken_script);
+        let args_log = codex_home.path().join("retry-args.log");
+        let managed_bin = codex_home.path().join("lsp").join("bin");
+
+        let mut config = installable_server_config_with_skip_preflight(binary, true);
+        config.command_candidates = vec![vec![broken_path.to_string_lossy().to_string()]];
+        config.post_root_hook = crate::server_config::PostRootHook::JdtlsDataDir;
+
+        let runner: InstallRunnerFn = Arc::new(move |_prompt, _cmd| {
+            let managed_bin = managed_bin.clone();
+            let args_log = args_log.clone();
+            let binary = binary.to_string();
+            Box::pin(async move {
+                let script = format!(
+                    "#!/bin/sh\n\
+printf '%s\\n' \"$@\" > \"{log}\"\n\
+exit 1\n",
+                    log = args_log.display()
+                );
+                write_executable_at(&managed_bin, &binary, &script);
+                true
+            })
+        });
+
+        let mut servers = HashMap::new();
+        let server_id = "retry-hook";
+        servers.insert(server_id.to_string(), config.clone());
+        let registry = ServerRegistry::new(servers, root.path().to_path_buf(), Some(runner));
+        let key: ClientKey = (server_id.to_string(), root.path().to_path_buf());
+
+        let res = registry
+            .spawn_client(server_id, &config, root.path(), &key)
+            .await;
+
+        assert!(matches!(
+            res,
+            Err(LspError::ProcessExitedImmediately { .. })
+        ));
+        let args = std::fs::read_to_string(codex_home.path().join("retry-args.log")).unwrap();
+        let expected_dir = codex_home
+            .path()
+            .join("lsp")
+            .join("jdtls-data")
+            .join(sha1_short(root.path()));
+        let expected_config_dir = expected_dir.join("config");
+        assert!(
+            args.contains("-data\n"),
+            "retry command should include -data: {args}"
+        );
+        assert!(
+            args.contains(&format!("{}\n", expected_dir.display())),
+            "retry command should use managed jdtls data dir: {args}"
+        );
+        assert!(
+            args.contains("-configuration\n"),
+            "retry command should include -configuration: {args}"
+        );
+        assert!(
+            args.contains(&format!("{}\n", expected_config_dir.display())),
+            "retry command should use managed jdtls config dir: {args}"
+        );
+        assert!(
+            args.contains(&format!(
+                "--jvm-arg=-Dosgi.configuration.area={}",
+                expected_config_dir.display()
+            )),
+            "retry command should include the osgi config area jvm arg: {args}"
+        );
+    }
+
+    #[test]
+    fn prewarm_skips_server_without_matching_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Main.java"), "class Main {}\n").unwrap();
+
+        assert!(!ServerRegistry::has_matching_files(
+            tmp.path(),
+            &[".rb".to_string()],
+            3
+        ));
+    }
+
+    #[test]
+    fn prewarm_starts_server_with_matching_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Main.java"), "class Main {}\n").unwrap();
+
+        assert!(ServerRegistry::has_matching_files(
+            tmp.path(),
+            &[".java".to_string()],
+            3
+        ));
+    }
+
+    #[test]
+    fn has_matching_files_respects_depth() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let nested = tmp.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("Main.java"), "class Main {}\n").unwrap();
+
+        assert!(ServerRegistry::has_matching_files(
+            tmp.path(),
+            &[".java".to_string()],
+            3
+        ));
+        assert!(!ServerRegistry::has_matching_files(
+            tmp.path(),
+            &[".java".to_string()],
+            2
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn auto_install_deduplicates_same_server() {
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let root = tempfile::TempDir::new().unwrap();
+        let binary = "test-java-lsp";
+        let server_id = "jdtls";
+        let config = installable_server_config(binary);
+        let managed_bin = codex_home.path().join("lsp").join("bin");
+        let install_calls = Arc::new(AtomicUsize::new(0));
+        let install_calls_runner = install_calls.clone();
+        let runner: InstallRunnerFn = Arc::new(move |_prompt, _cmd| {
+            let managed_bin = managed_bin.clone();
+            let binary = binary.to_string();
+            let install_calls = install_calls_runner.clone();
+            Box::pin(async move {
+                install_calls.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                write_executable_at(&managed_bin, &binary, "#!/bin/sh\nexit 0\n");
+                true
+            })
+        });
+
+        let mut servers = HashMap::new();
+        servers.insert(server_id.to_string(), config.clone());
+        let registry = Arc::new(ServerRegistry::new(
+            servers,
+            root.path().to_path_buf(),
+            Some(runner),
+        ));
+
+        let (first, second) = tokio::join!(
+            registry.try_auto_install(server_id, &config, binary),
+            registry.try_auto_install(server_id, &config, binary),
+        );
+
+        assert!(first);
+        assert!(second);
+        assert_eq!(install_calls.load(Ordering::SeqCst), 1);
+        assert!(registry.binary_available(binary));
+        assert!(
+            codex_home
+                .path()
+                .join("lsp")
+                .join(".install-locks")
+                .join(format!("{}.lock", install_lock_name(server_id)))
+                .exists()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn auto_install_waiter_retries_after_failed_install() {
+        let _env_lock = ENV_MUTEX.lock().await;
+        let codex_home = tempfile::TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().to_string_lossy().as_ref());
+        let root = tempfile::TempDir::new().unwrap();
+        let binary = "test-java-lsp-retry";
+        let server_id = "jdtls";
+        let config = installable_server_config(binary);
+        let managed_bin = codex_home.path().join("lsp").join("bin");
+        let install_calls = Arc::new(AtomicUsize::new(0));
+        let install_calls_runner = install_calls.clone();
+        let runner: InstallRunnerFn = Arc::new(move |_prompt, _cmd| {
+            let managed_bin = managed_bin.clone();
+            let binary = binary.to_string();
+            let install_calls = install_calls_runner.clone();
+            Box::pin(async move {
+                let attempt = install_calls.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+                if attempt == 0 {
+                    false
+                } else {
+                    write_executable_at(&managed_bin, &binary, "#!/bin/sh\nexit 0\n");
+                    true
+                }
+            })
+        });
+
+        let mut servers = HashMap::new();
+        servers.insert(server_id.to_string(), config.clone());
+        let registry = Arc::new(ServerRegistry::new(
+            servers,
+            root.path().to_path_buf(),
+            Some(runner),
+        ));
+
+        let (first, second) = tokio::join!(
+            registry.try_auto_install(server_id, &config, binary),
+            registry.try_auto_install(server_id, &config, binary),
+        );
+
+        assert_eq!(install_calls.load(Ordering::SeqCst), 2);
+        assert_eq!([first, second].into_iter().filter(|ok| *ok).count(), 1);
+        assert!(registry.binary_available(binary));
+    }
+
+    #[test]
+    fn managed_bin_dirs_includes_gem() {
+        let _env_lock = ENV_MUTEX.blocking_lock();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _guard = EnvVarGuard::set("CODEX_HOME", tmp.path().to_string_lossy().as_ref());
+
+        let dirs = managed_lsp_bin_dirs();
+        assert!(dirs.contains(&tmp.path().join("lsp").join("gem").join("bin")));
     }
 }

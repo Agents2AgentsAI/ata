@@ -10,8 +10,8 @@ pub enum LspError {
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("server process exited unexpectedly")]
-    ServerExited,
+    #[error("server process exited unexpectedly: {details}")]
+    ServerExited { details: String },
 
     #[error("initialize handshake timed out")]
     InitializeTimeout,

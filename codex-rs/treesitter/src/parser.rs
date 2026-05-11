@@ -47,6 +47,52 @@ fn symbol_kind_priority(kind: SymbolKind) -> u8 {
     }
 }
 
+fn extract_symbol_signature(node_text: &str) -> String {
+    let mut signature_parts = Vec::new();
+    let mut paren_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut angle_depth = 0i32;
+
+    for raw_line in node_text.lines() {
+        let mut line = String::new();
+        for ch in raw_line.chars() {
+            if ch == '{' && paren_depth == 0 && bracket_depth == 0 && angle_depth == 0 {
+                break;
+            }
+            match ch {
+                '(' => paren_depth += 1,
+                ')' => paren_depth = (paren_depth - 1).max(0),
+                '[' => bracket_depth += 1,
+                ']' => bracket_depth = (bracket_depth - 1).max(0),
+                '<' => angle_depth += 1,
+                '>' => angle_depth = (angle_depth - 1).max(0),
+                _ => {}
+            }
+            line.push(ch);
+        }
+
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            signature_parts.push(trimmed.to_string());
+        }
+
+        if paren_depth == 0
+            && bracket_depth == 0
+            && angle_depth == 0
+            && (trimmed.ends_with(':') || trimmed.ends_with(';') || raw_line.contains('{'))
+        {
+            break;
+        }
+    }
+
+    let signature = signature_parts.join(" ");
+    if signature.is_empty() {
+        node_text.lines().next().unwrap_or("").trim().to_string()
+    } else {
+        signature
+    }
+}
+
 thread_local! {
     static SYMBOL_EXTRACT_CACHE: RefCell<HashMap<Language, SymbolExtractCache>> =
         RefCell::new(HashMap::new());
@@ -57,12 +103,23 @@ pub fn extract_symbols_from_file(
     rel_path: &str,
     language: Language,
 ) -> Result<Vec<Symbol>, TreeSitterError> {
-    let Some(config) = queries::get_language_config(language) else {
+    let Some(_) = queries::get_language_config(language) else {
         return Ok(Vec::new());
     };
 
     let abs_path = root.join(rel_path);
     let source = std::fs::read_to_string(abs_path)?;
+    extract_symbols_from_content(rel_path, language, &source)
+}
+
+pub fn extract_symbols_from_content(
+    rel_path: &str,
+    language: Language,
+    source: &str,
+) -> Result<Vec<Symbol>, TreeSitterError> {
+    let Some(config) = queries::get_language_config(language) else {
+        return Ok(Vec::new());
+    };
 
     SYMBOL_EXTRACT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -88,7 +145,7 @@ pub fn extract_symbols_from_file(
             .get_mut(&language)
             .ok_or(TreeSitterError::UnsupportedLanguage(language))?;
 
-        let Some(tree) = entry.parser.parse(&source, None) else {
+        let Some(tree) = entry.parser.parse(source, None) else {
             return Err(TreeSitterError::ParseFailed);
         };
 
@@ -143,7 +200,7 @@ pub fn extract_symbols_from_file(
                 let byte_range = (def_node.start_byte(), def_node.end_byte());
                 let line_range = (start.row + 1, end.row + 1);
                 let node_text = def_node.utf8_text(source.as_bytes()).unwrap_or("");
-                let signature = node_text.lines().next().unwrap_or("").to_string();
+                let signature = extract_symbol_signature(node_text);
                 let name_lower = name.to_lowercase();
 
                 symbols.push(Symbol {
@@ -242,9 +299,11 @@ pub fn reindex_file(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use tempfile::tempdir;
 
     use super::*;
-    use tempfile::tempdir;
 
     fn write_source(root: &Path, rel_path: &str, source: &str) {
         let abs = root.join(rel_path);
@@ -304,6 +363,38 @@ fn free() {}
         );
     }
 
+    #[cfg(feature = "rust")]
+    #[test]
+    fn rust_multiline_function_signature_preserves_multiple_lines() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let rel_path = "src/lib.rs";
+        write_source(
+            root,
+            rel_path,
+            r#"
+fn build_map<T>(
+    input: T,
+) -> Result<T, String>
+where
+    T: Clone,
+{
+    Ok(input)
+}
+"#,
+        );
+
+        let symbols =
+            extract_symbols_from_file(root, rel_path, Language::Rust).expect("extract symbols");
+        let build_map = symbols
+            .iter()
+            .find(|symbol| symbol.name == "build_map")
+            .expect("build_map symbol");
+        assert!(build_map.signature.contains("Result<T, String>"));
+        assert!(build_map.signature.contains("where"));
+        assert!(!build_map.signature.contains("{"));
+    }
+
     #[cfg(feature = "python")]
     #[test]
     fn python_methods_include_enclosing_class_parent() {
@@ -343,6 +434,33 @@ def free():
                 .and_then(|symbol| symbol.parent.as_deref()),
             None
         );
+    }
+
+    #[cfg(feature = "python")]
+    #[test]
+    fn python_multiline_function_signature_preserves_parameters() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let rel_path = "pkg/mod.py";
+        write_source(
+            root,
+            rel_path,
+            r#"
+def build_map(
+    first,
+    second,
+):
+    return first + second
+"#,
+        );
+
+        let symbols =
+            extract_symbols_from_file(root, rel_path, Language::Python).expect("extract symbols");
+        let build_map = symbols
+            .iter()
+            .find(|symbol| symbol.name == "build_map")
+            .expect("build_map symbol");
+        assert_eq!(build_map.signature, "def build_map( first, second, ):");
     }
 
     #[cfg(feature = "go")]
