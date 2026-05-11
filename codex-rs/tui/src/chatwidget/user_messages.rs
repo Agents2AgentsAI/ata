@@ -35,16 +35,26 @@ fn displayable_range(text: &str) -> (usize, usize) {
     }
 
     // Reading-view Tab-to-ask wraps the question with a "[The user is reading…]"
-    // header and a "<!-- READER_TOOL_INSTRUCTIONS -->" trailer. Keep only the
-    // question itself.
+    // header and a "<!-- READER_TOOL_INSTRUCTIONS -->" trailer. The selection
+    // variant inserts a "The user selected specific text…" block between the
+    // question and the trailer. Strip the header, then cut at whichever
+    // sentinel appears first after the question.
     if text[start..].starts_with("[The user is reading ") {
         if let Some(eol) = text[start..].find("]\n\n") {
             start += eol + "]\n\n".len();
         }
     }
     const READER_INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
-    if let Some(sep) = text[start..].find(READER_INSTR_SEP) {
-        end = start + sep;
+    const SELECTION_SUFFIX: &str = "\n\nThe user selected specific text from the section";
+    let tail = &text[start..];
+    let cut_instr = tail.find(READER_INSTR_SEP);
+    let cut_sel = tail.find(SELECTION_SUFFIX);
+    let cut = match (cut_instr, cut_sel) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    if let Some(cut) = cut {
+        end = start + cut;
     }
 
     (start, end.max(start))

@@ -5361,7 +5361,7 @@ impl ChatWidget {
                 && self
                     .voice_mode_state
                     .as_ref()
-                    .is_some_and(|s| s.is_active() && s.stt_enabled)
+                    .is_some_and(|s| s.is_active() && s.stt_enabled && !s.tts_only)
                 && !self.is_main_composer_typing() =>
             {
                 match kind {

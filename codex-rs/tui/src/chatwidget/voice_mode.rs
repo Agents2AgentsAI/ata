@@ -3479,7 +3479,7 @@ impl super::ChatWidget {
             self.forward_to_reading_view_server(&ws_msg.to_string());
         }
         if !self.is_reading_view_browser_mode() {
-            let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+            let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
             self.bottom_pane.set_document_reader_voice_status(Some(msg));
             self.bottom_pane.set_document_reader_tts_paused(true);
         }
@@ -3762,7 +3762,7 @@ impl super::ChatWidget {
                 // Was playing before press → stay paused (we already paused on press).
                 // Just update the status message.
                 if !self.is_reading_view_browser_mode() {
-                    let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+                    let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
                     self.bottom_pane.set_document_reader_voice_status(Some(msg));
                     self.bottom_pane.set_document_reader_tts_paused(true);
                 }
