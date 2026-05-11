@@ -1180,8 +1180,11 @@ See the Codex keymap documentation for supported actions and examples."
                                 ),
                             );
                             let _ = std::io::Write::flush(backend);
-                            tui.terminal.invalidate_viewport();
                         }
+                        // Force the next frame to repaint every cell so
+                        // anything tmux smuggled in via reflow gets
+                        // overwritten cleanly.
+                        tui.terminal.invalidate_viewport();
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
