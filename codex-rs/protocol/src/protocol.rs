@@ -2856,6 +2856,18 @@ pub struct TurnContextItem {
     pub final_output_json_schema: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation_policy: Option<TruncationPolicy>,
+    /// Additional code-intel roots added during the session (for example via
+    /// `code_intel.addRoot`). Persisted so resume/fork can re-register them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_intel_roots: Vec<CodeIntelRootEntry>,
+}
+
+/// Lightweight descriptor for a code-intel project root, used only for
+/// persistence in [`TurnContextItem`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct CodeIntelRootEntry {
+    pub name: String,
+    pub path: PathBuf,
 }
 
 impl TurnContextItem {
@@ -5225,6 +5237,7 @@ mod tests {
             developer_instructions: None,
             final_output_json_schema: None,
             truncation_policy: None,
+            code_intel_roots: Vec::new(),
         };
 
         let value = serde_json::to_value(item)?;

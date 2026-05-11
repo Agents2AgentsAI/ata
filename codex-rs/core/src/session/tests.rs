@@ -547,6 +547,8 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -1994,6 +1996,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: Some(turn_context.truncation_policy),
+        code_intel_roots: Vec::new(),
     };
     let turn_id = previous_context_item
         .turn_id
@@ -3901,6 +3904,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.codex_home.to_path_buf(),
             config.cli_auth_credentials_store_mode,
         ),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: None,
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
@@ -3939,6 +3944,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        None,
     );
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
@@ -5623,6 +5630,8 @@ where
             config.codex_home.to_path_buf(),
             config.cli_auth_credentials_store_mode,
         ),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: None,
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
@@ -5661,6 +5670,8 @@ where
         "turn_id".to_string(),
         skills_outcome,
         /*goal_tools_supported*/ true,
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        None,
     ));
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
@@ -8495,6 +8506,8 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
     let item = ResponseItem::CustomToolCall {

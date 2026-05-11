@@ -75,6 +75,9 @@ pub(crate) struct SessionServices {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    /// Unified code intelligence state across project roots.
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<Arc<super::MultiRootState>>,
     pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.

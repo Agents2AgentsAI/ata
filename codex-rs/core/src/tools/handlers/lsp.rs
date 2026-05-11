@@ -8,7 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_lsp_client::ServerRegistry;
 use codex_lsp_client::lsp_types::CallHierarchyItem;
 use codex_lsp_client::lsp_types::CodeAction;
@@ -26,10 +25,13 @@ use codex_lsp_client::lsp_types::PrepareRenameResponse;
 use codex_lsp_client::lsp_types::Range;
 use codex_lsp_client::lsp_types::SymbolInformation;
 use codex_lsp_client::lsp_types::request::GotoImplementationResponse;
+use codex_tools::AdditionalProperties;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use serde::Deserialize;
 
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
 use crate::tools::context::FunctionToolOutput;
@@ -45,7 +47,6 @@ use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::JsonSchema;
 
 mod code_actions;
 mod formatting;
@@ -164,9 +165,20 @@ enum LspOperation {
     Diagnostics,
 }
 
-#[async_trait]
 impl ToolHandler for LspToolHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("lsp")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_lsp_tool())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -973,116 +985,92 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "operation".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "The LSP operation to perform: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls, prepareRename, renamePreview, codeActionPreview, diagnostics".to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "file".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Absolute path to the file (required for most operations)".to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Absolute path to the file (required for most operations)".to_string(),
+        )),
     );
     properties.insert(
         "line".to_string(),
-        JsonSchema::Number {
-            description: Some("1-based line number".to_string()),
-        },
+        JsonSchema::number(Some("1-based line number".to_string())),
     );
     properties.insert(
         "character".to_string(),
-        JsonSchema::Number {
-            description: Some("1-based character/column number".to_string()),
-        },
+        JsonSchema::number(Some("1-based character/column number".to_string())),
     );
     properties.insert(
         "symbol".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Alternative to line/character: resolve a symbol name within `file` to a position (best-effort)."
                     .to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "fuzz".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When a position-based query returns empty, retry nearby positions (default true)."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::boolean(Some(
+            "When a position-based query returns empty, retry nearby positions (default true)."
+                .to_string(),
+        )),
     );
     properties.insert(
         "query".to_string(),
-        JsonSchema::String {
-            description: Some("Search query for workspaceSymbol operation".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Search query for workspaceSymbol operation".to_string(),
+        )),
     );
     properties.insert(
         "root".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Optional root name. If omitted, root is inferred from file path or all roots are searched when supported."
                     .to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "limit".to_string(),
-        JsonSchema::Number {
-            description: Some("Result limit (default 10, max 50).".to_string()),
-        },
+        JsonSchema::number(Some("Result limit (default 10, max 50).".to_string())),
     );
     properties.insert(
         "end_line".to_string(),
-        JsonSchema::Number {
-            description: Some("1-based end line number (for codeActionPreview range).".to_string()),
-        },
+        JsonSchema::number(Some(
+            "1-based end line number (for codeActionPreview range).".to_string(),
+        )),
     );
     properties.insert(
         "end_character".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "1-based end character/column number (for codeActionPreview range).".to_string(),
-            ),
-        },
+        JsonSchema::number(Some(
+            "1-based end character/column number (for codeActionPreview range).".to_string(),
+        )),
     );
     properties.insert(
         "new_name".to_string(),
-        JsonSchema::String {
-            description: Some("New symbol name (for renamePreview).".to_string()),
-        },
+        JsonSchema::string(Some("New symbol name (for renamePreview).".to_string())),
     );
     properties.insert(
         "only".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Code action kind filter (for codeActionPreview), e.g. 'quickfix' (default)."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Code action kind filter (for codeActionPreview), e.g. 'quickfix' (default)."
+                .to_string(),
+        )),
     );
     properties.insert(
         "title".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Code action title selector when multiple actions are available (for codeActionPreview)."
                     .to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "item".to_string(),
-        JsonSchema::Object {
-            properties: BTreeMap::new(),
-            required: None,
-            additional_properties: Some(true.into()),
-        },
+        JsonSchema::object(
+            BTreeMap::new(),
+            None,
+            Some(AdditionalProperties::Boolean(true)),
+        ),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -1090,11 +1078,11 @@ pub(crate) fn create_lsp_tool() -> ToolSpec {
         description: LSP_TOOL_DESCRIPTION.to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["operation".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["operation".to_string()]),
+            Some(AdditionalProperties::Boolean(false)),
+        ),
         output_schema: None,
     })
 }

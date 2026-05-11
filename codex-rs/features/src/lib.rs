@@ -237,6 +237,10 @@ pub enum Feature {
     RemoteCompactionV2,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
+    /// Enable LSP (Language Server Protocol) integration for code intelligence.
+    Lsp,
+    /// Enable TreeSitter-based code indexing.
+    TreeSitter,
     /// ATA-private: surface the document-reader / reading-view UI overlay.
     ReadingView,
     /// ATA-private: enable voice mode (push-to-talk capture + ElevenLabs TTS).
@@ -1197,6 +1201,18 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceDependencies,
         key: "workspace_dependencies",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Lsp,
+        key: "lsp",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::TreeSitter,
+        key: "treesitter",
         stage: Stage::Stable,
         default_enabled: true,
     },

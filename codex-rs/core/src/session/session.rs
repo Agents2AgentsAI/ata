@@ -511,7 +511,42 @@ impl Session {
             otel.name = "session_init.auth_mcp",
         ));
 
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let multi_root_fut = {
+            let cwd = session_configuration.cwd.to_path_buf();
+            let config_for_multi_root = Arc::clone(&config);
+            #[cfg(feature = "lsp")]
+            let install_tracker = agent_control.lsp_install_tracker();
+            #[cfg(feature = "lsp")]
+            let registry_cache = agent_control.lsp_registry_cache();
+            async move {
+                super::code_intel::init_multi_root_state(
+                    cwd,
+                    config_for_multi_root.as_ref(),
+                    #[cfg(feature = "lsp")]
+                    install_tracker,
+                    #[cfg(feature = "lsp")]
+                    registry_cache,
+                )
+                .await
+            }
+        };
+
         // Join all independent futures.
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let (
+            thread_persistence_result,
+            state_db_ctx,
+            (auth, mcp_servers, auth_statuses),
+            multi_root_state,
+        ) = tokio::join!(
+            thread_persistence_fut,
+            state_db_fut,
+            auth_and_mcp_fut,
+            multi_root_fut
+        );
+
+        #[cfg(not(any(feature = "lsp", feature = "treesitter")))]
         let (thread_persistence_result, state_db_ctx, (auth, mcp_servers, auth_statuses)) =
             tokio::join!(thread_persistence_fut, state_db_fut, auth_and_mcp_fut);
 
@@ -876,6 +911,8 @@ impl Session {
                     config.codex_home.to_path_buf(),
                     config.cli_auth_credentials_store_mode,
                 ),
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                multi_root_state,
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
@@ -907,6 +944,8 @@ impl Session {
                 document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
             next_internal_sub_id: AtomicU64::new(0),
             });
+            #[cfg(feature = "lsp")]
+            super::code_intel::setup_lsp_install_callback(&sess).await;
             if let Some(network_policy_decider_session) = network_policy_decider_session {
                 let mut guard = network_policy_decider_session.write().await;
                 *guard = Arc::downgrade(&sess);

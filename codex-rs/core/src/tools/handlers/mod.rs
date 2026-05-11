@@ -3,6 +3,8 @@ pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod attach_url_files;
+#[cfg(feature = "treesitter")]
+pub(crate) mod code_intel;
 pub(crate) mod crop_figure;
 #[cfg(feature = "data")]
 pub(crate) mod data;
@@ -12,6 +14,10 @@ mod goal;
 pub(crate) mod goal_spec;
 pub(crate) mod js_repl;
 pub(crate) mod js_repl_spec;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp_workspace_edit;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod mcp_resource_spec;

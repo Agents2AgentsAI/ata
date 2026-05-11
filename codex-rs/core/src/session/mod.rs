@@ -184,6 +184,8 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+mod code_intel;
 mod config_lock;
 pub(crate) mod file_attachments;
 mod handlers;
@@ -1211,6 +1213,9 @@ impl Session {
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                Self::restore_code_intel_roots(&self.services.multi_root_state, &rollout_items)
+                    .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
                 let curr: &str = turn_context.model_info.slug.as_str();
@@ -1248,6 +1253,9 @@ impl Session {
             InitialHistory::Forked(rollout_items) => {
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                Self::restore_code_intel_roots(&self.services.multi_root_state, &rollout_items)
+                    .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1268,6 +1276,48 @@ impl Session {
                 if !is_subagent {
                     let _ = self.flush_rollout().await;
                 }
+            }
+        }
+    }
+
+    /// Re-register code-intel roots persisted in a previous session's
+    /// `TurnContextItem`. The last TurnContext in the rollout is the most
+    /// recent snapshot.
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    async fn restore_code_intel_roots(
+        multi_root_state: &Option<std::sync::Arc<crate::state::MultiRootState>>,
+        rollout_items: &[RolloutItem],
+    ) {
+        let Some(multi_root_state) = multi_root_state.as_ref() else {
+            return;
+        };
+        let roots = rollout_items.iter().rev().find_map(|item| match item {
+            RolloutItem::TurnContext(ctx) if !ctx.code_intel_roots.is_empty() => {
+                Some(&ctx.code_intel_roots)
+            }
+            _ => None,
+        });
+        let Some(roots) = roots else {
+            return;
+        };
+        for entry in roots {
+            if !entry.path.is_dir() {
+                tracing::debug!(
+                    root = %entry.name,
+                    path = %entry.path.display(),
+                    "skipping code-intel root restore: directory no longer exists"
+                );
+                continue;
+            }
+            if let Err(err) = multi_root_state
+                .add_root(entry.name.clone(), entry.path.clone())
+                .await
+            {
+                tracing::warn!(
+                    root = %entry.name,
+                    path = %entry.path.display(),
+                    "failed to restore code-intel root: {err}"
+                );
             }
         }
     }
@@ -2826,6 +2876,57 @@ impl Session {
         state.reference_context_item()
     }
 
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    async fn dynamic_code_intel_roots_snapshot(
+        &self,
+    ) -> Vec<codex_protocol::protocol::CodeIntelRootEntry> {
+        let Some(multi_root_state) = self.services.multi_root_state.as_ref() else {
+            return Vec::new();
+        };
+        multi_root_state
+            .roots()
+            .await
+            .into_iter()
+            .skip(1)
+            .map(|root| codex_protocol::protocol::CodeIntelRootEntry {
+                name: root.name,
+                path: root.path,
+            })
+            .collect()
+    }
+
+    #[cfg(not(any(feature = "lsp", feature = "treesitter")))]
+    async fn dynamic_code_intel_roots_snapshot(
+        &self,
+    ) -> Vec<codex_protocol::protocol::CodeIntelRootEntry> {
+        Vec::new()
+    }
+
+    pub(crate) async fn persist_dynamic_code_intel_roots_if_changed(
+        &self,
+        turn_context: &TurnContext,
+    ) {
+        let roots = self.dynamic_code_intel_roots_snapshot().await;
+        let reference_context_item = {
+            let state = self.state.lock().await;
+            state.reference_context_item()
+        };
+        let Some(reference_context_item) = reference_context_item else {
+            return;
+        };
+        if reference_context_item.code_intel_roots == roots {
+            return;
+        }
+
+        let mut turn_context_item = turn_context.to_turn_context_item();
+        turn_context_item.code_intel_roots = roots;
+        self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])
+            .await;
+
+        let mut state = self.state.lock().await;
+        state.set_reference_context_item(Some(turn_context_item));
+    }
+
     /// Persist the latest turn context snapshot for the first real user turn and for
     /// steady-state turns that emit model-visible context updates.
     ///
@@ -2855,7 +2956,8 @@ impl Session {
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        let mut turn_context_item = turn_context.to_turn_context_item();
+        turn_context_item.code_intel_roots = self.dynamic_code_intel_roots_snapshot().await;
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;

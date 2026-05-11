@@ -48,6 +48,7 @@ fn resume_history(
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: None,
+        code_intel_roots: Vec::new(),
     };
 
     InitialHistory::Resumed(ResumedHistory {

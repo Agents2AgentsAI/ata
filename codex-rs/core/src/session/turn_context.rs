@@ -374,6 +374,7 @@ impl TurnContext {
             developer_instructions: self.developer_instructions.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             truncation_policy: Some(self.truncation_policy),
+            code_intel_roots: Vec::new(),
         }
     }
 
@@ -502,6 +503,9 @@ impl Session {
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
         goal_tools_supported: bool,
+        #[cfg(any(feature = "lsp", feature = "treesitter"))] multi_root_state: Option<
+            &Arc<crate::state::MultiRootState>,
+        >,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -518,6 +522,14 @@ impl Session {
         let provider_for_context = create_model_provider(provider, auth_manager);
         let provider_capabilities = provider_for_context.capabilities();
         let session_telemetry_for_context = session_telemetry;
+        #[cfg(feature = "lsp")]
+        let lsp_enabled = multi_root_state.is_some_and(|state| state.has_lsp());
+        #[cfg(not(feature = "lsp"))]
+        let lsp_enabled = false;
+        #[cfg(feature = "treesitter")]
+        let code_intel_enabled = multi_root_state.is_some_and(|state| state.has_treesitter());
+        #[cfg(not(feature = "treesitter"))]
+        let code_intel_enabled = false;
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             available_models: &models_manager.try_list_models().unwrap_or_default(),
@@ -561,6 +573,8 @@ impl Session {
                 .enabled(Feature::MultiAgentV2)
                 .then_some(per_turn_config.multi_agent_v2.min_wait_timeout_ms),
         )
+        .with_lsp_enabled(lsp_enabled)
+        .with_code_intel_enabled(code_intel_enabled)
         .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
             &per_turn_config.agent_roles,
         ));
@@ -802,6 +816,8 @@ impl Session {
             sub_id,
             skills_outcome,
             goal_tools_supported,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            self.services.multi_root_state.as_ref(),
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

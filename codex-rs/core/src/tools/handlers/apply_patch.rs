@@ -231,6 +231,20 @@ fn to_abs_path(cwd: &AbsolutePathBuf, path: &Path) -> Option<AbsolutePathBuf> {
     Some(AbsolutePathBuf::resolve_path_against_base(path, cwd))
 }
 
+#[cfg(feature = "treesitter")]
+async fn reindex_patched_files(session: &Session, file_paths: &[AbsolutePathBuf]) {
+    let Some(multi_root_state) = session.services.multi_root_state.as_ref() else {
+        return;
+    };
+
+    for file_path in file_paths {
+        multi_root_state.reindex_file(file_path.as_path()).await;
+    }
+}
+
+#[cfg(not(feature = "treesitter"))]
+async fn reindex_patched_files(_session: &Session, _file_paths: &[AbsolutePathBuf]) {}
+
 fn write_permissions_for_paths(
     file_paths: &[AbsolutePathBuf],
     file_system_sandbox_policy: &codex_protocol::permissions::FileSystemSandboxPolicy,
@@ -423,6 +437,7 @@ impl ToolHandler for ApplyPatchHandler {
                 {
                     InternalApplyPatchInvocation::Output(item) => {
                         let content = item?;
+                        reindex_patched_files(session.as_ref(), &file_paths).await;
                         Ok(ApplyPatchToolOutput::from_text(content))
                     }
                     InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
@@ -439,7 +454,7 @@ impl ToolHandler for ApplyPatchHandler {
 
                         let req = ApplyPatchRequest {
                             action: apply.action,
-                            file_paths,
+                            file_paths: file_paths.clone(),
                             changes,
                             exec_approval_requirement: apply.exec_approval_requirement,
                             additional_permissions: effective_additional_permissions
@@ -466,6 +481,9 @@ impl ToolHandler for ApplyPatchHandler {
                             )
                             .await
                             .map(|result| result.output);
+                        if out.is_ok() {
+                            reindex_patched_files(session.as_ref(), &file_paths).await;
+                        }
                         let (out, delta) = match out {
                             Ok(output) => (Ok(output.exec_output), Some(output.delta)),
                             Err(error) => (Err(error), Some(runtime.committed_delta().clone())),
@@ -536,6 +554,7 @@ pub(crate) async fn intercept_apply_patch(
             {
                 InternalApplyPatchInvocation::Output(item) => {
                     let content = item?;
+                    reindex_patched_files(session.as_ref(), &approval_keys).await;
                     Ok(Some(FunctionToolOutput::from_text(content, Some(true))))
                 }
                 InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
@@ -551,7 +570,7 @@ pub(crate) async fn intercept_apply_patch(
 
                     let req = ApplyPatchRequest {
                         action: apply.action,
-                        file_paths: approval_keys,
+                        file_paths: approval_keys.clone(),
                         changes,
                         exec_approval_requirement: apply.exec_approval_requirement,
                         additional_permissions: effective_additional_permissions
@@ -578,6 +597,9 @@ pub(crate) async fn intercept_apply_patch(
                         )
                         .await
                         .map(|result| result.output);
+                    if out.is_ok() {
+                        reindex_patched_files(session.as_ref(), &approval_keys).await;
+                    }
                     let (out, delta) = match out {
                         Ok(output) => (Ok(output.exec_output), Some(output.delta)),
                         Err(error) => (Err(error), Some(runtime.committed_delta().clone())),

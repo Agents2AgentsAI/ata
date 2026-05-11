@@ -624,6 +624,8 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    super::code_intel::shutdown_code_intel(&sess.services).await;
     let mcp_shutdown = {
         let mut manager = sess.services.mcp_connection_manager.write().await;
         manager.begin_shutdown()
@@ -896,6 +898,8 @@ pub(super) async fn submission_loop(
         .unified_exec_manager
         .terminate_all_processes()
         .await;
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    super::code_intel::shutdown_code_intel(&sess.services).await;
     let mcp_shutdown = {
         let mut manager = sess.services.mcp_connection_manager.write().await;
         manager.begin_shutdown()

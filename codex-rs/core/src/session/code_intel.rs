@@ -12,13 +12,13 @@ use std::sync::Arc;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 use crate::config::Config;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-use crate::features::Feature;
-#[cfg(any(feature = "lsp", feature = "treesitter"))]
 use crate::state::MultiRootState;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 use crate::state::SessionServices;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-use crate::tools::spec::ToolsConfig;
+use codex_features::Feature;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+use codex_tools::ToolsConfig;
 
 // ---------------------------------------------------------------------------
 // Config builders
@@ -139,7 +139,7 @@ enum TreeSitterConfig {
 }
 
 #[cfg(feature = "treesitter")]
-#[derive(Default, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct TreeSitterConfigMap {
     #[serde(default)]
     pub max_file_size: Option<u64>,
@@ -151,10 +151,27 @@ struct TreeSitterConfigMap {
     pub disabled_languages: Vec<String>,
     #[serde(default)]
     pub annotation_store_path: Option<String>,
-    #[serde(default)]
-    pub watch: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub persist_annotations: bool,
+}
+
+#[cfg(feature = "treesitter")]
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(feature = "treesitter")]
+impl Default for TreeSitterConfigMap {
+    fn default() -> Self {
+        Self {
+            max_file_size: None,
+            ignore_patterns: Vec::new(),
+            ignore_extensions: Vec::new(),
+            disabled_languages: Vec::new(),
+            annotation_store_path: None,
+            persist_annotations: true,
+        }
+    }
 }
 
 #[cfg(feature = "treesitter")]
@@ -205,7 +222,6 @@ pub(super) fn build_treesitter_index_config(
             .unwrap_or(default_config.max_file_size),
         ignore_patterns: config_map.ignore_patterns.clone(),
         annotation_store_path: config_map.annotation_store_path.clone().map(Into::into),
-        watch: config_map.watch,
         persist_annotations: config_map.persist_annotations,
         ..codex_treesitter::ProjectIndexConfig::default()
     }
@@ -225,6 +241,8 @@ pub(super) fn build_treesitter_index_config(
 pub(super) async fn init_multi_root_state(
     cwd: PathBuf,
     config: &Config,
+    #[cfg(feature = "lsp")] install_tracker: Arc<codex_lsp_client::InstallTracker>,
+    #[cfg(feature = "lsp")] registry_cache: crate::agent::control::SharedLspRegistryCache,
 ) -> Option<Arc<MultiRootState>> {
     #[cfg(feature = "lsp")]
     let lsp_server_configs = if config.features.enabled(Feature::Lsp) {
@@ -255,12 +273,16 @@ pub(super) async fn init_multi_root_state(
             cwd,
             #[cfg(feature = "lsp")]
             lsp_server_configs,
+            #[cfg(feature = "lsp")]
+            install_tracker,
+            #[cfg(feature = "lsp")]
+            registry_cache,
             #[cfg(feature = "treesitter")]
             treesitter_config,
         )
         .await
         {
-            Ok(state) => Some(Arc::new(state)),
+            Ok(state) => Some(state),
             Err(error) => {
                 tracing::warn!("failed to initialize multi-root state: {error}");
                 None
@@ -276,22 +298,24 @@ pub(super) async fn init_multi_root_state(
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "lsp")]
-fn lsp_toolchain_paths(codex_home: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+fn lsp_toolchain_paths(codex_home: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
     let lsp_root = codex_home.join("lsp");
     let bin_dir = lsp_root.join("bin");
     let npm_prefix = lsp_root.join("npm");
     let npm_cache = lsp_root.join("cache").join("npm");
     let pip_prefix = lsp_root.join("pip");
-    (bin_dir, npm_prefix, npm_cache, pip_prefix)
+    let gem_home = lsp_root.join("gem");
+    (bin_dir, npm_prefix, npm_cache, pip_prefix, gem_home)
 }
 
 #[cfg(feature = "lsp")]
 async fn ensure_lsp_toolchain_dirs(codex_home: &Path) {
-    let (bin_dir, npm_prefix, npm_cache, pip_prefix) = lsp_toolchain_paths(codex_home);
+    let (bin_dir, npm_prefix, npm_cache, pip_prefix, gem_home) = lsp_toolchain_paths(codex_home);
     let _ = tokio::fs::create_dir_all(&bin_dir).await;
     let _ = tokio::fs::create_dir_all(&npm_prefix).await;
     let _ = tokio::fs::create_dir_all(&npm_cache).await;
     let _ = tokio::fs::create_dir_all(&pip_prefix).await;
+    let _ = tokio::fs::create_dir_all(&gem_home).await;
 }
 
 #[cfg(all(unix, feature = "lsp"))]
@@ -333,7 +357,7 @@ fn shell_quote(arg: &str) -> String {
 
 #[cfg(feature = "lsp")]
 fn rewrite_lsp_install_command(codex_home: &Path, command: &[String]) -> Vec<String> {
-    let (bin_dir, npm_prefix, npm_cache, pip_prefix) = lsp_toolchain_paths(codex_home);
+    let (bin_dir, npm_prefix, npm_cache, pip_prefix, gem_home) = lsp_toolchain_paths(codex_home);
 
     match command {
         [a, b, c, rest @ ..] if a == "npm" && b == "install" && c == "-g" => {
@@ -353,11 +377,32 @@ fn rewrite_lsp_install_command(codex_home: &Path, command: &[String]) -> Vec<Str
             out
         }
         [a, b, rest @ ..] if a == "gem" && b == "install" => {
-            let mut out = vec![a.clone(), b.clone()];
-            out.extend(rest.iter().cloned());
-            out.push("--bindir".into());
-            out.push(bin_dir.to_string_lossy().to_string());
-            out
+            #[cfg(unix)]
+            {
+                let mut cmd = format!(
+                    "GEM_HOME={} {} {}",
+                    shell_quote(&gem_home.to_string_lossy()),
+                    a,
+                    b
+                );
+                for item in rest {
+                    cmd.push(' ');
+                    cmd.push_str(&shell_quote(item));
+                }
+                cmd.push_str(" --bindir ");
+                cmd.push_str(&shell_quote(&bin_dir.to_string_lossy()));
+                vec!["sh".into(), "-lc".into(), cmd]
+            }
+            #[cfg(windows)]
+            {
+                let mut cmd = format!("set GEM_HOME={}&& {} {}", gem_home.display(), a, b);
+                for item in rest {
+                    cmd.push(' ');
+                    cmd.push_str(item);
+                }
+                cmd.push_str(&format!(" --bindir {}", bin_dir.display()));
+                vec!["cmd".into(), "/C".into(), cmd]
+            }
         }
         [a, b, rest @ ..] if a == "go" && b == "install" => {
             #[cfg(unix)]
@@ -475,6 +520,14 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                             Arc::clone(&turn_context),
                             format!("lsp-install-{}", Uuid::new_v4()),
                         );
+                        let Some(turn_environment) = turn_context.environments.primary() else {
+                            sess.services
+                                .unified_exec_manager
+                                .release_process_id(process_id)
+                                .await;
+                            return false;
+                        };
+                        let hook_command = codex_shell_command::parse_command::shlex_join(&command);
 
                         let mut response = tokio::select! {
                             _ = cancellation_token.cancelled() => {
@@ -484,11 +537,13 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                             result = sess.services.unified_exec_manager.exec_command(
                                 crate::unified_exec::ExecCommandRequest {
                                     command: command.clone(),
+                                    hook_command,
                                     process_id,
                                     yield_time_ms: 10_000,
                                     max_output_tokens: None,
-                                    workdir: None,
-                                    network: None,
+                                    cwd: turn_environment.cwd.clone(),
+                                    environment: Arc::clone(&turn_environment.environment),
+                                    network: turn_context.network.clone(),
                                     tty: false,
                                     sandbox_permissions: crate::sandboxing::SandboxPermissions::RequireEscalated,
                                     additional_permissions: None,
@@ -561,6 +616,7 @@ pub(super) async fn shutdown_code_intel(services: &SessionServices) {
 // Tool-router injection
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 pub(super) fn inject_multi_root_state(
     _tools_config: &mut ToolsConfig,
@@ -624,17 +680,39 @@ mod tests {
     fn rewrites_gem_install_to_bindir() {
         let home = codex_home();
         let expected_bin = home.join("lsp").join("bin");
+        let expected_gem_home = home.join("lsp").join("gem");
         let cmd = vec![
             "gem".to_string(),
             "install".to_string(),
             "rubocop".to_string(),
         ];
         let rewritten = rewrite_lsp_install_command(home.as_path(), &cmd);
-        assert!(
-            rewritten
-                .windows(2)
-                .any(|w| w[0] == "--bindir" && w[1] == expected_bin.to_string_lossy().as_ref())
-        );
+        #[cfg(unix)]
+        {
+            assert_eq!(rewritten[0], "sh");
+            assert_eq!(rewritten[1], "-lc");
+            assert!(rewritten[2].contains("GEM_HOME="));
+            assert!(rewritten[2].contains(expected_gem_home.to_string_lossy().as_ref()));
+            assert!(rewritten[2].contains(" --bindir "));
+            assert!(rewritten[2].contains(expected_bin.to_string_lossy().as_ref()));
+        }
+        #[cfg(windows)]
+        {
+            assert_eq!(rewritten[0], "cmd");
+            assert_eq!(rewritten[1], "/C");
+            assert!(rewritten[2].contains("GEM_HOME="));
+            assert!(rewritten[2].contains(expected_gem_home.to_string_lossy().as_ref()));
+            assert!(rewritten[2].contains(" --bindir "));
+            assert!(rewritten[2].contains(expected_bin.to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn lsp_toolchain_paths_include_gem_home() {
+        let home = codex_home();
+        let (_bin_dir, _npm_prefix, _npm_cache, _pip_prefix, gem_home) =
+            lsp_toolchain_paths(home.as_path());
+        assert_eq!(gem_home, home.join("lsp").join("gem"));
     }
 
     #[test]

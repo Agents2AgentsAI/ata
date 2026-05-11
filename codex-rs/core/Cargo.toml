@@ -38,6 +38,7 @@ codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-login = { workspace = true }
+codex-lsp-client = { workspace = true, optional = true }
 codex-memories-read = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }
@@ -63,6 +64,7 @@ codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
 codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
+codex-treesitter = { workspace = true, optional = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
 codex-utils-file = { workspace = true }
@@ -103,6 +105,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "schemars",
     "server",
 ] }
+schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
@@ -129,6 +132,12 @@ urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 whoami = { workspace = true }
+
+[features]
+default = ["code-intel"]
+lsp = ["dep:codex-lsp-client"]
+treesitter = ["dep:codex-treesitter"]
+code-intel = ["lsp", "treesitter"]
 
 # Build OpenSSL from source for musl builds.
 [target.x86_64-unknown-linux-musl.dependencies]

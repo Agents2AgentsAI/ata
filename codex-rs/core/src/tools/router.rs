@@ -49,6 +49,8 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }
 
 impl ToolRouter {
@@ -60,6 +62,8 @@ impl ToolRouter {
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state,
         } = params;
         let builder = build_specs_with_discoverable_tools(
             config,
@@ -68,6 +72,8 @@ impl ToolRouter {
             unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state,
         );
         let (specs, registry) = builder.build();
         let deferred_dynamic_tools = dynamic_tools

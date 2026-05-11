@@ -2346,6 +2346,8 @@ fn build_specs_with_optional_tool_namespaces<'a>(
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
             tool_search_entries: &[],
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
     builder.build()

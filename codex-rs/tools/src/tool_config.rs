@@ -117,6 +117,8 @@ pub struct ToolsConfig {
     pub collab_tools: bool,
     pub goal_tools: bool,
     pub multi_agent_v2: bool,
+    pub lsp_enabled: bool,
+    pub code_intel_enabled: bool,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -255,6 +257,8 @@ impl ToolsConfig {
             collab_tools: include_collab_tools,
             goal_tools: include_goal_tools,
             multi_agent_v2: include_multi_agent_v2,
+            lsp_enabled: false,
+            code_intel_enabled: false,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -330,6 +334,16 @@ impl ToolsConfig {
         wait_agent_min_timeout_ms: Option<i64>,
     ) -> Self {
         self.wait_agent_min_timeout_ms = wait_agent_min_timeout_ms;
+        self
+    }
+
+    pub fn with_lsp_enabled(mut self, lsp_enabled: bool) -> Self {
+        self.lsp_enabled = lsp_enabled;
+        self
+    }
+
+    pub fn with_code_intel_enabled(mut self, code_intel_enabled: bool) -> Self {
+        self.code_intel_enabled = code_intel_enabled;
         self
     }
 

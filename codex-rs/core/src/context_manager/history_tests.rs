@@ -140,6 +140,7 @@ fn reference_context_item() -> TurnContextItem {
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: Some(codex_protocol::protocol::TruncationPolicy::Tokens(10_000)),
+        code_intel_roots: Vec::new(),
     }
 }
 

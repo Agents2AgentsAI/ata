@@ -1555,15 +1555,14 @@ impl JsReplManager {
         let router = ToolRouter::from_config(
             &exec.turn.tools_config,
             crate::tools::router::ToolRouterParams {
-                mcp_tools: Some(
-                    mcp_tools
-                        .into_iter()
-                        .map(|(name, tool)| (name, tool.tool))
-                        .collect(),
-                ),
-                app_tools: None,
+                mcp_tools: Some(mcp_tools),
+                deferred_mcp_tools: None,
+                unavailable_called_tools: Vec::new(),
+                parallel_mcp_server_names: std::collections::HashSet::new(),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                multi_root_state: exec.session.services.multi_root_state.as_ref(),
             },
         );
 

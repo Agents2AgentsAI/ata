@@ -69,6 +69,9 @@ pub(crate) fn build_specs_with_discoverable_tools(
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
+    #[cfg(any(feature = "lsp", feature = "treesitter"))] multi_root_state: Option<
+        &Arc<crate::state::MultiRootState>,
+    >,
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::UnavailableToolHandler;
     use crate::tools::handlers::unavailable_tool_message;
@@ -127,6 +130,8 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
             tool_search_entries: &tool_search_entries,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state,
         },
     );
     let mut existing_spec_names = builder

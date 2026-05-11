@@ -2522,6 +2522,15 @@ impl Config {
         {
             additional_writable_roots.push(memories_root);
         }
+        let lsp_root = codex_home.join("lsp");
+        std::fs::create_dir_all(&lsp_root)?;
+        let lsp_root = AbsolutePathBuf::from_absolute_path(&lsp_root)?;
+        if !additional_writable_roots
+            .iter()
+            .any(|existing| existing == &lsp_root)
+        {
+            additional_writable_roots.push(lsp_root);
+        }
 
         let profiles_are_active = default_permissions_override.is_some()
             || matches!(

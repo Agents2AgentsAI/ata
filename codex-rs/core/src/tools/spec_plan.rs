@@ -75,6 +75,8 @@ use codex_tools::default_namespace_description;
 use codex_tools::dynamic_tool_to_loadable_tool_spec;
 use codex_tools::mcp_tool_to_responses_api_tool;
 use std::collections::BTreeMap;
+#[cfg(feature = "lsp")]
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -252,6 +254,28 @@ pub fn build_tool_registry_builder(
     builder.register_handler(Arc::new(RequestUserInputHandler {
         available_modes: config.request_user_input_available_modes.clone(),
     }));
+
+    #[cfg(feature = "lsp")]
+    if config.lsp_enabled
+        && let Some(multi_root_state) = params.multi_root_state
+    {
+        builder.register_handler(Arc::new(crate::tools::handlers::lsp::LspToolHandler {
+            state: Arc::clone(multi_root_state),
+            warmed_files: tokio::sync::Mutex::new(HashSet::new()),
+            warmed_workspaces: tokio::sync::Mutex::new(HashMap::new()),
+        }));
+    }
+
+    #[cfg(feature = "treesitter")]
+    if config.code_intel_enabled
+        && let Some(multi_root_state) = params.multi_root_state
+    {
+        builder.register_handler(Arc::new(
+            crate::tools::handlers::code_intel::CodeIntelToolHandler {
+                state: Arc::clone(multi_root_state),
+            },
+        ));
+    }
 
     if config.request_permissions_tool_enabled {
         builder.register_handler(Arc::new(RequestPermissionsHandler));
