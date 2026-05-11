@@ -396,16 +396,9 @@ impl DocumentReaderView {
     pub(crate) fn new_from_event(
         ev: codex_protocol::document_reader::PresentDocumentEvent,
         _from_replay: bool,
+        app_event_tx: AppEventSender,
         frame_requester: crate::tui::FrameRequester,
     ) -> Self {
-        // Use a dummy AppEventSender that drops events — the event channel is
-        // wired up via the chatwidget for real submissions; the view itself
-        // mostly emits SubmitUserText through this sender, and falling back
-        // to a drop for the construction path is acceptable until the real
-        // wiring is complete.
-        use tokio::sync::mpsc::unbounded_channel;
-        let (raw_tx, _drop_rx) = unbounded_channel();
-        let app_event_tx = AppEventSender::new(raw_tx);
         Self::new(
             ev.document_id,
             ev.title,

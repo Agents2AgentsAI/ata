@@ -4153,6 +4153,13 @@ impl super::ChatWidget {
             return;
         }
 
+        // Prefetch is only meaningful for ElevenLabs (where we cache PCM
+        // chunks). The `say` backend has nothing to prefetch — audio is
+        // produced on demand by the system.
+        if voice_config.tts_backend.unwrap_or_default() == TtsBackend::Say {
+            return;
+        }
+
         let cleaned = clean_for_tts_preserving_equation_markers(&raw_text);
         if cleaned.is_empty() {
             return;
@@ -4654,9 +4661,11 @@ async fn say_worker_loop(
     let wpm = ((175.0_f64) * speed).clamp(80.0, 400.0) as u32;
 
     let mut current: Option<tokio::process::Child> = None;
+    tracing::info!("[TTS-TIMING] say_worker_loop: starting wpm={wpm}");
 
     loop {
         if gen_ref.load(Ordering::SeqCst) != my_gen {
+            tracing::info!("[TTS-TIMING] say_worker_loop: generation changed, exiting");
             break;
         }
         match cmd_rx.recv().await {
@@ -4671,11 +4680,18 @@ async fn say_worker_loop(
                 if let Some(mut child) = current.take() {
                     let _ = child.wait().await;
                 }
+                tracing::info!(
+                    "[TTS-TIMING] say_worker_loop: spawning say for {} chars",
+                    text.len()
+                );
                 let child = Command::new("say")
                     .arg("-r")
                     .arg(wpm.to_string())
                     .arg("--")
                     .arg(&text)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
                     .spawn();
                 match child {
                     Ok(c) => {
@@ -4691,6 +4707,7 @@ async fn say_worker_loop(
                 }
             }
             Some(TtsWorkerCommand::Finish) | None => {
+                tracing::info!("[TTS-TIMING] say_worker_loop: Finish/None received");
                 if let Some(mut child) = current.take() {
                     let _ = child.wait().await;
                 }
@@ -4706,7 +4723,11 @@ async fn say_worker_loop(
         let _ = child.wait().await;
     }
 
-    if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+    let last = in_flight.fetch_sub(1, Ordering::SeqCst) == 1;
+    tracing::info!(
+        "[TTS-TIMING] say_worker_loop: exiting (last_in_flight={last})"
+    );
+    if last {
         event_tx.send(AppEvent::VoiceModeTtsFinished);
     }
 }

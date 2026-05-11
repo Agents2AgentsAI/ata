@@ -1271,6 +1271,7 @@ impl BottomPane {
             crate::bottom_pane::document_reader::DocumentReaderView::new_from_event(
                 ev,
                 from_replay,
+                self.app_event_tx.clone(),
                 self.frame_requester.clone(),
             ),
         );
