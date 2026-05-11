@@ -7968,7 +7968,13 @@ impl ChatWidget {
             let description =
                 (!preset.description.is_empty()).then_some(preset.description.to_string());
             let is_current = preset.model.as_str() == self.current_model();
-            let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
+            // Treat empty supported_reasoning_efforts the same as a single
+            // option: the reasoning popup short-circuits without opening,
+            // so the parent picker must dismiss itself on select — otherwise
+            // the bottom pane stays open after the user picks a model.
+            // This is what bit Copilot models that historically shipped with
+            // an empty effort list.
+            let single_supported_effort = preset.supported_reasoning_efforts.len() <= 1;
             let preset_for_action = preset.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 let preset_for_event = preset_for_action.clone();

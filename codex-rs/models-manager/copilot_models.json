@@ -4,8 +4,17 @@
       "slug": "gpt-4.1",
       "display_name": "GPT-4.1",
       "description": "Advanced reasoning and multi-modal understanding.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -38,8 +47,21 @@
       "slug": "gpt-5.5",
       "display_name": "GPT-5.5",
       "description": "Frontier OpenAI model for complex coding, research, and real-world work.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -72,8 +94,21 @@
       "slug": "gpt-5.4",
       "display_name": "GPT-5.4",
       "description": "Strong OpenAI model for everyday coding.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -106,8 +141,17 @@
       "slug": "gpt-5.4-mini",
       "display_name": "GPT-5.4 mini",
       "description": "Fast lightweight OpenAI model for simpler coding tasks.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -140,8 +184,17 @@
       "slug": "gpt-5.4-nano",
       "display_name": "GPT-5.4 nano",
       "description": "Ultra-lightweight OpenAI model for fast responses.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -173,8 +226,21 @@
       "slug": "gpt-5.3-codex",
       "display_name": "GPT-5.3-Codex",
       "description": "Coding-optimized OpenAI model.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -207,8 +273,21 @@
       "slug": "gpt-5.2",
       "display_name": "GPT-5.2",
       "description": "OpenAI model optimized for professional work and long-running agents.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -241,8 +320,21 @@
       "slug": "gpt-5.2-codex",
       "display_name": "GPT-5.2-Codex",
       "description": "Code-optimized OpenAI reasoning model.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -275,8 +367,17 @@
       "slug": "gpt-5-mini",
       "display_name": "GPT-5 mini",
       "description": "Efficient OpenAI reasoning model for rapid responses.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -309,8 +410,21 @@
       "slug": "claude-opus-4.7",
       "display_name": "Claude Opus 4.7",
       "description": "Anthropic's most capable model for advanced reasoning.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -343,8 +457,21 @@
       "slug": "claude-opus-4.6",
       "display_name": "Claude Opus 4.6",
       "description": "Anthropic flagship for complex tasks and advanced reasoning.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -377,8 +504,17 @@
       "slug": "claude-opus-4.6-fast",
       "display_name": "Claude Opus 4.6 (fast mode)",
       "description": "Faster variant of Claude Opus 4.6.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -411,8 +547,21 @@
       "slug": "claude-opus-4.5",
       "display_name": "Claude Opus 4.5",
       "description": "Anthropic Opus for complex reasoning.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -445,8 +594,21 @@
       "slug": "claude-sonnet-4.6",
       "display_name": "Claude Sonnet 4.6",
       "description": "Anthropic balanced speed-and-intelligence model.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -479,8 +641,21 @@
       "slug": "claude-sonnet-4.5",
       "display_name": "Claude Sonnet 4.5",
       "description": "Anthropic balanced model, prior generation.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -513,8 +688,17 @@
       "slug": "claude-haiku-4.5",
       "display_name": "Claude Haiku 4.5",
       "description": "Anthropic efficient model for quick responses.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -547,8 +731,21 @@
       "slug": "gemini-3.1-pro",
       "display_name": "Gemini 3.1 Pro",
       "description": "Google advanced reasoning, latest preview.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -581,8 +778,17 @@
       "slug": "gemini-3-flash",
       "display_name": "Gemini 3 Flash",
       "description": "Google fast, lightweight model.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -615,8 +821,21 @@
       "slug": "gemini-2.5-pro",
       "display_name": "Gemini 2.5 Pro",
       "description": "Google advanced reasoning, prior generation.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -649,8 +868,17 @@
       "slug": "grok-code-fast-1",
       "display_name": "Grok Code Fast 1",
       "description": "xAI fast model for code generation and analysis.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -682,8 +910,17 @@
       "slug": "raptor-mini",
       "display_name": "Raptor mini",
       "description": "GitHub Copilot fine-tuned efficient model.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
@@ -715,8 +952,17 @@
       "slug": "goldeneye",
       "display_name": "Goldeneye",
       "description": "GitHub Copilot fine-tuned code specialist.",
-      "default_reasoning_level": null,
-      "supported_reasoning_levels": [],
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        }
+      ],
       "shell_type": "shell_command",
       "visibility": "list",
       "supported_in_api": true,
