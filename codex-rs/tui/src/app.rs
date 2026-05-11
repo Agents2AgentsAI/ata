@@ -1164,11 +1164,13 @@ See the Codex keymap documentation for supported actions and examples."
                             s.width != last_size.width || s.height != last_size.height
                         });
                         if matches!(event, TuiEvent::Resize) || size_changed {
-                            // 1. Move cursor home, 2. clear the entire screen
-                            //    (not just after-cursor), 3. reset ratatui's
-                            //    diff buffer so the next draw paints every
-                            //    cell rather than diffing against stale
-                            //    expectations.
+                            // tmux reflows its per-pane alt-screen buffer on
+                            // pane zoom/unzoom and can leak normal-screen
+                            // content into the new size. Bouncing alt-screen
+                            // (leave + re-enter) forces tmux to discard the
+                            // stale alt-screen state and start fresh.
+                            let _ = tui.leave_alt_screen();
+                            let _ = tui.enter_alt_screen();
                             let backend = tui.terminal.backend_mut();
                             let _ = crossterm::queue!(
                                 backend,
