@@ -230,6 +230,7 @@ impl ChatWidget {
                 if let Some(thread_id) = self.thread_id {
                     self.app_event_tx
                         .send(AppEvent::OpenThreadGoalMenu { thread_id });
+                    self.append_message_history_entry("/goal".to_string());
                 } else {
                     self.add_info_message(
                         GOAL_USAGE.to_string(),
@@ -685,6 +686,7 @@ impl ChatWidget {
                                 .send(AppEvent::SetThreadGoalStatus { thread_id, status });
                         }
                     }
+                    self.append_message_history_entry(format!("/goal {trimmed}"));
                     if source == SlashCommandDispatchSource::Live {
                         self.bottom_pane.drain_pending_submission_state();
                     }
@@ -735,6 +737,7 @@ impl ChatWidget {
                     objective: objective.to_string(),
                     mode: ThreadGoalSetMode::ConfirmIfExists,
                 });
+                self.append_message_history_entry(format!("/goal {trimmed}"));
                 if source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.drain_pending_submission_state();
                 }
