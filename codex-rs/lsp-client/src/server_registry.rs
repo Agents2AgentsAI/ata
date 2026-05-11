@@ -335,6 +335,9 @@ pub struct ServerRegistry {
     /// Servers that failed to start, with reason. Entries can be cleared to allow retry
     /// (e.g. after the agent installs missing dependencies).
     broken: AsyncMutex<HashMap<ClientKey, String>>,
+    /// Servers that could not be attempted for transient registry reasons
+    /// such as client-cap exhaustion.
+    unavailable: AsyncMutex<HashMap<ClientKey, String>>,
     /// In-flight spawns for dedup.
     spawning: StdMutex<HashMap<ClientKey, Arc<tokio::sync::Notify>>>,
     /// Workspace root directory.
@@ -416,6 +419,7 @@ impl ServerRegistry {
             servers,
             clients: AsyncMutex::new(HashMap::new()),
             broken: AsyncMutex::new(HashMap::new()),
+            unavailable: AsyncMutex::new(HashMap::new()),
             spawning: StdMutex::new(HashMap::new()),
             workspace_root,
             install_confirm: RwLock::new(install_confirm),
@@ -443,11 +447,16 @@ impl ServerRegistry {
             .lock()
             .await
             .retain(|(sid, _), _| !matching.contains(sid));
+        self.unavailable
+            .lock()
+            .await
+            .retain(|(sid, _), _| !matching.contains(sid));
     }
 
     /// Clear all broken entries (for workspace-wide operations).
     pub async fn clear_all_broken(&self) {
         self.broken.lock().await.clear();
+        self.unavailable.lock().await.clear();
     }
 
     /// Returns the workspace root directory for this registry.
@@ -510,6 +519,10 @@ impl ServerRegistry {
                 ));
                 continue;
             }
+            if let Some(reason) = self.unavailable.lock().await.get(&key).cloned() {
+                lines.push(format!("{server_id}: {reason}"));
+                continue;
+            }
 
             if self.resolve_start_command(config).is_some() {
                 continue;
@@ -555,12 +568,14 @@ impl ServerRegistry {
             }
 
             // Check if already running.
-            {
+            let existing_client = {
                 let clients = self.clients.lock().await;
-                if let Some(client) = clients.get(&key) {
-                    result.push((server_id.clone(), client.clone()));
-                    continue;
-                }
+                clients.get(&key).cloned()
+            };
+            if let Some(client) = existing_client {
+                self.unavailable.lock().await.remove(&key);
+                result.push((server_id.clone(), client));
+                continue;
             }
 
             spawn_candidates.push((server_id.clone(), config, root, key));
@@ -568,6 +583,14 @@ impl ServerRegistry {
 
         let running_clients = self.clients.lock().await.len();
         if running_clients >= self.limits.max_lsp_clients_per_registry {
+            let reason = format!(
+                "LSP client cap reached ({} running, limit {}); no capacity to start this server",
+                running_clients, self.limits.max_lsp_clients_per_registry
+            );
+            let mut unavailable = self.unavailable.lock().await;
+            for (_, _, _, key) in spawn_candidates {
+                unavailable.insert(key, reason.clone());
+            }
             tracing::warn!(
                 limit = self.limits.max_lsp_clients_per_registry,
                 running = running_clients,
@@ -578,11 +601,12 @@ impl ServerRegistry {
 
         let remaining_capacity = self.limits.max_lsp_clients_per_registry - running_clients;
         let skipped_spawns = spawn_candidates.len().saturating_sub(remaining_capacity);
-        for (server_id, config, root, key) in spawn_candidates.into_iter().take(remaining_capacity)
-        {
+        let mut spawn_candidates = spawn_candidates.into_iter();
+        for (server_id, config, root, key) in spawn_candidates.by_ref().take(remaining_capacity) {
             // Try to spawn (with dedup).
             match self.spawn_client(&server_id, config, &root, &key).await {
                 Ok(client) => {
+                    self.unavailable.lock().await.remove(&key);
                     result.push((server_id.clone(), client));
                 }
                 Err(e) => {
@@ -597,6 +621,15 @@ impl ServerRegistry {
         }
 
         if skipped_spawns > 0 {
+            let running = self.clients.lock().await.len();
+            let reason = format!(
+                "LSP client cap reached ({} running, limit {}); no capacity to start this server",
+                running, self.limits.max_lsp_clients_per_registry
+            );
+            let mut unavailable = self.unavailable.lock().await;
+            for (_, _, _, key) in spawn_candidates {
+                unavailable.insert(key, reason.clone());
+            }
             tracing::warn!(
                 limit = self.limits.max_lsp_clients_per_registry,
                 skipped = skipped_spawns,
@@ -2064,6 +2097,42 @@ echo 'unexpected invocation without --version' >&2\nexit 1\n",
         let tmp = tempfile::TempDir::new().unwrap();
         let result = probe_python_venv(tmp.path());
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn explains_client_cap_for_matching_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("sample.py");
+        std::fs::write(&file, "def sample():\n    return 1\n").unwrap();
+
+        let mut servers = HashMap::new();
+        servers.insert(
+            "pyright".to_string(),
+            LspServerConfig::new(
+                vec![".py".to_string()],
+                vec!["pyright-langserver".to_string(), "--stdio".to_string()],
+                Vec::new(),
+            ),
+        );
+        let registry = ServerRegistry::new_with_limits(
+            servers,
+            tmp.path().to_path_buf(),
+            None,
+            RegistryLimits {
+                max_sub_roots_per_server: 5,
+                max_lsp_clients_per_registry: 0,
+            },
+        );
+
+        assert!(registry.get_clients(&file).await.is_empty());
+        let details = registry.explain_unavailable_servers(&file).await;
+
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("LSP client cap reached")),
+            "expected cap detail, got {details:?}"
+        );
     }
 
     #[test]

@@ -310,12 +310,12 @@ impl MultiRootState {
         // subagent — otherwise every spawn_agent() fires up another
         // rust-analyzer / pyright / etc. per workspace root.
         #[cfg(feature = "lsp")]
-        let (lsp_registry, registry_is_fresh) = if let Some(servers) = &self.lsp_server_configs
+        let lsp_registry = if let Some(servers) = &self.lsp_server_configs
             && !servers.is_empty()
         {
             let mut cache = self.shared_lsp_registry_cache.write().await;
             if let Some(existing) = cache.get(&root.path) {
-                (Some(Arc::clone(existing)), false)
+                Some(Arc::clone(existing))
             } else {
                 let callback = self
                     .install_confirm
@@ -329,10 +329,10 @@ impl MultiRootState {
                     Some(Arc::clone(&self.install_tracker)),
                 ));
                 cache.insert(root.path.clone(), Arc::clone(&registry));
-                (Some(registry), true)
+                Some(registry)
             }
         } else {
-            (None, false)
+            None
         };
 
         #[cfg(feature = "treesitter")]
@@ -355,19 +355,10 @@ impl MultiRootState {
 
         #[cfg(feature = "lsp")]
         if let Some(registry) = lsp_registry {
-            let registry_for_prewarm = Arc::clone(&registry);
             self.lsp_registries
                 .write()
                 .await
                 .insert(root.name.clone(), registry);
-
-            // Only kick off prewarm the first time we build this registry; reused
-            // registries are either already warm or already warming.
-            if registry_is_fresh {
-                tokio::spawn(async move {
-                    registry_for_prewarm.prewarm_workspace_clients().await;
-                });
-            }
         }
 
         Ok(root)
