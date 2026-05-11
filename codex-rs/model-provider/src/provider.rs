@@ -219,20 +219,30 @@ impl ModelProvider for ConfiguredModelProvider {
     ) -> SharedModelsManager {
         // Resolve the effective catalog. Precedence:
         //   1. Explicit `[model_catalog]` from config.toml (caller-provided).
-        //   2. Bundled GitHub Copilot catalog when the provider's wire API is
-        //      Copilot. The Copilot bearer is a GitHub OAuth token resolved at
-        //      request time (not a CodexAuth), so the standard /models fetch
-        //      path can't authenticate against api.githubcopilot.com — without
-        //      this branch the picker silently falls back to the bundled
-        //      OpenAI/Codex catalog, which is the wrong list for Copilot users.
+        //   2. Bundled per-provider catalog keyed off the wire API. Each
+        //      non-OpenAI provider ships its own static slug list because
+        //      none of these endpoints expose a `/models` route that ATA
+        //      can authenticate against today:
+        //        - CopilotInline       -> bundled_copilot_models_response
+        //        - AnthropicMessages   -> bundled_anthropic_models_response
+        //        - GeminiGenerate      -> bundled_gemini_models_response
+        //      Without these branches the picker silently falls back to the
+        //      bundled OpenAI/Codex catalog, which is the wrong list for
+        //      every non-OpenAI provider and surfaces models the provider
+        //      doesn't accept (e.g. `gpt-5.5` against Anthropic).
         let resolved_catalog = config_model_catalog.or_else(|| {
-            if matches!(
-                self.info.wire_api,
-                codex_model_provider_info::WireApi::CopilotInline
-            ) {
-                codex_models_manager::bundled_copilot_models_response().ok()
-            } else {
-                None
+            use codex_model_provider_info::WireApi;
+            match self.info.wire_api {
+                WireApi::CopilotInline => {
+                    codex_models_manager::bundled_copilot_models_response().ok()
+                }
+                WireApi::AnthropicMessages => {
+                    codex_models_manager::bundled_anthropic_models_response().ok()
+                }
+                WireApi::GeminiGenerate => {
+                    codex_models_manager::bundled_gemini_models_response().ok()
+                }
+                _ => None,
             }
         });
 

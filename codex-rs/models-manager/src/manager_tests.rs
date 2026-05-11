@@ -820,3 +820,96 @@ fn bundled_copilot_models_json_roundtrips() {
         "bundled copilot_models.json must include the login-default slug"
     );
 }
+
+/// Pins the Anthropic catalog to the exact spec the user dictated:
+/// Opus 4.7 + Sonnet 4.6 with full reasoning depth (low→max), Haiku 4.5
+/// with no reasoning effort. Catches accidental additions, slug typos,
+/// and depth-tier drift.
+#[test]
+fn bundled_anthropic_models_json_matches_spec() {
+    use codex_protocol::openai_models::ReasoningEffort;
+    let response = crate::bundled_anthropic_models_response()
+        .unwrap_or_else(|err| panic!("bundled anthropic_models.json should parse: {err}"));
+
+    // serde roundtrip — catches schema drift.
+    let serialized =
+        serde_json::to_string(&response).expect("anthropic_models.json should serialize");
+    let roundtripped: ModelsResponse =
+        serde_json::from_str(&serialized).expect("anthropic_models.json should round-trip");
+    assert_eq!(response, roundtripped);
+
+    let slugs: Vec<&str> = response.models.iter().map(|m| m.slug.as_str()).collect();
+    assert_eq!(
+        slugs,
+        vec!["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        "anthropic catalog must contain exactly the three spec'd slugs, in order",
+    );
+
+    let efforts_of = |slug: &str| -> Vec<ReasoningEffort> {
+        response
+            .models
+            .iter()
+            .find(|m| m.slug == slug)
+            .unwrap_or_else(|| panic!("missing {slug}"))
+            .supported_reasoning_levels
+            .iter()
+            .map(|opt| opt.effort)
+            .collect()
+    };
+    let full = vec![
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+    ];
+    assert_eq!(efforts_of("claude-opus-4-7"), full);
+    assert_eq!(efforts_of("claude-sonnet-4-6"), full);
+    assert!(
+        efforts_of("claude-haiku-4-5").is_empty(),
+        "Haiku 4.5 ships without reasoning effort per spec"
+    );
+}
+
+/// Same for Gemini: 3.1 Pro / Flash / Flash-Lite with minimal→high.
+#[test]
+fn bundled_gemini_models_json_matches_spec() {
+    use codex_protocol::openai_models::ReasoningEffort;
+    let response = crate::bundled_gemini_models_response()
+        .unwrap_or_else(|err| panic!("bundled gemini_models.json should parse: {err}"));
+
+    let serialized = serde_json::to_string(&response).expect("gemini_models.json should serialize");
+    let roundtripped: ModelsResponse =
+        serde_json::from_str(&serialized).expect("gemini_models.json should round-trip");
+    assert_eq!(response, roundtripped);
+
+    let slugs: Vec<&str> = response.models.iter().map(|m| m.slug.as_str()).collect();
+    assert_eq!(
+        slugs,
+        vec![
+            "gemini-3.1-pro",
+            "gemini-3.1-flash",
+            "gemini-3.1-flash-lite"
+        ],
+        "gemini catalog must contain exactly the three spec'd slugs, in order",
+    );
+
+    let expected = vec![
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+    ];
+    for slug in &slugs {
+        let efforts: Vec<ReasoningEffort> = response
+            .models
+            .iter()
+            .find(|m| m.slug == *slug)
+            .unwrap()
+            .supported_reasoning_levels
+            .iter()
+            .map(|opt| opt.effort)
+            .collect();
+        assert_eq!(efforts, expected, "{slug} reasoning levels must match spec");
+    }
+}

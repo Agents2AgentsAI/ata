@@ -455,6 +455,10 @@
         {
           "effort": "xhigh",
           "description": "Extra-deep reasoning for the hardest problems"
+        },
+        {
+          "effort": "max",
+          "description": "Unbounded reasoning budget \u2014 slow, exhaustive, best for one-shot intractable problems"
         }
       ],
       "shell_type": "shell_command",
