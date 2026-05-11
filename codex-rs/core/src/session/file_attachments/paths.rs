@@ -41,7 +41,7 @@ fn extract_local_pdf_paths_from_text_inputs(
             continue;
         };
         for token in split_text_path_tokens(text) {
-            let candidate = strip_wrapping_quote_pair(token);
+            let candidate = normalize_path_token(token);
             if !is_pdf_path_token(candidate) || looks_like_url(candidate) {
                 continue;
             }
@@ -127,6 +127,28 @@ fn strip_wrapping_quote_pair(token: &str) -> &str {
         return &token[1..token.len() - 1];
     }
     token
+}
+
+// Strips sentence-ending punctuation and wrapping quote pairs iteratively so
+// mid-sentence references like `... see foo.pdf.` or `"foo.pdf",` still
+// resolve to the underlying path.
+fn normalize_path_token(token: &str) -> &str {
+    let mut current = token;
+    loop {
+        let after_quotes = strip_wrapping_quote_pair(current);
+        let after_lead =
+            after_quotes.trim_start_matches(|c: char| matches!(c, '(' | '[' | '*' | '`'));
+        let after_trail = after_lead.trim_end_matches(|c: char| {
+            matches!(
+                c,
+                '.' | ',' | ':' | ';' | '!' | '?' | ')' | ']' | '*' | '`'
+            )
+        });
+        if after_trail == current {
+            return current;
+        }
+        current = after_trail;
+    }
 }
 
 fn is_pdf_path_token(token: &str) -> bool {

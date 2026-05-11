@@ -1,7 +1,7 @@
 {
   "models": [
     {
-      "slug": "gemini-3.1-pro",
+      "slug": "gemini-3.1-pro-preview",
       "display_name": "Gemini 3.1 Pro",
       "description": "Google's flagship multimodal reasoning model.",
       "default_reasoning_level": "medium",
@@ -52,7 +52,7 @@
       "supports_search_tool": false
     },
     {
-      "slug": "gemini-3.1-flash",
+      "slug": "gemini-3.1-flash-preview",
       "display_name": "Gemini 3.1 Flash",
       "description": "Fast multimodal model, balanced everyday workhorse.",
       "default_reasoning_level": "medium",

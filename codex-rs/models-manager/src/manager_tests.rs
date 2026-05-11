@@ -887,8 +887,8 @@ fn bundled_gemini_models_json_matches_spec() {
     assert_eq!(
         slugs,
         vec![
-            "gemini-3.1-pro",
-            "gemini-3.1-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-flash-preview",
             "gemini-3.1-flash-lite"
         ],
         "gemini catalog must contain exactly the three spec'd slugs, in order",

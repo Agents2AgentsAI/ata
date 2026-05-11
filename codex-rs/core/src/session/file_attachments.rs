@@ -720,6 +720,38 @@ mod tests {
     }
 
     #[test]
+    fn inject_local_pdf_paths_from_text_inputs_strips_trailing_sentence_punctuation() {
+        let cwd = tempfile::tempdir().expect("cwd");
+        let nested_dir = cwd.path().join("locus");
+        std::fs::create_dir_all(&nested_dir).expect("nested dir");
+        let file = nested_dir.join("locus_proposal.pdf");
+        std::fs::write(&file, b"%PDF-1.4\n").expect("write pdf");
+
+        for prompt in [
+            "summarize locus/locus_proposal.pdf.",
+            "summarize locus/locus_proposal.pdf,",
+            "see locus/locus_proposal.pdf!",
+            "ref (locus/locus_proposal.pdf)",
+            "*locus/locus_proposal.pdf*",
+        ] {
+            let mut inputs = vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }];
+            inject_local_pdf_paths_from_text_inputs(
+                &mut inputs,
+                cwd.path(),
+                &workspace_policy_restricted_to_cwd(),
+            );
+            assert_eq!(
+                local_file_count(&inputs),
+                1,
+                "expected pdf to be auto-injected for prompt: {prompt:?}"
+            );
+        }
+    }
+
+    #[test]
     fn inject_local_pdf_paths_from_text_inputs_attaches_quoted_pdf_path_with_spaces() {
         let cwd = tempfile::tempdir().expect("cwd");
         let file = cwd.path().join("meeting notes.pdf");
