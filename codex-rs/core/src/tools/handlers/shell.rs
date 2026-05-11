@@ -252,6 +252,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
         network: exec_params.network.clone(),
         sandbox_permissions: effective_additional_permissions.sandbox_permissions,
         additional_permissions: normalized_additional_permissions,
+        workspace_kb_root: turn.workspace_kb_root.clone(),
         #[cfg(unix)]
         additional_permissions_preapproved: effective_additional_permissions
             .permissions_preapproved,

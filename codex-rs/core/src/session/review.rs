@@ -128,6 +128,7 @@ pub(super) async fn spawn_review_thread(
         environments: parent_turn_context.environments.clone(),
         tools_config,
         features: parent_turn_context.features.clone(),
+        workspace_kb_root: parent_turn_context.workspace_kb_root.clone(),
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),

@@ -78,6 +78,7 @@ codex-utils-stream-parser = { workspace = true }
 codex-utils-template = { workspace = true }
 codex-v8-poc = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
+codex-workspace = { workspace = true }
 csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }

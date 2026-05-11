@@ -16,6 +16,10 @@ use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::models::FileSystemPermissions;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -26,15 +30,25 @@ pub(crate) mod unified_exec;
 
 /// Shared helper to construct sandbox transform inputs from a tokenized command line.
 /// Validates that at least a program is present.
+///
+/// `workspace_kb_root`, when `Some`, is appended to the command's
+/// `additional_permissions.file_system.write` list so the agent can
+/// freely write into its per-workspace knowledge-base directory
+/// (`~/.ata/<workspace_id>/knowledge-base/...`) without an approval
+/// prompt. Resolved by `crate::workspace_kb::kb_writable_root` from the
+/// per-turn `CODEX_KB_PATH` env var; threaded through `TurnContext`.
 pub(crate) fn build_sandbox_command(
     command: &[String],
     cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
     additional_permissions: Option<AdditionalPermissionProfile>,
+    workspace_kb_root: Option<&AbsolutePathBuf>,
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
+    let additional_permissions =
+        merge_workspace_kb_root(additional_permissions, workspace_kb_root.cloned());
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
@@ -42,6 +56,35 @@ pub(crate) fn build_sandbox_command(
         env: env.clone(),
         additional_permissions,
     })
+}
+
+fn merge_workspace_kb_root(
+    additional_permissions: Option<AdditionalPermissionProfile>,
+    workspace_kb_root: Option<AbsolutePathBuf>,
+) -> Option<AdditionalPermissionProfile> {
+    let Some(workspace_kb_root) = workspace_kb_root else {
+        return additional_permissions;
+    };
+
+    let mut additional_permissions = additional_permissions.unwrap_or_default();
+    let file_system = additional_permissions
+        .file_system
+        .get_or_insert_with(FileSystemPermissions::default);
+    let already_present = file_system.entries.iter().any(|entry| match &entry.path {
+        FileSystemPath::Path { path } => {
+            path == &workspace_kb_root && entry.access == FileSystemAccessMode::Write
+        }
+        FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => false,
+    });
+    if !already_present {
+        file_system.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: workspace_kb_root,
+            },
+            access: FileSystemAccessMode::Write,
+        });
+    }
+    Some(additional_permissions)
 }
 
 pub(crate) fn exec_env_for_sandbox_permissions(

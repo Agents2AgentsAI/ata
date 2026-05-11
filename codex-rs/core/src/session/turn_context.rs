@@ -85,6 +85,13 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) features: ManagedFeatures,
+    /// Resolved knowledge-base root for this turn, derived from
+    /// `CODEX_KB_PATH` in the per-turn shell environment. When `Some`,
+    /// `tools/runtimes/build_sandbox_command` automatically extends each
+    /// shell exec's `additional_permissions.file_system.write` with this
+    /// path, so the agent doesn't need approval to write into its own
+    /// per-workspace KB directory.
+    pub(crate) workspace_kb_root: Option<AbsolutePathBuf>,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
@@ -268,6 +275,7 @@ impl TurnContext {
             shell_environment_policy: self.shell_environment_policy.clone(),
             tools_config,
             features,
+            workspace_kb_root: self.workspace_kb_root.clone(),
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
@@ -435,6 +443,42 @@ impl Session {
             );
         }
         per_turn_config.features = config.features.clone();
+
+        // When the research-knowledge-base feature is on, derive the
+        // per-workspace KB path and export it to the per-turn shell
+        // environment as `CODEX_KB_PATH`. This is what the `kb` skill
+        // and the `ata workspace …` CLI namespace look up; setting it
+        // here means LLM tool calls, subagent shells, and `/shell` all
+        // see the same dir. The same env var also drives the sandbox
+        // writable-root grant in `make_turn_context` (no approval
+        // prompts when writing under that path).
+        if per_turn_config
+            .features
+            .enabled(codex_features::Feature::ResearchKnowledgeBase)
+        {
+            let kb_env = crate::workspace_kb::resolve_kb_env(
+                session_configuration.codex_home().as_path(),
+                per_turn_config.cwd.as_path(),
+                /*kb_path_override*/ None,
+                /*session_id*/ None,
+                /*thread_id*/ None,
+            );
+            per_turn_config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert(
+                    crate::workspace_kb::CODEX_KB_PATH_ENV_VAR.to_string(),
+                    kb_env.kb_path,
+                );
+            if let Some(workspace_kb_root) = kb_env.workspace_kb_root.as_ref() {
+                tracing::debug!(
+                    path = %workspace_kb_root.as_path().display(),
+                    "resolved workspace KB sandbox root"
+                );
+            }
+        }
+
         per_turn_config
     }
 
@@ -522,6 +566,17 @@ impl Session {
         ));
 
         let per_turn_config = Arc::new(per_turn_config);
+        // Resolve a sandbox-writable KB root from the per-turn shell
+        // environment (`CODEX_KB_PATH`). Mirrors the codex-locus wiring
+        // so writes under `~/.ata/<workspace_id>/knowledge-base/...`
+        // don't require approval.
+        let workspace_kb_root = per_turn_config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .get(crate::workspace_kb::CODEX_KB_PATH_ENV_VAR)
+            .map(std::path::Path::new)
+            .and_then(crate::workspace_kb::kb_writable_root);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
             thread_id.to_string(),
@@ -563,6 +618,7 @@ impl Session {
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             tools_config,
             features: per_turn_config.features.clone(),
+            workspace_kb_root,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),

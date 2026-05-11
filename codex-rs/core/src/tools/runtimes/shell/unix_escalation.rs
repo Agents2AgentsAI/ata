@@ -117,8 +117,13 @@ pub(super) async fn try_run_zsh_fork(
     }
 
     let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
-    let command =
-        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
+    let command = build_sandbox_command(
+        command,
+        &req.cwd,
+        &env,
+        req.additional_permissions.clone(),
+        req.workspace_kb_root.as_ref(),
+    )?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,

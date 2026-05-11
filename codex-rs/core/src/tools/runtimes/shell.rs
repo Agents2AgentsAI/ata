@@ -56,6 +56,11 @@ pub struct ShellRequest {
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    /// Per-turn workspace-write KB root pulled from `TurnContext`. When
+    /// `Some`, `build_sandbox_command` appends it to this command's
+    /// writable roots so writes under
+    /// `~/.ata/<workspace_id>/knowledge-base/...` don't require approval.
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -273,8 +278,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let command = build_sandbox_command(
+            &command,
+            &req.cwd,
+            &env,
+            req.additional_permissions.clone(),
+            req.workspace_kb_root.as_ref(),
+        )?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);

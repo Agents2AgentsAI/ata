@@ -2568,6 +2568,7 @@ dependencies = [
  "codex-utils-template",
  "codex-v8-poc",
  "codex-windows-sandbox",
+ "codex-workspace",
  "core_test_support",
  "csv",
  "ctor 0.6.3",

@@ -68,6 +68,9 @@ pub struct UnifiedExecRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    /// See `ShellRequest::workspace_kb_root` — same plumbing for the
+    /// unified-exec runtime.
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -279,7 +282,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
             let command =
-                build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
+                build_sandbox_command(
+                &command,
+                &req.cwd,
+                &env,
+                req.additional_permissions.clone(),
+                req.workspace_kb_root.as_ref(),
+            )
                     .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
@@ -330,7 +339,13 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             }
         }
         let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
+            build_sandbox_command(
+                &command,
+                &req.cwd,
+                &env,
+                req.additional_permissions.clone(),
+                req.workspace_kb_root.as_ref(),
+            )
                 .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
