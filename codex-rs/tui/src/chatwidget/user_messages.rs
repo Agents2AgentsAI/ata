@@ -13,22 +13,41 @@ use codex_protocol::user_input::TextElement;
 use super::ChatWidget;
 use super::append_text_with_rebased_elements;
 
-/// Length of the leading system-injected prefix to hide from chat history
-/// (the model still sees it). Currently covers voice-mode instructions.
-fn strip_voice_prefix_len(text: &str) -> usize {
+/// Byte range of `text` that should be shown in chat history. System-injected
+/// preambles (voice-mode, reading-view question context) are hidden from
+/// display but kept in the model payload.
+fn displayable_range(text: &str) -> (usize, usize) {
+    let mut start = 0usize;
+    let mut end = text.len();
+
     #[cfg(not(target_os = "linux"))]
     {
         for prefix in crate::chatwidget::voice_mode::voice_mode_instruction_prefixes() {
             if text.starts_with(prefix) {
-                return prefix.len();
+                start = prefix.len();
+                break;
             }
         }
-        if text.starts_with(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION) {
-            return crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION.len();
+        if start == 0 && text.starts_with(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION)
+        {
+            start = crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION.len();
         }
     }
-    let _ = text;
-    0
+
+    // Reading-view Tab-to-ask wraps the question with a "[The user is reading…]"
+    // header and a "<!-- READER_TOOL_INSTRUCTIONS -->" trailer. Keep only the
+    // question itself.
+    if text[start..].starts_with("[The user is reading ") {
+        if let Some(eol) = text[start..].find("]\n\n") {
+            start += eol + "]\n\n".len();
+        }
+    }
+    const READER_INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
+    if let Some(sep) = text[start..].find(READER_INSTR_SEP) {
+        end = start + sep;
+    }
+
+    (start, end.max(start))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -121,19 +140,19 @@ impl ChatWidget {
                     text,
                     text_elements: current_text_elements,
                 } => {
-                    let prefix_len = strip_voice_prefix_len(text);
-                    let display_text = &text[prefix_len..];
+                    let (vis_start, vis_end) = displayable_range(text);
+                    let display_text = &text[vis_start..vis_end];
                     append_text_with_rebased_elements(
                         &mut message,
                         &mut text_elements,
                         display_text,
                         current_text_elements.iter().filter_map(|element| {
                             let range = element.byte_range.clone();
-                            if range.end <= prefix_len {
+                            if range.end <= vis_start || range.start >= vis_end {
                                 return None;
                             }
-                            let start = range.start.saturating_sub(prefix_len);
-                            let end = range.end.saturating_sub(prefix_len);
+                            let start = range.start.saturating_sub(vis_start);
+                            let end = range.end.min(vis_end).saturating_sub(vis_start);
                             let shifted = ByteRange { start, end };
                             Some(TextElement::new(
                                 shifted,
