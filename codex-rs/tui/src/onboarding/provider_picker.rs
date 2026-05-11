@@ -128,7 +128,7 @@ impl ProviderOption {
         entry_for(self).display_name
     }
 
-    fn env_var(self) -> Option<&'static str> {
+    pub(super) fn env_var(self) -> Option<&'static str> {
         entry_for(self).env_var
     }
 

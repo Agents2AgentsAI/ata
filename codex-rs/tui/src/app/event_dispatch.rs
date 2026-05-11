@@ -1161,9 +1161,16 @@ impl App {
             }
             AppEvent::PersistModelSelection { model, effort } => {
                 let profile = self.active_profile.as_deref();
+                // Preserve the active `model_provider` rather than clearing
+                // it: `set_model`'s third arg is `Some => set, None => clear`,
+                // and clearing wipes the user's Anthropic / Gemini / Copilot
+                // switch every time they pick a model. Re-writing the
+                // currently-resolved provider id is idempotent for openai
+                // (the historic default) and load-bearing for everyone else.
+                let active_provider = self.config.model_provider_id.clone();
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
-                    .set_model(Some(model.as_str()), effort, None)
+                    .set_model(Some(model.as_str()), effort, Some(active_provider))
                     .apply()
                     .await
                 {

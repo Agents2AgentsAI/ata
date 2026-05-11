@@ -514,6 +514,14 @@ pub fn built_in_model_providers(
         // wire `model_provider = "copilot"` without writing a manual provider
         // entry to config.toml.
         ("copilot", ModelProviderInfo::create_copilot_provider()),
+        // Anthropic and Gemini are also built-in: the onboarding picker's
+        // "Configure model providers" flow writes `model_provider =
+        // "anthropic"` / `"gemini"` to config.toml, and without these
+        // registry entries the loader silently falls back to OpenAI on the
+        // next launch — making the `/model` picker show OpenAI models and
+        // every chat turn fail with a missing OpenAI key.
+        ("anthropic", ModelProviderInfo::create_anthropic_provider()),
+        ("gemini", ModelProviderInfo::create_gemini_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

@@ -438,3 +438,29 @@ refresh_interval_ms = 0
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
 }
+
+/// Regression: every provider id the onboarding picker can persist into
+/// `model_provider` must resolve to a built-in entry. Without this
+/// guarantee the config loader silently falls back to OpenAI, which
+/// breaks the `/model` picker (shows OpenAI models) and login
+/// persistence (next launch can't find the configured provider).
+#[test]
+fn built_in_model_providers_registers_login_targets() {
+    let providers = crate::built_in_model_providers(/*openai_base_url*/ None);
+
+    for (provider_id, expected_wire_api) in [
+        ("openai", crate::WireApi::Responses),
+        ("anthropic", crate::WireApi::AnthropicMessages),
+        ("gemini", crate::WireApi::GeminiGenerate),
+        ("copilot", crate::WireApi::CopilotInline),
+    ] {
+        let info = providers
+            .get(provider_id)
+            .unwrap_or_else(|| panic!("built-in provider `{provider_id}` should be registered"));
+        assert_eq!(
+            info.wire_api, expected_wire_api,
+            "{provider_id} should resolve to {expected_wire_api:?}, got {:?}",
+            info.wire_api
+        );
+    }
+}

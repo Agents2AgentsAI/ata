@@ -862,17 +862,23 @@ impl AuthModeWidget {
         ])
         .areas(area);
 
+        let (display_name, env_var) = match state.provider() {
+            Some(provider) => (provider.display_name(), provider.env_var()),
+            None => ("OpenAI", Some("OPENAI_API_KEY")),
+        };
         let mut intro_lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "Use your own OpenAI API key for usage-based billing".bold(),
+                format!("Use your own {display_name} API key for usage-based billing").bold(),
             ]),
             "".into(),
             "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
-            intro_lines.push("  Detected OPENAI_API_KEY environment variable.".into());
+            if let Some(env_var) = env_var {
+                intro_lines.push(format!("  Detected {env_var} environment variable.").into());
+            }
             intro_lines.push(
                 "  Paste a different key if you prefer to use another account."
                     .dim()
