@@ -44,6 +44,35 @@ fn strip_citation_markers(text: &str) -> String {
     RE.replace_all(text, "").into_owned()
 }
 
+/// Strip any agent-authored `<!-- CODEX_SECTION_META … -->` blocks from
+/// content the agent provides via update/append/add/patch tool calls.
+///
+/// `foldable` and `summary` are expected as separate tool parameters,
+/// and the metadata comment is added by `serialize_section_metadata`
+/// when the section is rendered. When the agent embeds the comment
+/// inline, it has historically supplied a malformed multi-line JSON
+/// (with literal newlines inside the `summary` value). The on-disk
+/// parser at `parse_section_metadata_line` only recognizes the comment
+/// when the prefix and suffix are on the SAME line, so the malformed
+/// block is treated as visible content and leaks the entire summary
+/// payload into the rendered section.
+///
+/// Strip both well-formed (single-line) and malformed (multi-line)
+/// metadata comments from agent-supplied content. Any `foldable` /
+/// `summary` set via the tool parameters wins.
+fn strip_agent_authored_metadata(text: &str) -> String {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        // `(?s)` makes `.` match newlines so we catch the multi-line
+        // malformed form. Non-greedy `.*?` so we don't eat past the
+        // first closing ` -->`.
+        match Regex::new(r"(?s)<!--\s*CODEX_SECTION_META\s.*?-->\s*\n?") {
+            Ok(re) => re,
+            Err(err) => panic!("invalid CODEX_SECTION_META strip regex: {err}"),
+        }
+    });
+    RE.replace_all(text, "").into_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Cached document state
 // ---------------------------------------------------------------------------
@@ -247,9 +276,13 @@ const READING_VIEW_SUMMARY_GUIDANCE: &str = "SUMMARY (required): Always set the 
      This is used as a section label regardless of foldable.";
 
 #[allow(dead_code)]
-const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
-     set foldable=true. Direct answers, corrections, and rewrites should NOT be foldable \
-     (foldable=false, the default).";
+const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: Set foldable=true for any inserted answer, explanation, \
+     example, or deep dive — the user can collapse and re-expand it with `f`. \
+     Only set foldable=false when the user explicitly asked for a permanent \
+     rewrite of the original passage (i.e. update_document_section / a patch \
+     that REPLACES old_text rather than appending after it). Default to \
+     foldable=true unless you are sure the content is meant to overwrite the \
+     original passage.";
 
 #[allow(dead_code)]
 const READING_VIEW_TOOL_CALL_ONLY_GUIDANCE: &str =
@@ -632,8 +665,10 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     properties.insert(
         "foldable".to_string(),
         JsonSchema::boolean(Some(
-            "When true, content appears in a collapsible region. Use for supplementary \
-             content (explanations, examples). Default: false."
+            "When true, content appears in a collapsible region the user can fold/expand with `f`. \
+             Set true for inserted answers, explanations, and examples. \
+             Set false ONLY when the patch replaces the original passage with a permanent rewrite. \
+             Default: true for append/patch when not specified."
                 .to_string(),
         )),
     );
@@ -701,8 +736,10 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     properties.insert(
         "foldable".to_string(),
         JsonSchema::boolean(Some(
-            "When true, content appears in a collapsible region. Use for supplementary \
-             content (explanations, examples). Default: false."
+            "When true, content appears in a collapsible region the user can fold/expand with `f`. \
+             Set true for inserted answers, explanations, and examples. \
+             Set false ONLY when the patch replaces the original passage with a permanent rewrite. \
+             Default: true for append/patch when not specified."
                 .to_string(),
         )),
     );
@@ -975,6 +1012,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1101,6 +1139,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1134,7 +1173,10 @@ impl ToolHandler for DocumentReaderHandler {
                                 section.content.push('\n');
                             }
                             section.content.push_str(&args.content);
-                            section.foldable = args.foldable.unwrap_or(false);
+                            // Append defaults to foldable so the inserted answer
+                            // is collapsible with `f` — see
+                            // READING_VIEW_FOLDABLE_GUIDANCE.
+                            section.foldable = args.foldable.unwrap_or(true);
                             section.summary = args.summary.clone();
                         }
                         streaming_unfilled_reminder(doc)
@@ -1153,7 +1195,7 @@ impl ToolHandler for DocumentReaderHandler {
                     (reminder, reopen)
                 };
 
-                let foldable = args.foldable.unwrap_or(false);
+                let foldable = args.foldable.unwrap_or(true);
                 let summary = args.summary;
 
                 // Re-open the reading view if the user closed it (non-streaming).
@@ -1202,6 +1244,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1299,6 +1342,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.new_text = strip_citation_markers(&args.new_text);
+                args.new_text = strip_agent_authored_metadata(&args.new_text);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1342,7 +1386,10 @@ impl ToolHandler for DocumentReaderHandler {
                         {
                             section.content =
                                 section.content.replacen(&args.old_text, &args.new_text, 1);
-                            section.foldable = args.foldable.unwrap_or(false);
+                            // Patch defaults to foldable so an inserted answer
+                            // is collapsible with `f` — see
+                            // READING_VIEW_FOLDABLE_GUIDANCE.
+                            section.foldable = args.foldable.unwrap_or(true);
                             section.summary = args.summary.clone();
                         }
                         streaming_unfilled_reminder(doc)
@@ -1361,7 +1408,7 @@ impl ToolHandler for DocumentReaderHandler {
                     (reminder, reopen)
                 };
 
-                let foldable = args.foldable.unwrap_or(false);
+                let foldable = args.foldable.unwrap_or(true);
                 let summary = args.summary;
 
                 // Re-open the reading view if the user closed it (non-streaming).

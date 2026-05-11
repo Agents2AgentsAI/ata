@@ -221,7 +221,7 @@ pub fn build_tool_registry_builder(
         (&*PRESENT_DOCUMENT_TOOL, "present_reading_view"),
         (&*UPDATE_DOCUMENT_SECTION_TOOL, "update_document_section"),
         (&*APPEND_TO_SECTION_TOOL, "append_to_section"),
-        (&*ADD_DOCUMENT_SECTION_TOOL, "add_section"),
+        (&*ADD_DOCUMENT_SECTION_TOOL, "add_document_section"),
         (&*PATCH_DOCUMENT_SECTION_TOOL, "patch_document_section"),
     ] {
         builder.push_spec(

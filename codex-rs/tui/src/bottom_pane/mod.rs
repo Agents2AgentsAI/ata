@@ -1260,19 +1260,24 @@ impl BottomPane {
     pub(crate) fn show_document_reader(
         &mut self,
         ev: codex_protocol::document_reader::PresentDocumentEvent,
-        from_replay: bool,
+        _from_replay: bool,
     ) {
-        // Open the document_reader view; replace any existing view stack entry
-        // for the same document. The actual `DocumentReaderView` constructor
-        // lives in `bottom_pane::document_reader`.
-        let view = Box::new(
-            crate::bottom_pane::document_reader::DocumentReaderView::new_from_event(
-                ev,
-                from_replay,
-                self.frame_requester.clone(),
-            ),
+        // Open the document_reader view, wired to the BottomPane's real
+        // `app_event_tx`. The previous `new_from_event` constructor created
+        // a dummy `AppEventSender` whose receiver was immediately dropped,
+        // so follow-up questions submitted from the reading view (selection
+        // + question + Enter) were sent into a closed channel and never
+        // reached the agent — the answer therefore never came back and
+        // never updated the reading view.
+        let view = crate::bottom_pane::document_reader::DocumentReaderView::new(
+            ev.document_id,
+            ev.title,
+            ev.content,
+            self.app_event_tx.clone(),
+            self.animations_enabled,
+            self.frame_requester.clone(),
         );
-        self.push_view(view);
+        self.push_view(Box::new(view));
     }
 
     pub(crate) fn is_document_reader_active(&self) -> bool {

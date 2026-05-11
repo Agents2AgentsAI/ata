@@ -34,6 +34,17 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
+        // Strip the reading-view follow-up wrapper before any other display
+        // processing. The reading view sends a long prompt to the agent that
+        // includes a header line, the user's actual question, and a block of
+        // tool instructions delimited by `<!-- READER_TOOL_INSTRUCTIONS -->`.
+        // For chat-history display we want only the user's typed question
+        // (the rest is bookkeeping for the agent and should not be visible).
+        // Same pattern lives at `chatwidget::strip_system_instruction_prefix`
+        // in codex-locus; restoring it here keeps the chat surface clean
+        // without changing what the agent receives.
+        let (message, text_elements) =
+            strip_reader_view_wrapper_for_display(message, text_elements);
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();
@@ -133,4 +144,59 @@ impl ChatWidget {
             remote_image_urls,
         )
     }
+}
+
+/// Strip the reading-view follow-up wrapper from a user message so chat
+/// history shows just the user's typed question.
+///
+/// The reading view's `submit_follow_up` builds a turn that looks like:
+///
+/// ```text
+/// [The user is reading "<title>" and asked about the section titled "<heading>"]
+///
+/// <user's actual question>
+///
+/// <!-- READER_TOOL_INSTRUCTIONS -->
+/// Tool target for this turn: ...
+/// ```
+///
+/// The agent needs the whole thing, but the user already sees the
+/// document and the question they typed in the reading-view composer; the
+/// header + tool instructions add no value in chat history and on a
+/// constrained TTY they overwrite the reading view's body when a stale
+/// frame draws on top. Cut at the sentinel and keep just the question.
+///
+/// Also strips the close-feedback message entirely so it doesn't appear
+/// as a phantom user turn after the user dismisses the reader.
+///
+/// `text_elements` are byte-range-anchored to the original message; we
+/// drop them when we substitute a substring because the original ranges
+/// are no longer valid against the new text.
+fn strip_reader_view_wrapper_for_display(
+    message: String,
+    text_elements: Vec<TextElement>,
+) -> (String, Vec<TextElement>) {
+    if message.starts_with("[The user closed the document reader") {
+        return (String::new(), Vec::new());
+    }
+
+    const READER_INSTR_SENTINEL: &str = "<!-- READER_TOOL_INSTRUCTIONS -->";
+    if message.starts_with("[The user is reading")
+        && let Some(cut) = message.find(READER_INSTR_SENTINEL)
+    {
+        let before_sentinel = &message[..cut];
+        let question = if let Some(bracket_end) = before_sentinel.find("]\n\n") {
+            let after_header = &before_sentinel[bracket_end + 3..];
+            if let Some(para_end) = after_header.find("\n\n") {
+                after_header[..para_end].trim().to_string()
+            } else {
+                after_header.trim().to_string()
+            }
+        } else {
+            before_sentinel.trim().to_string()
+        };
+        return (question, Vec::new());
+    }
+
+    (message, text_elements)
 }
