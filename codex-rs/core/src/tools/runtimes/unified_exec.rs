@@ -16,9 +16,11 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::resolve_agent_ata_command;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -254,7 +256,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<UnifiedExecProcess, ToolError> {
-        let base_command = &req.command;
+        // Rewrite agent-issued `ata <args>` to `<current_exe> <args>` so
+        // unified_exec processes always target the running binary,
+        // regardless of whether `ata` is on PATH inside the sandbox.
+        let (base_command, rewrote_ata) = resolve_agent_ata_command(&req.command);
         let session_shell = ctx.session.user_shell();
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
@@ -262,12 +267,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
+        if rewrote_ata {
+            env.insert(
+                CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
         let environment_is_remote = req.environment.is_remote();
         let command = if environment_is_remote {
-            base_command.to_vec()
+            base_command.clone()
         } else {
             maybe_wrap_shell_lc_with_snapshot(
-                base_command,
+                &base_command,
                 session_shell.as_ref(),
                 &req.cwd,
                 &req.explicit_env_overrides,
@@ -281,15 +292,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
-            let command =
-                build_sandbox_command(
+            let command = build_sandbox_command(
                 &command,
                 &req.cwd,
                 &env,
                 req.additional_permissions.clone(),
                 req.workspace_kb_root.as_ref(),
             )
-                    .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
@@ -338,15 +348,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
             }
         }
-        let command =
-            build_sandbox_command(
-                &command,
-                &req.cwd,
-                &env,
-                req.additional_permissions.clone(),
-                req.workspace_kb_root.as_ref(),
-            )
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let command = build_sandbox_command(
+            &command,
+            &req.cwd,
+            &env,
+            req.additional_permissions.clone(),
+            req.workspace_kb_root.as_ref(),
+        )
+        .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)

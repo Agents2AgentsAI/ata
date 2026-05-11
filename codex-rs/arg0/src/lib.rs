@@ -15,6 +15,13 @@ const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
+/// When set in the env, skip `prepend_path_entry_for_codex_aliases`. Set
+/// by `tools/runtimes::resolve_agent_ata_command` after it rewrites an
+/// agent-issued `ata <args>` to `<current_exe> <args>` — the rewrite
+/// already targets the canonical binary path, so the PATH-prepend
+/// helper would just add a redundant alias dir (and on some runners
+/// has been observed to recurse).
+const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -137,6 +144,10 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
     // This modifies the environment, which is not thread-safe, so do this
     // before creating any threads/the Tokio runtime.
     load_dotenv();
+
+    if std::env::var_os(CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR).is_some() {
+        return None;
+    }
 
     match prepend_path_entry_for_codex_aliases() {
         Ok(path_entry) => Some(path_entry),

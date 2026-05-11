@@ -19,9 +19,11 @@ use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+use crate::tools::runtimes::CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::resolve_agent_ata_command;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -253,9 +255,19 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let session_shell = ctx.session.user_shell();
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
-        let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        // Rewrite agent-issued `ata <args>` to `<current_exe> <args>` so
+        // shell execs always target the running binary, regardless of
+        // whether `ata` is on PATH inside the sandbox.
+        let (base_command, rewrote_ata) = resolve_agent_ata_command(&req.command);
+        let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
+        if rewrote_ata {
+            env.insert(
+                CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR.to_string(),
+                "1".to_string(),
+            );
+        }
         let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
+            &base_command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,

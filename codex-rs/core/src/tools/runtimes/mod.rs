@@ -23,6 +23,87 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::path::Path;
+
+/// When set on a shell exec environment, tells the child `ata` invocation
+/// to skip its `prepend_path_entry_for_codex_aliases` PATH munging — we
+/// already rewrote the program to the fully-qualified current_exe path,
+/// so the PATH helper would just add a redundant entry (and on some
+/// runners can recurse into itself).
+pub(crate) const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
+
+fn is_ata_program(program: &str) -> bool {
+    let name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program);
+    name.eq_ignore_ascii_case("ata") || name.eq_ignore_ascii_case("ata.exe")
+}
+
+fn command_with_current_exe(args: &[String]) -> Option<Vec<String>> {
+    let current_exe = std::env::current_exe().ok()?;
+    Some(
+        std::iter::once(current_exe.to_string_lossy().to_string())
+            .chain(args.iter().cloned())
+            .collect(),
+    )
+}
+
+fn command_with_ata_shell_wrapper(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = codex_shell_command::bash::extract_bash_command(command)?;
+    let current_exe = std::env::current_exe().ok()?;
+    let current_exe = shell_single_quote(current_exe.to_string_lossy().as_ref());
+    let rewritten_script = format!("ata() {{ '{current_exe}' \"$@\"; }}\n\n{script}");
+    let mut rewritten = command.to_vec();
+    rewritten[2] = rewritten_script;
+    Some(rewritten)
+}
+
+/// Resolve model-invoked `ata` commands to the current executable so agent
+/// shell commands always target the same binary as the running session.
+///
+/// The agent has no reliable PATH lookup for `ata` — it might be
+/// installed under `~/.cargo/bin`, `~/.local/bin`, or via a wrapper
+/// script — and the workspace-write sandbox often strips the user's
+/// shell-init PATH entries. Three rewrite paths:
+///
+/// 1. **Direct**: `ata <args>` -> `<current_exe> <args>`
+/// 2. **Single shell wrap**: `bash -lc "ata <args>"` (only one command in
+///    the script) -> `<current_exe> <args>`
+/// 3. **Compound shell wrap**: `bash -lc "foo; ata <args>; bar"` -> inject
+///    a shell function `ata() { '<current_exe>' "$@"; }` before the
+///    script so every `ata` reference in the chain resolves correctly.
+///
+/// Returns `(rewritten_command, did_rewrite)`. Callers set
+/// `CODEX_SKIP_ARG0_PATH_HELPER=1` in the child env when `did_rewrite` is
+/// true, so the child binary doesn't run its PATH-prepend helper a
+/// second time.
+pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, bool) {
+    if let Some((program, args)) = command.split_first()
+        && is_ata_program(program)
+        && let Some(updated) = command_with_current_exe(args)
+    {
+        return (updated, true);
+    }
+
+    if let Some(commands) = codex_shell_command::bash::parse_shell_lc_plain_commands(command)
+        && let [single] = commands.as_slice()
+        && let Some((program, args)) = single.split_first()
+        && is_ata_program(program)
+        && let Some(updated) = command_with_current_exe(args)
+    {
+        return (updated, true);
+    }
+
+    if let Some(command_names) = codex_shell_command::bash::parse_shell_lc_command_names(command)
+        && command_names.iter().any(|name| is_ata_program(name))
+        && let Some(updated) = command_with_ata_shell_wrapper(command)
+    {
+        return (updated, true);
+    }
+
+    (command.to_vec(), false)
+}
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
