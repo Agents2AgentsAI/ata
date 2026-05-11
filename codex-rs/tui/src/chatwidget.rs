@@ -214,6 +214,17 @@ const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 ///
 /// The match is exhaustive so that adding a new `TerminalName` variant forces
 /// an explicit decision about which binding that terminal should use.
+/// True iff `text` is a synthetic prompt the TUI injects on behalf of the
+/// user (reading-view question wrapper, document-closed feedback, voice-mode
+/// preambles). Those are kept in the model payload but never go into the
+/// per-thread up-arrow history.
+fn is_system_injected_user_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("[The user closed the document reader")
+        || t.starts_with("[The user is reading ")
+        || t.starts_with("[VOICE MODE")
+}
+
 fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyBinding {
     if matches!(
         terminal_info.multiplexer.as_ref(),
@@ -6142,7 +6153,9 @@ impl ChatWidget {
             }
         };
         if let Some(history_text) = history_text {
-            self.append_message_history_entry(history_text);
+            if !is_system_injected_user_text(&history_text) {
+                self.append_message_history_entry(history_text);
+            }
         }
 
         if let Some(pending_steer) = pending_steer {
