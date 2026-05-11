@@ -54,6 +54,7 @@ def test_package_includes_py_typed_marker() -> None:
 
 
 def test_generated_public_signatures_are_snake_case_and_typed() -> None:
+    """Generated convenience methods should expose typed Pythonic keyword names."""
     expected = {
         Codex.thread_start: [
             "approval_policy",
@@ -70,6 +71,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_name",
             "service_tier",
             "session_start_source",
+            "thread_source",
         ],
         Codex.thread_list: [
             "archived",
@@ -108,6 +110,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model_provider",
             "sandbox",
             "service_tier",
+            "thread_source",
         ],
         Thread.turn: [
             "approval_policy",
@@ -148,6 +151,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "service_name",
             "service_tier",
             "session_start_source",
+            "thread_source",
         ],
         AsyncCodex.thread_list: [
             "archived",
@@ -186,6 +190,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "model_provider",
             "sandbox",
             "service_tier",
+            "thread_source",
         ],
         AsyncThread.turn: [
             "approval_policy",
