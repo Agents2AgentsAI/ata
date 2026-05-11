@@ -109,16 +109,16 @@ jobs:
           - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
           - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
           # Windows — RunsOn (no magic cache on Windows).
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
@@ -134,11 +134,11 @@ jobs:
           - runner: ubuntu-arm64
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: release
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
 
     steps:
       - uses: actions/checkout@v6
@@ -531,11 +531,11 @@ jobs:
           - runner: ubuntu-arm64
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
 
     steps:
       - uses: actions/checkout@v6
