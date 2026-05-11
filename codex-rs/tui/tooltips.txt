@@ -20,8 +20,7 @@ You can run any shell command from Ata using `!` (e.g. `!ls`)
 Type / to open the command popup; Tab autocompletes slash commands.
 When the composer is empty, press Esc to step back and edit your last message; Enter confirms.
 Press Tab to queue a message when a task is running; otherwise it sends immediately (except `!`).
-[tui.keymap] in ~/.codex/config.toml lets you rebind supported shortcuts.
-See the Codex keymap documentation for supported actions and examples.
+[tui.keymap] in ~/.ata/config.toml lets you rebind supported shortcuts.
 Paste an image with Ctrl+V to attach it to your next message.
-You can resume a previous conversation by running `codex resume`
+You can resume a previous conversation by running `ata resume`
 Use /copy or press Ctrl+O to copy the latest agent response as Markdown.

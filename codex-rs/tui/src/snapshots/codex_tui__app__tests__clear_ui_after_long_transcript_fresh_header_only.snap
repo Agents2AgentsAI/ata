@@ -3,7 +3,7 @@ source: tui/src/app/tests.rs
 expression: rendered
 ---
 ╭─────────────────────────────────────────────╮
-│ >_ OpenAI Codex (v<VERSION>)                │
+│ >_ Agents2Agents ata (v<VERSION>)           │
 │                                             │
 │ model:     gpt-test high   /model to change │
 │ directory: /tmp/project                     │
