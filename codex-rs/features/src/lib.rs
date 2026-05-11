@@ -504,6 +504,38 @@ impl Features {
         self.enabled.iter().copied().collect()
     }
 
+    /// Returns `true` if the given research tool ID is enabled.
+    ///
+    /// Most research tools are grouped by provider. The master Research toggle
+    /// enables public research tools wired in this build, while Zotero stays
+    /// independently gated because it requires user library configuration.
+    pub fn is_research_tool_enabled(&self, tool_id: &str) -> bool {
+        if self.enabled(Feature::Research) {
+            if tool_id.starts_with("zotero_") {
+                return self.enabled(Feature::ResearchZotero);
+            }
+            return tool_id.starts_with("paper_")
+                || tool_id.starts_with("hn_")
+                || tool_id.starts_with("patent_");
+        }
+
+        match tool_id {
+            _ if tool_id.starts_with("paper_") => self.enabled(Feature::ResearchPaperSearch),
+            _ if tool_id.starts_with("hn_") => self.enabled(Feature::ResearchHackerNews),
+            _ if tool_id.starts_with("patent_") => self.enabled(Feature::ResearchPatents),
+            _ if tool_id.starts_with("zotero_") => self.enabled(Feature::ResearchZotero),
+            _ => false,
+        }
+    }
+
+    pub fn has_any_research_enabled(&self) -> bool {
+        self.enabled(Feature::Research)
+            || self.enabled(Feature::ResearchZotero)
+            || self.enabled(Feature::ResearchPaperSearch)
+            || self.enabled(Feature::ResearchHackerNews)
+            || self.enabled(Feature::ResearchPatents)
+    }
+
     pub fn normalize_dependencies(&mut self) {
         if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
             self.enable(Feature::Collab);

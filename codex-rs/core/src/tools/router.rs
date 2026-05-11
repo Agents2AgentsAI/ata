@@ -1,4 +1,5 @@
 use crate::function_tool::FunctionCallError;
+use crate::research::SharedResearchToolkit;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -49,6 +50,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) parallel_mcp_server_names: HashSet<String>,
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+    pub(crate) research_toolkit: Option<&'a Arc<SharedResearchToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))]
     pub(crate) multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }
@@ -62,6 +64,7 @@ impl ToolRouter {
             parallel_mcp_server_names,
             discoverable_tools,
             dynamic_tools,
+            research_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         } = params;
@@ -72,6 +75,7 @@ impl ToolRouter {
             unavailable_called_tools,
             discoverable_tools,
             dynamic_tools,
+            research_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         );

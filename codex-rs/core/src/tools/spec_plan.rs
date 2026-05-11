@@ -20,6 +20,7 @@ use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::ResearchBridgeHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::ShellHandler;
@@ -62,6 +63,7 @@ use crate::tools::spec_plan_types::agent_type_description;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolName;
 use codex_tools::ToolSearchSource;
@@ -279,6 +281,44 @@ pub fn build_tool_registry_builder(
 
     if config.request_permissions_tool_enabled {
         builder.register_handler(Arc::new(RequestPermissionsHandler));
+    }
+
+    if config.research_tools_enabled
+        && let Some(toolkit) = params.research_toolkit
+    {
+        for def in codex_research_tools::tool_specs::all_tool_defs() {
+            if !toolkit.is_tool_configured(def.id) || !config.is_research_tool_enabled(def.id) {
+                continue;
+            }
+
+            let parameters = match codex_tools::parse_tool_input_schema(&def.input_schema) {
+                Ok(schema) => schema,
+                Err(err) => {
+                    tracing::warn!(
+                        tool = def.native_name,
+                        error = %err,
+                        "skipping research tool with unparseable schema"
+                    );
+                    continue;
+                }
+            };
+
+            builder.push_spec(
+                ToolSpec::Function(ResponsesApiTool {
+                    name: def.native_name.to_string(),
+                    description: def.description.to_string(),
+                    strict: false,
+                    parameters,
+                    output_schema: None,
+                    defer_loading: None,
+                }),
+                /*supports_parallel_tool_calls*/ false,
+            );
+            builder.register_handler(Arc::new(ResearchBridgeHandler::new(
+                def.native_name,
+                Arc::clone(toolkit),
+            )));
+        }
     }
 
     let deferred_dynamic_tools = params

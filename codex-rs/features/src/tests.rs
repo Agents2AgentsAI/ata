@@ -221,6 +221,57 @@ fn image_generation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn grouped_research_tool_ids_follow_category_flags() {
+    let mut features = Features::with_defaults();
+
+    assert!(features.is_research_tool_enabled("paper_get"));
+    assert!(features.is_research_tool_enabled("hn_get_thread"));
+    assert!(!features.is_research_tool_enabled("unknown_research_tool"));
+
+    features.disable(Feature::ResearchPaperSearch);
+    features.disable(Feature::ResearchHackerNews);
+    assert!(!features.is_research_tool_enabled("paper_get"));
+    assert!(!features.is_research_tool_enabled("hn_get_thread"));
+
+    features.enable(Feature::ResearchPaperSearch);
+    features.enable(Feature::ResearchHackerNews);
+
+    assert!(features.is_research_tool_enabled("paper_get"));
+    assert!(features.is_research_tool_enabled("paper_citations"));
+    assert!(features.is_research_tool_enabled("hn_get_thread"));
+    assert!(!features.is_research_tool_enabled("unknown_research_tool"));
+}
+
+#[test]
+fn research_master_toggle_keeps_zotero_independently_gated() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Research);
+
+    assert!(features.is_research_tool_enabled("paper_get"));
+    assert!(!features.is_research_tool_enabled("zotero_search"));
+
+    features.enable(Feature::ResearchZotero);
+    assert!(features.is_research_tool_enabled("zotero_search"));
+}
+
+#[test]
+fn has_any_research_enabled_reflects_master_and_subfeatures() {
+    let mut features = Features::with_defaults();
+    assert!(features.has_any_research_enabled());
+
+    features.disable(Feature::ResearchPaperSearch);
+    features.disable(Feature::ResearchHackerNews);
+    assert!(!features.has_any_research_enabled());
+
+    features.enable(Feature::ResearchPaperSearch);
+    assert!(features.has_any_research_enabled());
+
+    features.disable(Feature::ResearchPaperSearch);
+    features.enable(Feature::ResearchKnowledgeBase);
+    assert!(!features.has_any_research_enabled());
+}
+
+#[test]
 fn use_legacy_landlock_config_records_deprecation_notice() {
     let mut entries = BTreeMap::new();
     entries.insert("use_legacy_landlock".to_string(), true);

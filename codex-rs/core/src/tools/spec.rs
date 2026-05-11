@@ -1,3 +1,4 @@
+use crate::research::SharedResearchToolkit;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
@@ -69,6 +70,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     unavailable_called_tools: Vec<ToolName>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
+    research_toolkit: Option<&Arc<SharedResearchToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))] multi_root_state: Option<
         &Arc<crate::state::MultiRootState>,
     >,
@@ -130,6 +132,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
             },
             tool_search_entries: &tool_search_entries,
+            research_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         },

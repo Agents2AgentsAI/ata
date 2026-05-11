@@ -3,7 +3,6 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_research_tools::config::ResearchConfig;
 use codex_research_tools::error::ResearchError;
 use codex_research_tools::types::HnGetThreadParams;
@@ -48,14 +47,22 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
 
 pub(crate) struct ResearchBridgeHandler {
+    tool_name: ToolName,
     toolkit: Arc<codex_research_tools::ResearchToolkit>,
 }
 
 impl ResearchBridgeHandler {
-    pub(crate) fn new(toolkit: Arc<codex_research_tools::ResearchToolkit>) -> Self {
-        Self { toolkit }
+    pub(crate) fn new(
+        tool_name: impl Into<String>,
+        toolkit: Arc<codex_research_tools::ResearchToolkit>,
+    ) -> Self {
+        Self {
+            tool_name: ToolName::plain(tool_name.into()),
+            toolkit,
+        }
     }
 
     async fn execute_native_tool(
@@ -224,45 +231,6 @@ impl ResearchBridgeHandler {
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
             }
-            "repo_clone_and_summarize" => dispatch_with_params!(RepoCloneArgs, |params| self
-                .toolkit
-                .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
-            "repo_find_models" => dispatch_with_params!(RepoFindModelsArgs, |params| self
-                .toolkit
-                .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),
-            "repo_extract_requirements" => dispatch_with_params!(RepoUrlArgs, |params| self
-                .toolkit
-                .repo_extract_requirements(params.repo_url.as_str())),
-            "repo_find_entrypoints" => {
-                dispatch_with_params!(RepoFindEntrypointsArgs, |params| self
-                    .toolkit
-                    .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref()))
-            }
-            "repo_extract_io_shapes" => {
-                dispatch_with_params!(RepoExtractIoShapesArgs, |params| self
-                    .toolkit
-                    .repo_extract_io_shapes(
-                        params.repo_url.as_str(),
-                        params.model_class.as_deref()
-                    ))
-            }
-            "repo_get_health" => dispatch_with_params!(RepoUrlArgs, |params| self
-                .toolkit
-                .repo_get_health(params.repo_url.as_str())),
-            "repo_find_export_paths" => dispatch_with_params!(RepoUrlArgs, |params| self
-                .toolkit
-                .repo_find_export_paths(params.repo_url.as_str())),
-            "repo_extract_config_schema" => dispatch_with_params!(RepoUrlArgs, |params| self
-                .toolkit
-                .repo_extract_config_schema(params.repo_url.as_str())),
-            "repo_diff_requirements" => {
-                dispatch_with_params!(RepoDiffRequirementsArgs, |params| self
-                    .toolkit
-                    .repo_diff_requirements(
-                        params.repo_url.as_str(),
-                        params.local_requirements_path.as_str(),
-                    ))
-            }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown research tool: {tool_name}"
             ))),
@@ -270,9 +238,12 @@ impl ResearchBridgeHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for ResearchBridgeHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -292,7 +263,7 @@ impl ToolHandler for ResearchBridgeHandler {
             }
         };
 
-        self.execute_native_tool(tool_name.as_str(), arguments.as_str())
+        self.execute_native_tool(tool_name.name.as_str(), arguments.as_str())
             .await
     }
 }
@@ -456,45 +427,10 @@ struct PaperPaginationArgs {
     max_chars_per_item: Option<u32>,
 }
 
-#[derive(Deserialize)]
-struct RepoUrlArgs {
-    repo_url: String,
-}
-
-#[derive(Deserialize)]
-struct RepoCloneArgs {
-    repo_url: String,
-    branch: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RepoFindModelsArgs {
-    repo_url: String,
-    framework: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RepoFindEntrypointsArgs {
-    repo_url: String,
-    task_hint: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RepoExtractIoShapesArgs {
-    repo_url: String,
-    model_class: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RepoDiffRequirementsArgs {
-    repo_url: String,
-    local_requirements_path: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::default_client::build_reqwest_client;
+    use codex_login::default_client::build_reqwest_client;
     use codex_research_tools::types::PaperDetail;
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
@@ -553,9 +489,13 @@ mod tests {
             ..ResearchConfig::default()
         };
 
-        let handler = ResearchBridgeHandler::new(Arc::new(
-            codex_research_tools::ResearchToolkit::new(build_reqwest_client(), config),
-        ));
+        let handler = ResearchBridgeHandler::new(
+            "paper_get",
+            Arc::new(codex_research_tools::ResearchToolkit::new(
+                build_reqwest_client(),
+                config,
+            )),
+        );
 
         let output = handler
             .execute_native_tool("paper_get", r#"{"paper_id":"s2:s2id123"}"#)
@@ -665,9 +605,13 @@ mod tests {
             ..ResearchConfig::default()
         };
 
-        let handler = ResearchBridgeHandler::new(Arc::new(
-            codex_research_tools::ResearchToolkit::new(build_reqwest_client(), config),
-        ));
+        let handler = ResearchBridgeHandler::new(
+            "paper_get",
+            Arc::new(codex_research_tools::ResearchToolkit::new(
+                build_reqwest_client(),
+                config,
+            )),
+        );
 
         let err = match handler
             .execute_native_tool("paper_get", r#"{"paper_id":"s2:s2id123"}"#)

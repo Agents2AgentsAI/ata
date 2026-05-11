@@ -208,6 +208,78 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
 }
 
 #[test]
+fn research_toolkit_registration_respects_feature_gates() {
+    let model_info = model_info();
+    let available_models = Vec::new();
+    let research_toolkit = std::sync::Arc::new(codex_research_tools::ResearchToolkit::from_config(
+        codex_research_tools::config::ResearchConfig::default(),
+    ));
+    let build_config = |features: &Features| {
+        ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            available_models: &available_models,
+            features,
+            image_generation_tool_auth_allowed: true,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+            permission_profile: &PermissionProfile::Disabled,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+        })
+    };
+    let build_with_research = |config: &ToolsConfig| {
+        build_tool_registry_builder(
+            config,
+            ToolRegistryBuildParams {
+                mcp_tools: None,
+                deferred_mcp_tools: None,
+                tool_namespaces: None,
+                discoverable_tools: None,
+                dynamic_tools: &[],
+                default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
+                wait_agent_timeouts: wait_agent_timeout_options(),
+                tool_search_entries: &[],
+                research_toolkit: Some(&research_toolkit),
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                multi_root_state: None,
+            },
+        )
+        .build()
+    };
+
+    let mut features = Features::with_defaults();
+    features.disable(Feature::ResearchPaperSearch);
+    features.disable(Feature::ResearchHackerNews);
+    let config = build_config(&features);
+    let (tools, registry) = build_with_research(&config);
+    assert!(!tools.iter().any(|tool| tool.name() == "paper_search"));
+    assert!(!registry.has_handler(&ToolName::plain("paper_search")));
+    assert!(!tools.iter().any(|tool| tool.name() == "hn_search"));
+    assert!(!registry.has_handler(&ToolName::plain("hn_search")));
+
+    features.enable(Feature::ResearchPaperSearch);
+    let config = build_config(&features);
+    let (tools, registry) = build_with_research(&config);
+    for expected_name in [
+        "paper_search",
+        "paper_get",
+        "paper_citations",
+        "paper_references",
+        "paper_recommendations",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool.name() == expected_name),
+            "missing research tool spec {expected_name}"
+        );
+        assert!(
+            registry.has_handler(&ToolName::plain(expected_name)),
+            "missing research tool handler {expected_name}"
+        );
+    }
+    assert!(!tools.iter().any(|tool| tool.name() == "hn_search"));
+    assert!(!registry.has_handler(&ToolName::plain("hn_search")));
+}
+
+#[test]
 fn exec_command_spec_includes_environment_id_only_for_multiple_selected_environments() {
     let model_info = model_info();
     let available_models = Vec::new();
@@ -2346,6 +2418,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
             tool_search_entries: &[],
+            research_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },

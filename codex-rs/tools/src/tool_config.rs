@@ -113,6 +113,12 @@ pub struct ToolsConfig {
     pub request_permissions_tool_enabled: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
+    pub research_tools_enabled: bool,
+    pub research_paper_search_enabled: bool,
+    pub research_zotero_enabled: bool,
+    pub research_hacker_news_enabled: bool,
+    pub research_patents_enabled: bool,
+    pub research_repo_analysis_enabled: bool,
     pub can_request_original_image_detail: bool,
     pub collab_tools: bool,
     pub goal_tools: bool,
@@ -253,6 +259,12 @@ impl ToolsConfig {
             request_permissions_tool_enabled,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
+            research_tools_enabled: features.has_any_research_enabled(),
+            research_paper_search_enabled: features.is_research_tool_enabled("paper_search"),
+            research_zotero_enabled: features.is_research_tool_enabled("zotero_search"),
+            research_hacker_news_enabled: features.is_research_tool_enabled("hn_search"),
+            research_patents_enabled: features.is_research_tool_enabled("patent_search"),
+            research_repo_analysis_enabled: false,
             can_request_original_image_detail: include_original_image_detail,
             collab_tools: include_collab_tools,
             goal_tools: include_goal_tools,
@@ -345,6 +357,20 @@ impl ToolsConfig {
     pub fn with_code_intel_enabled(mut self, code_intel_enabled: bool) -> Self {
         self.code_intel_enabled = code_intel_enabled;
         self
+    }
+
+    pub fn is_research_tool_enabled(&self, tool_id: &str) -> bool {
+        if !self.research_tools_enabled {
+            return false;
+        }
+
+        match tool_id {
+            _ if tool_id.starts_with("paper_") => self.research_paper_search_enabled,
+            _ if tool_id.starts_with("zotero_") => self.research_zotero_enabled,
+            _ if tool_id.starts_with("hn_") => self.research_hacker_news_enabled,
+            _ if tool_id.starts_with("patent_") => self.research_patents_enabled,
+            _ => false,
+        }
     }
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {

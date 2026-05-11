@@ -136,12 +136,14 @@ impl ResearchToolNames {
 pub fn native_tool_availability() -> ResearchToolAvailability {
     let defs = codex_research_tools::tool_specs::all_tool_defs();
     let has_paper_search = defs.iter().any(|def| def.id == "paper_search");
-    let has_repo_analysis = defs.iter().any(|def| def.id == "repo_find_entrypoints");
     let has_hackernews = defs.iter().any(|def| def.id == "hn_search");
     ResearchToolAvailability {
         has_paper_search,
         has_zotero: false,
-        has_repo_analysis,
+        // ATA's codex-research-tools crate carries repo tool specs from the
+        // reference branch, but its repo-analysis implementation is not wired
+        // into the public toolkit in this build.
+        has_repo_analysis: false,
         has_hackernews,
     }
 }

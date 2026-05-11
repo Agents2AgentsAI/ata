@@ -293,6 +293,7 @@ fn build_specs_with_unavailable_tools(
         unavailable_called_tools,
         /*discoverable_tools*/ None,
         dynamic_tools,
+        /*research_toolkit*/ None,
         #[cfg(any(feature = "lsp", feature = "treesitter"))]
         None,
     )
@@ -356,6 +357,7 @@ async fn assert_model_tools(
             parallel_mcp_server_names: std::collections::HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: &[],
+            research_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },
@@ -899,6 +901,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             Vec::new(),
             discoverable_tools.clone(),
             &[],
+            /*research_toolkit*/ None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             None,
         )

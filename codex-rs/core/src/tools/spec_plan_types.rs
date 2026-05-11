@@ -1,10 +1,10 @@
+use crate::research::SharedResearchToolkit;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_tools::DiscoverableTool;
 use codex_tools::ToolName;
 use codex_tools::ToolsConfig;
 use std::collections::HashMap;
-#[cfg(any(feature = "lsp", feature = "treesitter"))]
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -17,6 +17,7 @@ pub struct ToolRegistryBuildParams<'a> {
     pub default_agent_type_description: &'a str,
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
     pub tool_search_entries: &'a [crate::tools::tool_search_entry::ToolSearchEntry],
+    pub research_toolkit: Option<&'a Arc<SharedResearchToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))]
     pub multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }

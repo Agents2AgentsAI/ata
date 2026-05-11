@@ -38,6 +38,7 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            research_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },
@@ -113,6 +114,7 @@ async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> 
             parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            research_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },
@@ -182,6 +184,7 @@ async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<(
             parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: &dynamic_tools,
+            research_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },

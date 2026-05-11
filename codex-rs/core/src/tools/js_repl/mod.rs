@@ -1561,6 +1561,7 @@ impl JsReplManager {
                 parallel_mcp_server_names: std::collections::HashSet::new(),
                 discoverable_tools: None,
                 dynamic_tools: exec.turn.dynamic_tools.as_slice(),
+                research_toolkit: exec.turn.research_toolkit.as_ref(),
                 #[cfg(any(feature = "lsp", feature = "treesitter"))]
                 multi_root_state: exec.session.services.multi_root_state.as_ref(),
             },
