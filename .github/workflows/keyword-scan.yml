@@ -112,8 +112,21 @@ jobs:
             failed=true
           fi
 
+          # The release `build` job reuses CI's runs-on.io Linux pools (ci-linux-*)
+          # but must NOT inherit CI's `extras=s3-cache`: on runs-on.io that extra
+          # rewrites ACTIONS_RESULTS_URL to the local agent, which makes
+          # `actions/upload-artifact`'s CreateArtifact fail ("Unexpected token 'O',
+          # Original A... is not valid JSON") and also strands the bytes in the
+          # runs-on S3 bucket where the GitHub-hosted publish job can't reach them.
+          # Catch it here if someone re-copies a CI `runs_on:` string verbatim.
+          if [[ -f .github/workflows/rust-release.yml ]] \
+            && grep -En 'runs_on:.*extras=s3-cache' .github/workflows/rust-release.yml; then
+            echo "::error::rust-release.yml has a runs_on string with extras=s3-cache — drop it (breaks artifact upload on the release path)."
+            failed=true
+          fi
+
           if [[ "$failed" == "true" ]]; then
-            echo "An upstream merge likely re-clobbered an ATA release file."
+            echo "An upstream merge likely re-clobbered an ATA release file (or re-introduced a known release footgun)."
             echo "Diff the offending file against the rust-v0.5.1 tag and re-apply the ATA customization."
             exit 1
           fi

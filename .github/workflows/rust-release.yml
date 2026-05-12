@@ -100,34 +100,49 @@ jobs:
           # on-demand, with retry-on-interrupt. The GitHub-hosted 4 vCPU / 16 GB
           # default can't compile `--bin ata` (the whole TUI dep tree —
           # cpal/syntect/arboard/x11rb/...) under `--release` without OOMing.
+          #
+          # IMPORTANT: do NOT add `extras=s3-cache` here (CI uses it, the
+          # Windows release pool does not). On runs-on.io that extra makes
+          # `pre.sh` rewrite `ACTIONS_RESULTS_URL` to the local runs-on agent
+          # (http://<ip>:6871/) so artifacts are stored in the runs-on S3
+          # cache bucket instead of GitHub's artifact store. That breaks the
+          # release in two ways: (1) the agent returns a non-JSON body
+          # ("Original AWS error: ..." — likely an expired-token PUT after the
+          # ~25-min `--release` build outlives the agent's S3 credentials),
+          # which makes `actions/upload-artifact`'s CreateArtifact call fail
+          # with `Unexpected token 'O', "Original A"... is not valid JSON`;
+          # and (2) even when it works, the bytes land in the runs-on bucket,
+          # so the GitHub-hosted `publish-release` job's download-artifact
+          # can't see them. The release build does no `actions/cache` step, so
+          # the S3 cache buys it nothing anyway — keep it off the release path.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "ata ata-responses-api-proxy bwrap"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/volume=160gb/spot=false"
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/volume=160gb/spot=false"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "ata ata-responses-api-proxy bwrap"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/volume=160gb/spot=false/cpu=16/ram=64"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
             binaries: "codex-app-server"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/volume=160gb/spot=false/cpu=16/ram=64"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
