@@ -9,3 +9,6 @@
 
 # Supabase CLI temp files (machine-specific)
 supabase/.temp/
+
+# Merge analysis notes (kept on disk, not in git)
+/merge_info/

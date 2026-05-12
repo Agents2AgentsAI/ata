@@ -36,7 +36,7 @@ pub(crate) async fn search(
     let end = begin.saturating_add(size).saturating_sub(1);
 
     let url = format!(
-        "{base_url}/rest-services/published-data/search/biblio?q={cql}&Range={begin}-{end}",
+        "{base_url}/rest-services/published-data/search/biblio?q={cql}",
         cql = urlencoding::encode(&cql),
     );
 
@@ -45,6 +45,7 @@ pub(crate) async fn search(
             http.client()
                 .get(&url)
                 .header("Accept", "application/exchange+xml")
+                .header("Range", format!("items={begin}-{end}"))
                 .bearer_auth(&token)
         })
         .await?;
@@ -530,6 +531,7 @@ mod tests {
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
     use wiremock::matchers::method;
     use wiremock::matchers::path_regex;
 
@@ -618,6 +620,7 @@ mod tests {
         mount_auth(&server).await;
         Mock::given(method("GET"))
             .and(path_regex("/rest-services/published-data/search/biblio"))
+            .and(header("Range", "items=1-25"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_raw(SEARCH_XML, "application/exchange+xml"),
             )

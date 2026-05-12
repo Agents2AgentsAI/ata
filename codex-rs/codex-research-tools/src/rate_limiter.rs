@@ -24,6 +24,18 @@ pub enum ResearchApi {
     Patents,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RateLimitBucket {
+    SemanticScholarSearch,
+    SemanticScholarGraph,
+    Arxiv,
+    OpenAlex,
+    Zotero,
+    GitHub,
+    HackerNews,
+    Patents,
+}
+
 impl fmt::Display for ResearchApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -34,6 +46,37 @@ impl fmt::Display for ResearchApi {
             Self::GitHub => write!(f, "github"),
             Self::HackerNews => write!(f, "hackernews"),
             Self::Patents => write!(f, "patents"),
+        }
+    }
+}
+
+impl RateLimitBucket {
+    #[must_use]
+    fn error_api(self) -> ResearchApi {
+        match self {
+            Self::SemanticScholarSearch | Self::SemanticScholarGraph => {
+                ResearchApi::SemanticScholar
+            }
+            Self::Arxiv => ResearchApi::Arxiv,
+            Self::OpenAlex => ResearchApi::OpenAlex,
+            Self::Zotero => ResearchApi::Zotero,
+            Self::GitHub => ResearchApi::GitHub,
+            Self::HackerNews => ResearchApi::HackerNews,
+            Self::Patents => ResearchApi::Patents,
+        }
+    }
+}
+
+impl From<ResearchApi> for RateLimitBucket {
+    fn from(value: ResearchApi) -> Self {
+        match value {
+            ResearchApi::SemanticScholar => Self::SemanticScholarGraph,
+            ResearchApi::Arxiv => Self::Arxiv,
+            ResearchApi::OpenAlex => Self::OpenAlex,
+            ResearchApi::Zotero => Self::Zotero,
+            ResearchApi::GitHub => Self::GitHub,
+            ResearchApi::HackerNews => Self::HackerNews,
+            ResearchApi::Patents => Self::Patents,
         }
     }
 }
@@ -71,12 +114,12 @@ pub enum RateLimitPermit {
 
 #[derive(Debug)]
 pub struct RateLimiter {
-    limiters: HashMap<ResearchApi, Arc<ApiLimiter>>,
+    limiters: HashMap<RateLimitBucket, Arc<ApiLimiter>>,
 }
 
 impl RateLimiter {
     #[must_use]
-    pub fn new(rules: HashMap<ResearchApi, ApiRateLimit>) -> Self {
+    pub fn new(rules: HashMap<RateLimitBucket, ApiRateLimit>) -> Self {
         let limiters = rules
             .into_iter()
             .map(|(api, rule)| {
@@ -94,8 +137,8 @@ impl RateLimiter {
         Self { limiters }
     }
 
-    pub async fn acquire(&self, api: ResearchApi) -> Result<RateLimitPermit> {
-        let Some(limiter) = self.limiters.get(&api) else {
+    pub async fn acquire(&self, bucket: RateLimitBucket) -> Result<RateLimitPermit> {
+        let Some(limiter) = self.limiters.get(&bucket) else {
             return Ok(RateLimitPermit::Unlimited);
         };
 
@@ -105,30 +148,37 @@ impl RateLimiter {
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|_| ResearchError::RateLimiterClosed { api })?;
+                .map_err(|_| ResearchError::RateLimiterClosed {
+                    api: bucket.error_api(),
+                })?;
 
-            let mut window = limiter.window.lock().await;
-            let now = Instant::now();
-            while let Some(oldest) = window.front() {
-                if now.duration_since(*oldest) >= limiter.rule.per {
-                    window.pop_front();
-                } else {
-                    break;
+            // Compute wait_for inside a block so the MutexGuard is dropped
+            // before the `tokio::time::sleep` await below — the
+            // `await_holding_invalid_type` clippy lint is scope-based and
+            // doesn't recognise an explicit `drop(window)` further down.
+            let wait_for = {
+                let mut window = limiter.window.lock().await;
+                let now = Instant::now();
+                while let Some(oldest) = window.front() {
+                    if now.duration_since(*oldest) >= limiter.rule.per {
+                        window.pop_front();
+                    } else {
+                        break;
+                    }
                 }
-            }
 
-            if window.len() < limiter.rule.max_requests as usize {
-                window.push_back(now);
-                return Ok(RateLimitPermit::Limited(permit));
-            }
+                if window.len() < limiter.rule.max_requests as usize {
+                    window.push_back(now);
+                    return Ok(RateLimitPermit::Limited(permit));
+                }
 
-            let wait_for = if let Some(oldest) = window.front().copied() {
-                limiter.rule.per.saturating_sub(now.duration_since(oldest))
-            } else {
-                Duration::from_millis(1)
+                if let Some(oldest) = window.front().copied() {
+                    limiter.rule.per.saturating_sub(now.duration_since(oldest))
+                } else {
+                    Duration::from_millis(1)
+                }
             };
 
-            drop(window);
             drop(permit);
             tokio::time::sleep(wait_for).await;
         }
@@ -148,25 +198,25 @@ mod tests {
 
     use crate::error::Result;
     use crate::rate_limiter::ApiRateLimit;
+    use crate::rate_limiter::RateLimitBucket;
     use crate::rate_limiter::RateLimiter;
-    use crate::rate_limiter::ResearchApi;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn sequential_limit_enforces_spacing() -> Result<()> {
         let mut rules = HashMap::new();
         rules.insert(
-            ResearchApi::Arxiv,
+            RateLimitBucket::Arxiv,
             ApiRateLimit::new(1, Duration::from_millis(50), 1),
         );
 
         let limiter = RateLimiter::new(rules);
         let start = Instant::now();
 
-        let _permit_1 = limiter.acquire(ResearchApi::Arxiv).await?;
+        let _permit_1 = limiter.acquire(RateLimitBucket::Arxiv).await?;
         drop(_permit_1);
-        let _permit_2 = limiter.acquire(ResearchApi::Arxiv).await?;
+        let _permit_2 = limiter.acquire(RateLimitBucket::Arxiv).await?;
         drop(_permit_2);
-        let _permit_3 = limiter.acquire(ResearchApi::Arxiv).await?;
+        let _permit_3 = limiter.acquire(RateLimitBucket::Arxiv).await?;
         drop(_permit_3);
 
         assert!(start.elapsed() >= Duration::from_millis(90));
@@ -177,7 +227,7 @@ mod tests {
     async fn concurrent_acquire_completes_for_all_waiters() -> Result<()> {
         let mut rules = HashMap::new();
         rules.insert(
-            ResearchApi::SemanticScholar,
+            RateLimitBucket::SemanticScholarGraph,
             ApiRateLimit::new(2, Duration::from_millis(20), 2),
         );
 
@@ -189,7 +239,9 @@ mod tests {
                 let limiter = Arc::clone(&limiter);
                 let completed = Arc::clone(&completed);
                 tokio::spawn(async move {
-                    let permit = limiter.acquire(ResearchApi::SemanticScholar).await?;
+                    let permit = limiter
+                        .acquire(RateLimitBucket::SemanticScholarGraph)
+                        .await?;
                     drop(permit);
                     completed.fetch_add(1, Ordering::SeqCst);
                     Ok::<(), crate::error::ResearchError>(())

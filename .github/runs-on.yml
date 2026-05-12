@@ -10,24 +10,48 @@ runners:
   ci-linux-x64:
     image: ubuntu24-full-x64
     family: ["c7i-flex", "m7i-flex"]
-    cpu: [4, 8]
-    ram: [16, 32]
-    spot: price-capacity-optimized
+    # Matched to ci-linux-arm64. The full test matrix (--all-features, 7000+
+    # tests across 195 binaries) was silently killing the previous 4 vCPU /
+    # 16 GB spot instances ~15-16 min into the `tests` step (step 20 would
+    # have no conclusion, the job log would stop recording before the
+    # nextest summary). 8 vCPU / 32 GB on-demand removes the OOM headroom
+    # problem and the spot-preemption retry hole in one go.
+    cpu: [8, 16]
+    ram: [32, 64]
+    spot: false
     retry: when-interrupted
 
   ci-linux-arm64:
     image: ubuntu24-full-arm64
     family: ["c7g", "m7g"]
-    cpu: [4, 8]
-    ram: [16, 32]
+    # Use `*.4xlarge` (16 vCPU + 64 GB) explicitly. The previous
+    # `cpu: [8, 16] / ram: [64]` spec was being satisfied by `m7g.xlarge`
+    # (4 vCPU + 16 GB) on us-east-1c, which is well under the 32 GB
+    # ATA's `--all-features` build needs (the runner gets killed
+    # mid-compile with `runner has received a shutdown signal`).
+    cpu: 16
+    ram: 64
     spot: false
+    # Re-arm if the AWS instance is interrupted (rare but seen on c7g
+    # spot fallbacks during long compiles).
+    retry: when-interrupted
 
   ci-windows-x64:
     image: windows25-vstoolchain-x64
-    family: ["c7i-flex", "m7i-flex"]
-    cpu: [4, 8]
-    ram: [16, 32]
-    spot: price-capacity-optimized
+    family: ["c7i", "m7i"]
+    # Use `*.4xlarge` (16 vCPU + 64 GB) explicitly. `cpu: [8, 16] /
+    # ram: [64]` was being satisfied by `m7i-flex.xlarge`
+    # (4 vCPU + 16 GB), which OOMs during the MSVC `--all-features`
+    # ci-test compile of `codex-app-server`.
+    cpu: 16
+    ram: 64
+    # On-demand instead of spot. Spot interruptions during the long
+    # MSVC ci-test compile have repeatedly killed the runner mid-step
+    # without recovery (the workload is 12+ minutes and `retry:
+    # when-interrupted` only re-runs the entire job, multiplying cost).
+    # ATA's compile takes longer than upstream codex-locus's because we
+    # add `codex-v8-poc` (real impl), voice/audio_device, etc.
+    spot: false
     retry: when-interrupted
 
   # --- Release (bigger for LTO, on-demand for reliability) ---

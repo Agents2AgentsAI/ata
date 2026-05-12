@@ -29,6 +29,7 @@ pub use file_entry::FileMark;
 pub use file_entry::Language;
 pub use file_tree::FileTree;
 pub use ops::CallerInfo;
+pub use ops::CallersIndex;
 pub use ops::CallersResult;
 pub use ops::TestInfo;
 pub use ops::TestsResult;

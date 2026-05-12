@@ -1,6 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
-assertion_line: 9494
+source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: combined
 ---
-
+• Here is the result.

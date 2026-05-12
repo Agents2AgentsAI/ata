@@ -6,6 +6,7 @@ mod schema_fixtures;
 
 pub use experimental_api::*;
 pub use export::GenerateTsOptions;
+pub use export::generate_internal_json_schema;
 pub use export::generate_json;
 pub use export::generate_json_with_experimental;
 pub use export::generate_ts;
@@ -13,6 +14,8 @@ pub use export::generate_ts_with_options;
 pub use export::generate_types;
 pub use jsonrpc_lite::*;
 pub use protocol::common::*;
+pub use protocol::event_mapping::*;
+pub use protocol::item_builders::*;
 pub use protocol::thread_history::*;
 pub use protocol::v1::ApplyPatchApprovalParams;
 pub use protocol::v1::ApplyPatchApprovalResponse;
@@ -27,6 +30,7 @@ pub use protocol::v1::GetConversationSummaryParams;
 pub use protocol::v1::GetConversationSummaryResponse;
 pub use protocol::v1::GitDiffToRemoteParams;
 pub use protocol::v1::GitDiffToRemoteResponse;
+pub use protocol::v1::GitSha;
 pub use protocol::v1::InitializeCapabilities;
 pub use protocol::v1::InitializeParams;
 pub use protocol::v1::InitializeResponse;
@@ -36,12 +40,6 @@ pub use protocol::v1::Profile;
 pub use protocol::v1::SandboxSettings;
 pub use protocol::v1::Tools;
 pub use protocol::v1::UserSavedConfig;
-
-// ATA-specific types
-pub use protocol::v1::GetUserSavedConfigResponse;
-pub use protocol::v1::SetDefaultModelParams;
-pub use protocol::v1::SetDefaultModelResponse;
-pub use protocol::v1::UserInfoResponse;
 pub use protocol::v2::*;
 pub use schema_fixtures::SchemaFixtureOptions;
 #[doc(hidden)]

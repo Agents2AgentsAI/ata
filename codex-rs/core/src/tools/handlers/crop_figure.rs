@@ -1,11 +1,16 @@
-use async_trait::async_trait;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use image::GenericImageView;
 use image::ImageFormat;
 use pdfium_render::prelude::*;
 use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use tokio::fs;
 use tokio::task::spawn_blocking;
 
@@ -19,6 +24,84 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use crate::tools::url_downloader::cache_entry_dir;
 use crate::tools::url_validation::normalize_url_for_cache;
+
+const TOOL_NAME: &str = "crop_figure";
+
+// @agent-facing
+pub(crate) static CROP_FIGURE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "pdf_url".to_string(),
+        JsonSchema::string(Some(
+            "URL of the source PDF (must already be cached via attach_url_files).".to_string(),
+        )),
+    );
+    properties.insert(
+        "page".to_string(),
+        JsonSchema::integer(Some(
+            "1-based page number containing the figure.".to_string(),
+        )),
+    );
+    properties.insert(
+        "x".to_string(),
+        JsonSchema::number(Some(
+            "Left edge of crop region as fraction of page width [0.0, 1.0].".to_string(),
+        )),
+    );
+    properties.insert(
+        "y".to_string(),
+        JsonSchema::number(Some(
+            "Top edge of crop region as fraction of page height [0.0, 1.0].".to_string(),
+        )),
+    );
+    properties.insert(
+        "w".to_string(),
+        JsonSchema::number(Some(
+            "Width of crop region as fraction of page width (0.0, 1.0].".to_string(),
+        )),
+    );
+    properties.insert(
+        "h".to_string(),
+        JsonSchema::number(Some(
+            "Height of crop region as fraction of page height (0.0, 1.0].".to_string(),
+        )),
+    );
+    properties.insert(
+        "caption".to_string(),
+        JsonSchema::string(Some(
+            "Caption text (e.g., \"Figure 3: Architecture diagram\") for the figure.".to_string(),
+        )),
+    );
+    properties.insert(
+        "description".to_string(),
+        JsonSchema::string(Some(
+            "Brief description of what the figure depicts, for accessibility and search."
+                .to_string(),
+        )),
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: TOOL_NAME.to_string(),
+        description: "Crop a figure from a cached PDF page and store it as an image asset that the reading view can reference. The PDF must already be cached via attach_url_files. Coordinates are fractional (0.0–1.0) relative to the page. Returns the asset path you can embed in reading-view markdown.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec![
+                "pdf_url".to_string(),
+                "page".to_string(),
+                "x".to_string(),
+                "y".to_string(),
+                "w".to_string(),
+                "h".to_string(),
+                "caption".to_string(),
+                "description".to_string(),
+            ]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+});
 
 pub struct CropFigureHandler;
 
@@ -137,6 +220,25 @@ async fn find_cached_pdf(codex_home: &std::path::Path, pdf_url: &str) -> Result<
     ))
 }
 
+/// Interpret `pdf_reference` as a path for `FileReferenceCache::lookup_source_path`.
+/// Accepts `file://` URLs and absolute / multi-component relative paths. Returns
+/// `None` for bare URL-like strings (http/https/etc.) so the caller surfaces the
+/// original cache-miss error.
+fn pdf_reference_path(pdf_reference: &str) -> Option<PathBuf> {
+    if let Ok(url) = url::Url::parse(pdf_reference)
+        && url.scheme() == "file"
+    {
+        return url.to_file_path().ok();
+    }
+
+    let path = PathBuf::from(pdf_reference);
+    if path.is_absolute() || path.components().count() > 1 {
+        return Some(path);
+    }
+
+    None
+}
+
 /// Compute a short hash of the PDF URL for use as a directory name.
 fn pdf_url_hash(pdf_url: &str) -> String {
     let mut hasher = Sha256::new();
@@ -161,22 +263,30 @@ async fn next_figure_number(assets_dir: &std::path::Path) -> u32 {
     count + 1
 }
 
-#[async_trait]
 impl ToolHandler for CropFigureHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { turn, payload, .. } = invocation;
+        let ToolInvocation {
+            session,
+            turn,
+            payload,
+            ..
+        } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "crop_and_store_figure handler received unsupported payload".to_string(),
+                    "crop_figure handler received unsupported payload".to_string(),
                 ));
             }
         };
@@ -197,6 +307,11 @@ impl ToolHandler for CropFigureHandler {
                 "w and h must be positive".to_string(),
             ));
         }
+        if args.page == 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "page must be 1 or greater".to_string(),
+            ));
+        }
 
         // 1. Find the cached PDF.
         let codex_home = turn.config.codex_home.clone();
@@ -206,12 +321,26 @@ impl ToolHandler for CropFigureHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
 
-        let pdf_path = find_cached_pdf(&codex_home, &args.pdf_url)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?;
+        // Resolver fallback chain:
+        //   (a) URL-cache lookup via attach_url_files cache directory.
+        //   (b) On miss, consult the per-session `file_reference_cache` so
+        //       crop_figure can still locate a PDF that the agent attached as
+        //       a path (e.g. uploaded LocalFile) instead of via attach_url_files.
+        let pdf_path = match find_cached_pdf(&codex_home, &args.pdf_url).await {
+            Ok(path) => path,
+            Err(cache_err) => {
+                let Some(reference_path) = pdf_reference_path(&args.pdf_url) else {
+                    return Err(FunctionCallError::RespondToModel(cache_err));
+                };
+                let cache = session.services.file_reference_cache.lock().await;
+                cache
+                    .lookup_source_path(&reference_path)
+                    .ok_or(FunctionCallError::RespondToModel(cache_err))?
+            }
+        };
 
         // 2. Render the page and crop the region (blocking work on spawn_blocking).
-        let page_0indexed = args.page.saturating_sub(1);
+        let page_0indexed = args.page - 1;
         let (crop_x, crop_y, crop_w, crop_h) = (args.x, args.y, args.w, args.h);
         let pdf_path_clone = pdf_path.clone();
         let codex_home_clone = codex_home.clone();

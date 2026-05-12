@@ -1,5 +1,5 @@
-use crate::model_provider_info::ModelProviderInfo;
-use crate::model_provider_info::WireApi;
+use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::WireApi;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProviderTransportCapabilities {

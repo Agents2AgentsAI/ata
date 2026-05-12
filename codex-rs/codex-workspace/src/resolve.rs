@@ -1,4 +1,5 @@
 use crate::error::WorkspaceError;
+use crate::manifest::read_manifest_for;
 use crate::paths::workspace_root;
 use std::collections::HashSet;
 use std::path::Path;
@@ -156,6 +157,34 @@ pub fn resolve_at_spec(workspace_id: &str, spec: &str) -> Result<PathBuf, Worksp
             .unwrap_or("")
             .trim_start_matches('/');
         return safe_join(&root.join("cache"), suffix);
+    }
+
+    // @repos[/<alias>/path...]
+    if rest == "repos" {
+        return Ok(root.join("repos"));
+    }
+    if let Some(suffix) = rest.strip_prefix("repos/") {
+        return safe_join(&root.join("repos"), suffix);
+    }
+
+    // @papers[/<alias>[/path...]]
+    if rest == "papers" {
+        return Ok(root.join("papers"));
+    }
+    if let Some(suffix) = rest.strip_prefix("papers/") {
+        let parts: Vec<&str> = suffix.splitn(2, '/').collect();
+        let alias = parts[0];
+        if alias.is_empty() {
+            return Ok(root.join("papers"));
+        }
+        let manifest = read_manifest_for(&crate::paths::codex_home(), workspace_id)?;
+        let paper = manifest.paper_by_alias(alias)?;
+        let paper_path = safe_join(&root, &paper.text_md_path)?;
+        let remainder = if parts.len() > 1 { parts[1] } else { "" };
+        if remainder.is_empty() {
+            return Ok(paper_path);
+        }
+        return safe_join(&paper_path, remainder);
     }
 
     // @artifacts[/<id>/path...]

@@ -26,9 +26,9 @@
           "type": "string"
         },
         {
-          "description": "ATA account auth via Supabase (OTP / magic-link flow).",
+          "description": "Programmatic Codex auth backed by a registered Agent Identity.",
           "enum": [
-            "ata"
+            "agentIdentity"
           ],
           "type": "string"
         }
@@ -40,8 +40,11 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
+        "self_serve_business_usage_based",
         "business",
+        "enterprise_cbp_usage_based",
         "enterprise",
         "edu",
         "unknown"

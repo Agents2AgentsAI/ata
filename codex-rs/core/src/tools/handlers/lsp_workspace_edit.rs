@@ -422,8 +422,8 @@ mod tests {
     use codex_apply_patch::apply_patch as apply_patch_to_fs;
     use std::collections::HashMap;
 
-    #[test]
-    fn workspace_edit_to_patch_updates_file() {
+    #[tokio::test]
+    async fn workspace_edit_to_patch_updates_file() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "world\n").unwrap();
@@ -459,7 +459,18 @@ mod tests {
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        apply_patch_to_fs(&patch, &mut stdout, &mut stderr).unwrap();
+        let cwd =
+            codex_utils_absolute_path::AbsolutePathBuf::try_from(dir.path().to_path_buf()).unwrap();
+        apply_patch_to_fs(
+            &patch,
+            &cwd,
+            &mut stdout,
+            &mut stderr,
+            codex_exec_server::LOCAL_FS.as_ref(),
+            None,
+        )
+        .await
+        .unwrap();
 
         let contents = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(contents, "hello world\n");

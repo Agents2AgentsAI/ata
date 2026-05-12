@@ -13,12 +13,18 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::config::types::VoiceModeToml;
-use codex_core::config::types::VoiceOutput;
-use codex_core::config::types::VoiceVerbosity;
+use crate::legacy_core::config::types::TtsBackend;
+use crate::legacy_core::config::types::VoiceModeToml;
+use crate::legacy_core::config::types::VoiceOutput;
+use crate::legacy_core::config::types::VoiceVerbosity;
 
 // ─── Voice mode instruction prefix ──────────────────────────────────────────
-
+// These prompt prefixes are injected into the agent's instructions when the
+// user enables voice mode. They are referenced by `voice_mode_instruction()`,
+// which the core prompt builder will call once the voice-mode prompt
+// injection wiring lands. See follow-up: hook these into
+// `ThreadConfigSnapshot` / instruction stitching in `codex-core`.
+#[allow(dead_code)]
 /// Verbose instruction: acknowledgments, progress updates, and final summary
 /// are all spoken aloud.
 const VOICE_MODE_INSTRUCTION_VERBOSE: &str = "\
@@ -56,6 +62,7 @@ or \"Checking a few more files.\"). Keep these to one sentence.\n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
 
+#[allow(dead_code)]
 /// Concise instruction: only the final answer/summary is spoken aloud.
 const VOICE_MODE_INSTRUCTION_CONCISE: &str = "\
 [VOICE MODE] The user is speaking to you via voice. \
@@ -90,6 +97,7 @@ Follow this pattern:\n\
 For purely conversational responses with no code or tools, wrap the entire \
 response in <voice> tags.\n\n";
 
+#[allow(dead_code)]
 /// Returns the voice mode instruction for the given verbosity level.
 pub(crate) fn voice_mode_instruction(verbosity: VoiceVerbosity) -> &'static str {
     match verbosity {
@@ -98,6 +106,7 @@ pub(crate) fn voice_mode_instruction(verbosity: VoiceVerbosity) -> &'static str 
     }
 }
 
+#[allow(dead_code)]
 /// Returns all voice mode instruction variants (for prefix stripping).
 pub(crate) fn voice_mode_instruction_prefixes() -> &'static [&'static str] {
     &[
@@ -107,7 +116,7 @@ pub(crate) fn voice_mode_instruction_prefixes() -> &'static [&'static str] {
 }
 
 fn append_browser_reading_view_debug_log(message: &str) {
-    let Ok(home) = codex_core::config::find_codex_home() else {
+    let Ok(home) = crate::legacy_core::config::find_codex_home() else {
         return;
     };
     let path = home.join("logs/browser-reading-view.log");
@@ -131,6 +140,7 @@ fn append_browser_reading_view_debug_log(message: &str) {
     let _ = std::io::Write::write_all(&mut file, format!("[{ts}] {message}\n").as_bytes());
 }
 
+#[allow(dead_code)]
 /// Instruction prepended to the first user message after voice mode is
 /// turned off, so the agent stops using `<voice>` tags.
 pub(crate) const VOICE_MODE_OFF_INSTRUCTION: &str = "\
@@ -236,6 +246,11 @@ impl SentenceBuffer {
 // ─── Voice tag parser (streaming) ────────────────────────────────────────────
 
 /// Result of pushing a delta through the voice tag parser.
+///
+/// `display_text` and `voice_block_closed` are read by the agent-message-delta
+/// streaming integration which has not yet been ported to v0.129.0; they are
+/// allowed-dead until that wiring lands.
+#[allow(dead_code)]
 pub(crate) struct VoiceParseResult {
     /// Text to display in chat (all content with `<voice>`/`</voice>` tags stripped).
     pub display_text: String,
@@ -774,6 +789,12 @@ pub struct AlignmentEntry {
     pub word: String,
 }
 
+/// Per-thread voice mode state. Several fields are written by the
+/// PTT/meter/timer flows that are not yet wired through a composer key
+/// handler in v0.129.0; rustc therefore flags them as never-read until that
+/// wiring lands. Marking the struct `allow(dead_code)` keeps the warnings
+/// off without losing the field shape we'll need.
+#[allow(dead_code)]
 pub(crate) struct VoiceModeState {
     pub(crate) phase: VoiceModePhase,
     pub(crate) sentence_buffer: SentenceBuffer,
@@ -920,6 +941,7 @@ pub(crate) struct VoiceModeState {
     pub(crate) mock_has_audio: Option<bool>,
 }
 
+#[allow(dead_code)]
 impl VoiceModeState {
     pub(crate) fn new(config: &VoiceModeToml) -> Self {
         let output = config.output.unwrap_or_default();
@@ -1220,17 +1242,23 @@ fn resolve_elevenlabs_api_key_from_config(voice_config: &VoiceModeToml) -> Optio
 
 /// Build an `ElevenLabsProxy` for ATA-authenticated users.
 /// Returns `None` if not in ATA mode or if auth is unavailable.
+///
+/// ATA-Supabase-routed proxy is only enabled when the user is authenticated
+/// via the ATA Supabase flow. In the current v0.129.0 baseline the
+/// `AuthMode::Ata` variant is not yet wired through `codex-login`; this helper
+/// therefore short-circuits and falls back to direct ElevenLabs API key auth.
 fn build_elevenlabs_proxy(
-    auth_manager: &codex_core::AuthManager,
+    _auth_manager: &crate::legacy_core::AuthManager,
 ) -> Option<codex_elevenlabs::ElevenLabsProxy> {
-    if auth_manager.auth_mode() != Some(codex_core::auth::AuthMode::Ata) {
-        return None;
-    }
-    let auth = auth_manager.auth_cached()?;
-    let token = match &auth {
-        codex_core::auth::CodexAuth::Ata(ata) => ata.access_token.clone(),
-        _ => return None,
-    };
+    return None;
+    // Restore once `AuthMode::Ata` + `CodexAuth::Ata` land in codex-login:
+    // let auth = _auth_manager.auth_cached()?;
+    // let token = match &auth {
+    //     crate::legacy_core::auth::CodexAuth::Ata(ata) => ata.access_token.clone(),
+    //     _ => return None,
+    // };
+    #[allow(unreachable_code)]
+    let token = String::new();
 
     let base_url = std::env::var("ATA_ELEVENLABS_PROXY_URL")
         .ok()
@@ -1238,7 +1266,7 @@ fn build_elevenlabs_proxy(
         .unwrap_or_else(|| {
             format!(
                 "{}/functions/v1",
-                codex_core::config::types::DEFAULT_ATA_SUPABASE_URL
+                crate::legacy_core::config::types::DEFAULT_ATA_SUPABASE_URL
             )
         });
 
@@ -1247,7 +1275,7 @@ fn build_elevenlabs_proxy(
         bearer_token: token,
         extra_header: Some((
             "apikey".to_string(),
-            codex_core::config::types::DEFAULT_ATA_SUPABASE_ANON_KEY.to_string(),
+            crate::legacy_core::config::types::DEFAULT_ATA_SUPABASE_ANON_KEY.to_string(),
         )),
     })
 }
@@ -1256,7 +1284,7 @@ fn build_elevenlabs_proxy(
 /// for ATA users. Returns `None` if neither is available.
 fn build_elevenlabs_config(
     voice_config: &VoiceModeToml,
-    auth_manager: &codex_core::AuthManager,
+    auth_manager: &crate::legacy_core::AuthManager,
 ) -> Option<codex_elevenlabs::ElevenLabsConfig> {
     let api_key = resolve_elevenlabs_api_key_from_config(voice_config);
     let proxy = if api_key.is_none() {
@@ -1287,7 +1315,7 @@ fn build_elevenlabs_config(
 }
 
 /// Extract `VoiceModeToml` from the merged effective config (which is a raw `toml::Value`).
-fn voice_mode_config(config: &codex_core::config::Config) -> VoiceModeToml {
+fn voice_mode_config(config: &crate::legacy_core::config::Config) -> VoiceModeToml {
     config
         .config_layer_stack
         .effective_config()
@@ -1297,7 +1325,13 @@ fn voice_mode_config(config: &codex_core::config::Config) -> VoiceModeToml {
         .unwrap_or_default()
 }
 
+// Several voice-mode ChatWidget entry points (PTT key handlers, voice setup
+// popup callbacks, voice-mode toggle, browser TTS bridge helpers) are
+// invoked by UI flows that have not yet been wired in v0.129.0 (composer
+// Space key handler + VoiceSetupView popup port). Allow dead_code on the
+// entire impl block until those follow-ups land.
 #[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
 impl super::ChatWidget {
     /// Return the voice mode config with in-session overrides (speed, language)
     /// applied on top of the on-disk config.  `/voice-setup` writes to disk but
@@ -1373,14 +1407,14 @@ impl super::ChatWidget {
         if !self
             .config
             .features
-            .enabled(codex_core::features::Feature::VoiceMode)
+            .enabled(codex_features::Feature::VoiceMode)
         {
             let _ = self
                 .config
                 .features
-                .enable(codex_core::features::Feature::VoiceMode);
+                .enable(codex_features::Feature::VoiceMode);
             self.app_event_tx.send(AppEvent::UpdateFeatureFlags {
-                updates: vec![(codex_core::features::Feature::VoiceMode, true)],
+                updates: vec![(codex_features::Feature::VoiceMode, true)],
             });
         }
 
@@ -1419,8 +1453,7 @@ impl super::ChatWidget {
         // without ElevenLabs because it uses the built-in Whisper path).
         // ATA users get keys vended at runtime, so skip the warning for them.
         let session_not_ready = self.thread_id.is_none();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || self.auth_manager.auth_mode() == Some(codex_core::auth::AuthMode::Ata);
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         if !has_tts_key {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
@@ -1615,6 +1648,7 @@ impl super::ChatWidget {
             .cached_elevenlabs_speed
             .or_else(|| voice_config.elevenlabs.as_ref().and_then(|e| e.speed));
         let startup_enabled = voice_config.enabled.unwrap_or(false);
+        let tts_backend = voice_config.tts_backend.unwrap_or_default();
 
         let view = crate::bottom_pane::VoiceSetupView::new(
             startup_enabled,
@@ -1624,6 +1658,7 @@ impl super::ChatWidget {
             api_key,
             language_code,
             speed,
+            tts_backend,
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -1762,7 +1797,7 @@ impl super::ChatWidget {
 
         // Start voice capture.
         let last_peak_arc;
-        match crate::voice::VoiceCapture::start() {
+        match crate::voice::VoiceCapture::start_ptt(&self.config) {
             Ok(capture) => {
                 last_peak_arc = capture.last_peak_arc();
                 state.meter_state = Some(crate::voice::RecordingMeterState::new());
@@ -1891,6 +1926,20 @@ impl super::ChatWidget {
                 return;
             }
         };
+
+        const MIN_PTT_DURATION_SECONDS: f32 = 1.0;
+        let duration = audio.duration_seconds();
+        if duration < MIN_PTT_DURATION_SECONDS {
+            state.phase = VoiceModePhase::Idle;
+            self.app_event_tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                error: format!(
+                    "recording too short ({duration:.2}s); hold Space for at least {MIN_PTT_DURATION_SECONDS:.1}s"
+                ),
+            });
+            self.sync_voice_placeholder();
+            self.request_redraw();
+            return;
+        }
 
         let wav_bytes = match crate::voice::encode_wav_for_voice_mode(&audio) {
             Ok(b) => b,
@@ -2054,8 +2103,7 @@ impl super::ChatWidget {
     ) -> Option<String> {
         // Capture config before taking a mutable borrow on voice_mode_state.
         let vc = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&vc).is_some()
-            || self.auth_manager.auth_mode() == Some(codex_core::auth::AuthMode::Ata);
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&vc).is_some();
         let state = match self.voice_mode_state.as_mut() {
             Some(s) => s,
             None => {
@@ -2145,12 +2193,23 @@ impl super::ChatWidget {
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
+                let backend = vc.tts_backend.unwrap_or_default();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                    match backend {
+                        TtsBackend::Say => {
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                        }
+                        TtsBackend::Elevenlabs => {
+                            tts_worker_loop(
+                                vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy,
+                            )
+                            .await;
+                        }
+                    }
                 });
             }
 
@@ -2207,12 +2266,23 @@ impl super::ChatWidget {
                 let spawn_gen = gen_ref.load(Ordering::SeqCst);
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
+                let backend = vc.tts_backend.unwrap_or_default();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
 
                 tokio::spawn(async move {
-                    tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                    match backend {
+                        TtsBackend::Say => {
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                        }
+                        TtsBackend::Elevenlabs => {
+                            tts_worker_loop(
+                                vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy,
+                            )
+                            .await;
+                        }
+                    }
                 });
             }
 
@@ -2693,16 +2763,18 @@ impl super::ChatWidget {
     /// Start a periodic tick that updates the TTS word highlight.
     fn start_highlight_tick(&mut self) {
         let Some(ref mut state) = self.voice_mode_state else {
+            tracing::info!("[KARAOKE] start_highlight_tick: voice_mode_state is None");
             return;
         };
 
         // Don't start if already running.
         if state.highlight_tick_cancel.is_some() {
+            tracing::info!("[KARAOKE] start_highlight_tick: already running");
             return;
         }
 
-        tracing::debug!(
-            "Starting highlight tick timer, timeline has {} entries",
+        tracing::info!(
+            "[KARAOKE] start_highlight_tick: starting, timeline has {} entries",
             state.tts_alignment_timeline.len(),
         );
 
@@ -2764,10 +2836,9 @@ impl super::ChatWidget {
 
         // Diagnostic: log position and word index periodically so stuck
         // highlights can be diagnosed from logs.
-        if effective_idx != state.tts_highlight_word_idx || raw_pos_ms == 0 {
-            tracing::debug!(
-                "[KARAOKE-TICK] raw_pos={raw_pos_ms}ms pos={pos_ms}ms \
-                 word={effective_idx:?} prev={:?} timeline_len={}",
+        if effective_idx != state.tts_highlight_word_idx {
+            tracing::info!(
+                "[KARAOKE-TICK] pos={pos_ms}ms word={effective_idx:?} prev={:?} timeline_len={}",
                 state.tts_highlight_word_idx,
                 state.tts_alignment_timeline.len(),
             );
@@ -3207,8 +3278,9 @@ impl super::ChatWidget {
                 self.submit_reading_view_voice_message(text, rv_ctx);
                 reading_view_question = Some(question);
             } else {
-                let mut msg = super::UserMessage::from(text);
-                msg.voice_input = true;
+                // The `voice_input` flag from main is not yet wired in
+                // v0.129.0; submit as a plain text message for now.
+                let msg = super::UserMessage::from_text(text);
                 self.submit_user_message(msg);
             }
         } else {
@@ -3236,9 +3308,6 @@ impl super::ChatWidget {
         text: String,
         ctx: crate::bottom_pane::ReadingViewVoiceContext,
     ) {
-        use codex_protocol::protocol::Op;
-        use codex_protocol::user_input::UserInput;
-
         let selection_hint = if let Some(ref sel) = ctx.selection {
             format!(
                 "\nThe user selected this text and is asking about it:\n\
@@ -3291,13 +3360,8 @@ impl super::ChatWidget {
         );
 
         self.last_turn_was_local_submit = true;
-        self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: context,
-                text_elements: vec![],
-            }],
-            final_output_json_schema: None,
-        }));
+        self.app_event_tx
+            .send(AppEvent::SubmitUserText { text: context });
     }
 
     /// Called when STT transcription fails.
@@ -3420,7 +3484,7 @@ impl super::ChatWidget {
             self.forward_to_reading_view_server(&ws_msg.to_string());
         }
         if !self.is_reading_view_browser_mode() {
-            let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+            let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
             self.bottom_pane.set_document_reader_voice_status(Some(msg));
             self.bottom_pane.set_document_reader_tts_paused(true);
         }
@@ -3501,9 +3565,9 @@ impl super::ChatWidget {
         let Some(ref player) = state.audio_player else {
             return;
         };
-        let current = player.playback_speed() as f64;
+        let current = player.playback_speed();
         let new_speed = ((current + delta) * 10.0).round() / 10.0;
-        let clamped = new_speed.clamp(0.75, 3.0) as f32;
+        let clamped = new_speed.clamp(0.75, 3.0);
         player.set_playback_speed(clamped);
         // Update voice status to show current speed.
         if !self.is_reading_view_browser_mode() {
@@ -3544,7 +3608,7 @@ impl super::ChatWidget {
         let state_ref = self.voice_mode_state.as_ref();
         let can_record = state_ref.is_some_and(|s| s.stt_enabled && !s.tts_only);
         if can_record {
-            match crate::voice::VoiceCapture::start() {
+            match crate::voice::VoiceCapture::start_ptt(&self.config) {
                 Ok(capture) => {
                     if let Some(ref mut s) = self.voice_mode_state {
                         s.capture = Some(capture);
@@ -3621,6 +3685,22 @@ impl super::ChatWidget {
                 }
             };
 
+            const MIN_PTT_DURATION_SECONDS: f32 = 1.0;
+            let duration = audio.duration_seconds();
+            if duration < MIN_PTT_DURATION_SECONDS {
+                if let Some(ref mut s) = self.voice_mode_state {
+                    s.phase = VoiceModePhase::Idle;
+                }
+                self.app_event_tx.send(AppEvent::VoiceModeTranscriptionFailed {
+                    error: format!(
+                        "recording too short ({duration:.2}s); hold Space for at least {MIN_PTT_DURATION_SECONDS:.1}s"
+                    ),
+                });
+                self.sync_voice_placeholder();
+                self.request_redraw();
+                return;
+            }
+
             let wav_bytes = match crate::voice::encode_wav_for_voice_mode(&audio) {
                 Ok(b) => b,
                 Err(e) => {
@@ -3687,7 +3767,7 @@ impl super::ChatWidget {
                 // Was playing before press → stay paused (we already paused on press).
                 // Just update the status message.
                 if !self.is_reading_view_browser_mode() {
-                    let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s/Space to resume".to_string();
+                    let msg = "\u{23F8}\u{FE0F}  Paused \u{2014} s to resume".to_string();
                     self.bottom_pane.set_document_reader_voice_status(Some(msg));
                     self.bottom_pane.set_document_reader_tts_paused(true);
                 }
@@ -3712,8 +3792,7 @@ impl super::ChatWidget {
     ) {
         let narrate_start = std::time::Instant::now();
         let voice_config = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || self.auth_manager.auth_mode() == Some(codex_core::auth::AuthMode::Ata);
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         tracing::info!(
             "[TTS-TIMING] on_voice_narrate_section: section={section_index}, manual={manual}, \
              voice_state_exists={}, text_len={}",
@@ -4018,12 +4097,21 @@ impl super::ChatWidget {
             let spawn_gen = gen_ref.load(Ordering::SeqCst);
             in_flight.fetch_add(1, Ordering::SeqCst);
             let proxy = build_elevenlabs_proxy(&self.auth_manager);
+            let backend = vc.tts_backend.unwrap_or_default();
 
             let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
             state.tts_worker_tx = Some(worker_tx);
 
             tokio::spawn(async move {
-                tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy).await;
+                match backend {
+                    TtsBackend::Say => {
+                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                    }
+                    TtsBackend::Elevenlabs => {
+                        tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
+                            .await;
+                    }
+                }
             });
         }
 
@@ -4053,8 +4141,7 @@ impl super::ChatWidget {
         raw_text: String,
     ) {
         let voice_config = self.effective_voice_config();
-        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some()
-            || self.auth_manager.auth_mode() == Some(codex_core::auth::AuthMode::Ata);
+        let has_tts_key = resolve_elevenlabs_api_key_from_config(&voice_config).is_some();
         if self.voice_mode_state.is_none() {
             if !has_tts_key {
                 return;
@@ -4068,6 +4155,13 @@ impl super::ChatWidget {
             return;
         };
         if !state.tts_only && !state.should_tts() {
+            return;
+        }
+
+        // Prefetch is only meaningful for ElevenLabs (where we cache PCM
+        // chunks). The `say` backend has nothing to prefetch — audio is
+        // produced on demand by the system.
+        if voice_config.tts_backend.unwrap_or_default() == TtsBackend::Say {
             return;
         }
 
@@ -4428,7 +4522,7 @@ pub(crate) fn clean_for_tts(markdown: &str) -> String {
 /// Generate TTS for a sentence without sending audio events (for prefetching).
 /// Collects PCM chunks and alignment timeline entries.
 async fn prefetch_sentence_tts(
-    voice_config: &codex_core::config::types::VoiceModeToml,
+    voice_config: &crate::legacy_core::config::types::VoiceModeToml,
     sentence: &str,
     proxy: Option<&codex_elevenlabs::ElevenLabsProxy>,
 ) -> Result<(Vec<Vec<i16>>, Vec<AlignmentEntry>), codex_elevenlabs::ElevenLabsError> {
@@ -4451,7 +4545,7 @@ async fn prefetch_sentence_tts(
 /// Start TTS generation in a background task, returning a channel that
 /// receives `TtsChunk`s (PCM + alignment) as they arrive from ElevenLabs.
 fn start_tts_generation(
-    voice_config: &codex_core::config::types::VoiceModeToml,
+    voice_config: &crate::legacy_core::config::types::VoiceModeToml,
     sentence: &str,
     proxy: Option<&codex_elevenlabs::ElevenLabsProxy>,
 ) -> Result<
@@ -4549,11 +4643,120 @@ pub(crate) enum TtsWorkerCommand {
     Finish,
 }
 
+/// Long-lived TTS worker that shells out to the macOS `say` command per
+/// sentence. No PCM streaming, no karaoke alignment, no audio chunk events
+/// — `say` plays directly to system audio. We just emit
+/// `VoiceModeTtsFinished` when the queue drains so the state machine returns
+/// to Idle.
+async fn say_worker_loop(
+    voice_config: crate::legacy_core::config::types::VoiceModeToml,
+    mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<TtsWorkerCommand>,
+    event_tx: crate::app_event_sender::AppEventSender,
+    in_flight: Arc<AtomicUsize>,
+    gen_ref: Arc<AtomicUsize>,
+    my_gen: usize,
+) {
+    use tokio::process::Command;
+
+    let speed = voice_config
+        .elevenlabs
+        .as_ref()
+        .and_then(|e| e.speed)
+        .unwrap_or(1.0);
+    let wpm = ((175.0_f64) * speed).clamp(80.0, 400.0) as u32;
+
+    let mut current: Option<tokio::process::Child> = None;
+    tracing::info!("[TTS-TIMING] say_worker_loop: starting wpm={wpm}");
+
+    loop {
+        if gen_ref.load(Ordering::SeqCst) != my_gen {
+            tracing::info!("[TTS-TIMING] say_worker_loop: generation changed, exiting");
+            break;
+        }
+        match cmd_rx.recv().await {
+            Some(TtsWorkerCommand::SendText(text)) => {
+                if gen_ref.load(Ordering::SeqCst) != my_gen {
+                    break;
+                }
+                if text.trim().is_empty() {
+                    continue;
+                }
+                // Wait for the previous sentence so playback is sequential.
+                if let Some(mut child) = current.take() {
+                    let _ = child.wait().await;
+                }
+                tracing::info!(
+                    "[TTS-TIMING] say_worker_loop: spawning say for {} chars",
+                    text.len()
+                );
+                let child = Command::new("say")
+                    .arg("-r")
+                    .arg(wpm.to_string())
+                    .arg("--")
+                    .arg(&text)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+                match child {
+                    Ok(c) => {
+                        current = Some(c);
+                    }
+                    Err(err) => {
+                        tracing::error!("`say` spawn failed: {err}");
+                        event_tx.send(AppEvent::VoiceModeTtsError {
+                            error: format!("`say` failed: {err}"),
+                        });
+                        break;
+                    }
+                }
+            }
+            Some(TtsWorkerCommand::Finish) | None => {
+                tracing::info!("[TTS-TIMING] say_worker_loop: Finish/None received");
+                if let Some(mut child) = current.take() {
+                    let _ = child.wait().await;
+                }
+                break;
+            }
+        }
+    }
+
+    // If we exited due to generation change, kill any in-flight speech so the
+    // user hears the barge-in cleanly.
+    if let Some(mut child) = current.take() {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    let last = in_flight.fetch_sub(1, Ordering::SeqCst) == 1;
+    tracing::info!("[TTS-TIMING] say_worker_loop: exiting (last_in_flight={last})");
+    if last {
+        event_tx.send(AppEvent::VoiceModeTtsFinished);
+    }
+}
+
+/// True iff macOS `say` is available on PATH and we should use it.
+#[allow(dead_code)]
+fn say_backend_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("which")
+            .arg("say")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
 /// Long-lived TTS task that maintains a single ElevenLabs WebSocket connection.
 /// Sentences are sent through the same connection via `send_text` + `flush`,
 /// eliminating per-sentence connection overhead (DNS + TLS + WS handshake).
 async fn tts_worker_loop(
-    voice_config: codex_core::config::types::VoiceModeToml,
+    voice_config: crate::legacy_core::config::types::VoiceModeToml,
     mut cmd_rx: tokio::sync::mpsc::UnboundedReceiver<TtsWorkerCommand>,
     event_tx: crate::app_event_sender::AppEventSender,
     in_flight: Arc<AtomicUsize>,

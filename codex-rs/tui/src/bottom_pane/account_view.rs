@@ -85,8 +85,10 @@ impl AccountView {
                 error: Some("Your ATA session has expired. Please sign in again.".to_string()),
             }
         } else {
-            match codex_core::supabase::load_ata_session(&codex_home) {
-                Ok(Some(session)) if !codex_core::supabase::is_session_expired(&session) => {
+            match crate::legacy_core::supabase::load_ata_session(&codex_home) {
+                Ok(Some(session))
+                    if !crate::legacy_core::supabase::is_session_expired(&session) =>
+                {
                     AtaLoginStep::AlreadySigned {
                         email: session.user.email,
                     }
@@ -110,12 +112,13 @@ impl AccountView {
         let step = self.step.clone();
         let frame_requester = self.frame_requester.clone();
         tokio::spawn(async move {
-            let ata_config = codex_core::config::types::AtaAccountConfig::default();
-            let client = codex_core::supabase::SupabaseClient::new(
+            let ata_config = crate::legacy_core::config::types::AtaAccountConfig::default();
+            let client = crate::legacy_core::supabase::SupabaseClient::new(
                 ata_config.supabase_url,
                 ata_config.supabase_anon_key,
             );
-            match codex_login::send_ata_otp(&client, &email).await {
+            let auth = crate::legacy_core::supabase::SupabaseAuth::new(client);
+            match auth.sign_in_with_otp(&email).await {
                 Ok(()) => {
                     *step.write().unwrap_or_else(PoisonError::into_inner) =
                         AtaLoginStep::OtpInput {
@@ -142,14 +145,17 @@ impl AccountView {
         let frame_requester = self.frame_requester.clone();
         let codex_home = self.codex_home.clone();
         tokio::spawn(async move {
-            let ata_config = codex_core::config::types::AtaAccountConfig::default();
-            let client = codex_core::supabase::SupabaseClient::new(
+            let ata_config = crate::legacy_core::config::types::AtaAccountConfig::default();
+            let client = crate::legacy_core::supabase::SupabaseClient::new(
                 ata_config.supabase_url,
                 ata_config.supabase_anon_key,
             );
-            match codex_login::verify_ata_otp(&client, &email, &otp).await {
+            let auth = crate::legacy_core::supabase::SupabaseAuth::new(client);
+            match auth.exchange_code_for_session(&email, &otp).await {
                 Ok(session) => {
-                    if let Err(e) = codex_core::supabase::save_ata_session(&codex_home, &session) {
+                    if let Err(e) =
+                        crate::legacy_core::supabase::save_ata_session(&codex_home, &session)
+                    {
                         *step.write().unwrap_or_else(PoisonError::into_inner) =
                             AtaLoginStep::Error(format!("Failed to save session: {e}"));
                     } else {
@@ -270,7 +276,7 @@ impl BottomPaneView for AccountView {
                     self.complete = true;
                 }
                 KeyCode::Char('s') | KeyCode::Char('S') => {
-                    let _ = codex_core::supabase::delete_ata_session(&self.codex_home);
+                    let _ = crate::legacy_core::supabase::delete_ata_session(&self.codex_home);
                     *guard = AtaLoginStep::EmailInput {
                         email: String::new(),
                         error: None,

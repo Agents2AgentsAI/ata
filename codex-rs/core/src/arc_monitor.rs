@@ -5,11 +5,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
-use crate::default_client::build_reqwest_client;
 use crate::event_mapping::is_contextual_user_message_content;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use codex_login::default_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 
@@ -99,31 +99,19 @@ pub(crate) async fn monitor_action(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Value,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorOutcome {
     let auth = match turn_context.auth_manager.as_ref() {
         Some(auth_manager) => match auth_manager.auth().await {
-            Some(auth) if auth.is_chatgpt_auth() => Some(auth),
+            Some(auth) if auth.uses_codex_backend() => Some(auth),
             _ => None,
         },
         None => None,
     };
-    let token = if let Some(token) = read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN) {
-        token
-    } else {
-        let Some(auth) = auth.as_ref() else {
-            return ArcMonitorOutcome::Ok;
-        };
-        match auth.get_token() {
-            Ok(token) => token,
-            Err(err) => {
-                warn!(
-                    error = %err,
-                    "skipping safety monitor because auth token is unavailable"
-                );
-                return ArcMonitorOutcome::Ok;
-            }
-        }
-    };
+    let env_token = read_non_empty_env_var(CODEX_ARC_MONITOR_TOKEN);
+    if env_token.is_none() && auth.is_none() {
+        return ArcMonitorOutcome::Ok;
+    }
 
     let url = read_non_empty_env_var(CODEX_ARC_MONITOR_ENDPOINT_OVERRIDE).unwrap_or_else(|| {
         format!(
@@ -138,18 +126,15 @@ pub(crate) async fn monitor_action(
             return ArcMonitorOutcome::Ok;
         }
     };
-    let body = build_arc_monitor_request(sess, turn_context, action).await;
+    let body =
+        build_arc_monitor_request(sess, turn_context, action, protection_client_callsite).await;
     let client = build_reqwest_client();
-    let mut request = client
-        .post(&url)
-        .timeout(ARC_MONITOR_TIMEOUT)
-        .json(&body)
-        .bearer_auth(token);
-    if let Some(account_id) = auth
-        .as_ref()
-        .and_then(crate::auth::CodexAuth::get_account_id)
-    {
-        request = request.header("chatgpt-account-id", account_id);
+    let mut request = client.post(&url).timeout(ARC_MONITOR_TIMEOUT).json(&body);
+    if let Some(token) = env_token {
+        request = request.bearer_auth(token);
+    } else if let Some(auth) = auth.as_ref() {
+        request =
+            request.headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
     }
 
     let response = match request.send().await {
@@ -236,6 +221,7 @@ async fn build_arc_monitor_request(
     sess: &Session,
     turn_context: &TurnContext,
     action: serde_json::Map<String, serde_json::Value>,
+    protection_client_callsite: &'static str,
 ) -> ArcMonitorRequest {
     let history = sess.clone_history().await;
     let mut messages = build_arc_monitor_messages(history.raw_items());
@@ -254,7 +240,7 @@ async fn build_arc_monitor_request(
             codex_thread_id: conversation_id.clone(),
             codex_turn_id: turn_context.sub_id.clone(),
             conversation_id: Some(conversation_id),
-            protection_client_callsite: None,
+            protection_client_callsite: Some(protection_client_callsite.to_string()),
         },
         messages: Some(messages),
         input: None,
@@ -397,8 +383,8 @@ fn build_arc_monitor_message_item(
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. }
         | ResponseItem::Other => None,
     }
 }

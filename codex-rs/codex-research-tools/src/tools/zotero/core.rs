@@ -10,7 +10,7 @@ use crate::types::ZoteroItemUpdatePayload;
 use crate::types::ZoteroQuickSearchMode;
 use crate::types::ZoteroUpdateItemsParams;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(super) struct NormalizedScope {
     pub(super) library_type: String,
     pub(super) library_id: String,
@@ -154,6 +154,17 @@ pub(super) struct NormalizedCreateAttachmentLinkParams {
     pub(super) url: String,
     pub(super) content_type: Option<String>,
     pub(super) collections: Vec<String>,
+    pub(super) tags: Vec<String>,
+    pub(super) scope: NormalizedScope,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct NormalizedCreateAttachmentImportUrlParams {
+    pub(super) parent_item_key: String,
+    pub(super) title: String,
+    pub(super) url: String,
+    pub(super) content_type: Option<String>,
+    pub(super) filename: Option<String>,
     pub(super) tags: Vec<String>,
     pub(super) scope: NormalizedScope,
 }
@@ -469,6 +480,52 @@ pub(super) fn normalize_create_attachment_link_params(
     })
 }
 
+pub(super) fn normalize_create_attachment_import_url_params(
+    toolkit: &ResearchToolkit,
+    params: ZoteroCreateAttachmentImportUrlParams,
+    tool_name: &'static str,
+) -> Result<NormalizedCreateAttachmentImportUrlParams> {
+    let normalized_scope = normalize_write_scope_params(
+        toolkit,
+        params.library_type.as_deref(),
+        params.library_id.as_deref(),
+        tool_name,
+    )?;
+    let parent_item_key = params.parent_item_key.trim().to_string();
+    let title = params.title.trim().to_string();
+    let url = params.url.trim().to_string();
+    if parent_item_key.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} parent_item_key must not be empty"
+        )));
+    }
+    if title.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} title must not be empty"
+        )));
+    }
+    if url.is_empty() {
+        return Err(ResearchError::InvalidInput(format!(
+            "{tool_name} url must not be empty"
+        )));
+    }
+    Ok(NormalizedCreateAttachmentImportUrlParams {
+        parent_item_key,
+        title,
+        url,
+        content_type: normalize_optional_string(params.content_type),
+        filename: normalize_optional_string(params.filename),
+        tags: params
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+            .collect(),
+        scope: normalized_scope.scope,
+    })
+}
+
 pub(super) async fn normalize_citation_params(
     toolkit: &ResearchToolkit,
     params: ZoteroCitationParams,
@@ -629,7 +686,10 @@ pub(super) async fn normalize_collection_items_params(
         collection_key,
         scopes: to_normalized_resolved_scopes(&resolved),
         offset: params.offset.unwrap_or(0),
-        limit: params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT).clamp(1, 100),
+        limit: params
+            .limit
+            .unwrap_or(DEFAULT_COLLECTION_ITEMS_LIMIT)
+            .clamp(1, 100),
         item_type: normalize_optional_string(params.item_type),
         max_chars_per_item: params.max_chars_per_item,
     })
@@ -914,18 +974,31 @@ pub(super) async fn search_items_across_scopes(
     let mut all_items = Vec::new();
     let mut total: u64 = 0;
     let mut any_has_more = false;
+    let mut successful_scopes = 0usize;
+    let mut first_error = None;
 
     for scope in scopes {
         match zotero::search_items(toolkit.http(), config, scope, request).await {
             Ok(result) => {
+                successful_scopes += 1;
                 total = total.saturating_add(result.total_available.unwrap_or(0));
                 any_has_more = any_has_more || result.has_more;
                 all_items.extend(result.items);
             }
             Err(err) => {
-                tracing::warn!(?scope, %err, "zotero search_items failed for scope; skipping");
+                let err_display = err.to_string();
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                tracing::warn!(?scope, err = %err_display, "zotero search_items failed for scope; skipping");
             }
         }
+    }
+
+    if successful_scopes == 0
+        && let Some(err) = first_error
+    {
+        return Err(err);
     }
 
     let truncated = all_items.len() > limit as usize;
@@ -949,18 +1022,31 @@ pub(super) async fn collection_items_across_scopes(
     let mut all_items = Vec::new();
     let mut total: u64 = 0;
     let mut any_has_more = false;
+    let mut successful_scopes = 0usize;
+    let mut first_error = None;
 
     for scope in scopes {
         match zotero::get_collection_items(toolkit.http(), config, scope, request).await {
             Ok(result) => {
+                successful_scopes += 1;
                 total = total.saturating_add(result.total_available.unwrap_or(0));
                 any_has_more = any_has_more || result.has_more;
                 all_items.extend(result.items);
             }
             Err(err) => {
-                tracing::warn!(?scope, %err, "zotero get_collection_items failed for scope; skipping");
+                let err_display = err.to_string();
+                if first_error.is_none() {
+                    first_error = Some(err);
+                }
+                tracing::warn!(?scope, err = %err_display, "zotero get_collection_items failed for scope; skipping");
             }
         }
+    }
+
+    if successful_scopes == 0
+        && let Some(err) = first_error
+    {
+        return Err(err);
     }
 
     let truncated = all_items.len() > limit as usize;

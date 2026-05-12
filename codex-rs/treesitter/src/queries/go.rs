@@ -61,6 +61,13 @@ const VARIABLES_QUERY: &str = r#"
   name: (identifier) @var.name)
 "#;
 
+const CONDITION_EXPRESSIONS_QUERY: &str = r#"
+(if_statement) @condition.expr
+(for_statement) @condition.expr
+(expression_switch_statement) @condition.expr
+(select_statement) @condition.expr
+"#;
+
 const NON_CODE_QUERY: &str = r#"
 (comment) @skip
 (raw_string_literal) @skip
@@ -96,6 +103,7 @@ pub fn config() -> LanguageConfig {
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        condition_expressions_query: CONDITION_EXPRESSIONS_QUERY,
         non_code_query: NON_CODE_QUERY,
         definition_matcher: is_definition_line,
         test_symbol_matcher: is_test_symbol,

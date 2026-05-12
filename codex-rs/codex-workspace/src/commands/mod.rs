@@ -1,4 +1,5 @@
 pub mod add_entry;
+pub mod add_paper;
 pub mod audit;
 pub mod audit_query;
 pub mod check_host;

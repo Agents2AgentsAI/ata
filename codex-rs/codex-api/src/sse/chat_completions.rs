@@ -87,11 +87,18 @@ struct ToolCallAccumulator {
     arguments: String,
 }
 
+const REQUEST_ID_HEADER: &str = "x-request-id";
+
 pub fn spawn_chat_completions_stream(
     stream_response: StreamResponse,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn SseTelemetry>>,
 ) -> ResponseStream {
+    let upstream_request_id = stream_response
+        .headers
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(process_chat_sse(
         stream_response.bytes,
@@ -99,7 +106,10 @@ pub fn spawn_chat_completions_stream(
         idle_timeout,
         telemetry,
     ));
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        upstream_request_id,
+    }
 }
 
 async fn process_chat_sse(
@@ -184,7 +194,6 @@ async fn process_chat_sse(
                         id: response_id.clone(),
                         role: "assistant".to_string(),
                         content: Vec::new(),
-                        end_turn: None,
                         phase: None,
                     };
                     if tx_event
@@ -231,6 +240,8 @@ async fn process_chat_sse(
         }
     }
 
+    let end_turn = matches!(finish_reason.as_deref(), Some("stop")).then_some(true);
+
     if emitted_message_added {
         let final_item = ResponseItem::Message {
             id: response_id.clone(),
@@ -238,7 +249,6 @@ async fn process_chat_sse(
             content: vec![ContentItem::OutputText {
                 text: accumulated_text.clone(),
             }],
-            end_turn: matches!(finish_reason.as_deref(), Some("stop")).then_some(true),
             phase: None,
         };
         if tx_event
@@ -257,7 +267,6 @@ async fn process_chat_sse(
             namespace: None,
             arguments: call.arguments,
             call_id: call.id,
-            thought_signature: None,
         };
         if tx_event
             .send(Ok(ResponseEvent::OutputItemDone(item)))
@@ -272,6 +281,7 @@ async fn process_chat_sse(
         .send(Ok(ResponseEvent::Completed {
             response_id: response_id.unwrap_or_default(),
             token_usage,
+            end_turn,
         }))
         .await;
 }

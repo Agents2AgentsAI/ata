@@ -1,11 +1,25 @@
-use super::*;
+use std::path::Path;
+
+use super::PROVIDER_GEMINI;
+use super::storage::AuthCredentialsStoreMode;
+use super::storage::AuthDotJson;
+use super::storage::create_auth_storage;
+
+/// Google's standard OAuth 2.0 token revocation endpoint.
+const GEMINI_OAUTH_REVOKE_URL: &str = "https://oauth2.googleapis.com/revoke";
+/// Override env var so tests can point at a local mock server instead of Google's
+/// production OAuth revocation endpoint.
+const GEMINI_OAUTH_REVOKE_URL_OVERRIDE_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_REVOKE_URL_OVERRIDE";
 
 pub(super) fn revoke_gemini_oauth_tokens_for_store(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let refresh_token = match storage.load() {
+    let refresh_token = match storage
+        .load()
+        .map(|opt| opt.map(AuthDotJson::migrate_if_needed))
+    {
         Ok(Some(auth_dot_json)) => auth_dot_json
             .get_provider_oauth_credential(PROVIDER_GEMINI)
             .map(|credential| credential.refresh)
@@ -63,10 +77,14 @@ fn revoke_gemini_refresh_token_with_client(endpoint: String, body: String) -> st
         .map_err(|err| std::io::Error::other(format!("build revoke runtime failed: {err}")))?;
 
     runtime.block_on(async move {
-        let client = crate::default_client::build_reqwest_client_with_timeouts(
-            Some(std::time::Duration::from_secs(10)),
-            Some(std::time::Duration::from_secs(10)),
-        );
+        // `codex_login::default_client::build_reqwest_client` doesn't expose a
+        // timeout-aware variant, so build a minimal client inline. Revoke is
+        // best-effort during logout, so a short total timeout is appropriate.
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|err| std::io::Error::other(format!("build revoke client failed: {err}")))?;
         let response = client
             .post(&endpoint)
             .header("Content-Type", "application/x-www-form-urlencoded")

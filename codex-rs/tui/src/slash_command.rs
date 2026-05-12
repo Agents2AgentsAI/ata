@@ -14,54 +14,67 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Fast,
-    Approvals,
+    Ide,
     Permissions,
+    Keymap,
+    Vim,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
+    #[strum(to_string = "approve")]
+    AutoReview,
+    Account,
+    #[strum(to_string = "reading-view")]
+    ReadingView,
+    #[cfg(not(target_os = "linux"))]
+    Voice,
+    #[cfg(not(target_os = "linux"))]
+    #[strum(serialize = "voice-setup")]
+    VoiceSetup,
+    Memories,
     Skills,
+    Hooks,
     Review,
     Rename,
     New,
     Resume,
-    Research,
     Fork,
     Init,
     Compact,
     Plan,
+    Goal,
     Collab,
     Agent,
-    Jobs,
-    Mobile,
-    // Undo,
-    Diff,
+    Side,
     Copy,
+    Raw,
+    Diff,
     Mention,
     Status,
     DebugConfig,
+    Title,
     Statusline,
     Theme,
     Mcp,
     Apps,
-    Account,
+    Plugins,
+    Workspace,
+    Jobs,
+    Research,
     Logout,
     Quit,
     Exit,
     Feedback,
     Rollout,
     Ps,
-    Team,
     #[strum(to_string = "stop", serialize = "clean")]
     Stop,
     Clear,
     Personality,
     Realtime,
     Settings,
-    Voice,
-    #[strum(serialize = "voice-setup")]
-    VoiceSetup,
     TestApproval,
     #[strum(serialize = "subagents")]
     MultiAgents,
@@ -85,44 +98,63 @@ impl SlashCommand {
             SlashCommand::Resume => "resume a saved chat",
             SlashCommand::Clear => "clear the terminal and start a new chat",
             SlashCommand::Fork => "fork the current chat",
-            // SlashCommand::Undo => "ask Codex to undo a turn",
             SlashCommand::Quit | SlashCommand::Exit => "exit Codex",
+            SlashCommand::Copy => "copy last response as markdown",
+            SlashCommand::Raw => "toggle raw scrollback mode for copy-friendly terminal selection",
             SlashCommand::Diff => "show git diff (including untracked files)",
-            SlashCommand::Copy => "copy the latest Codex output to your clipboard",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
+            SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
+            SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
             SlashCommand::Ps => "list background terminals",
-            SlashCommand::Team => "list coordination agents and messages",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
-            SlashCommand::Fast => "toggle Fast mode to enable fastest inference at 2X plan usage",
+            SlashCommand::Fast => {
+                "toggle Fast mode to enable fastest inference with increased plan usage"
+            }
+            SlashCommand::Ide => {
+                "include current selection, open files, and other context from your IDE"
+            }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
             SlashCommand::Settings => "configure realtime microphone/speaker",
-            SlashCommand::Voice => "toggle voice mode for this ATA session",
-            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT)",
             SlashCommand::Plan => "switch to Plan mode",
+            SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
-            SlashCommand::Jobs => "view scheduled jobs and daemon status",
-            SlashCommand::Mobile => "start remote control server for mobile (ATA)",
-            SlashCommand::Approvals => "choose what Codex is allowed to do",
+            SlashCommand::Side => "start a side conversation in an ephemeral fork",
             SlashCommand::Permissions => "choose what Codex is allowed to do",
+            SlashCommand::Keymap => "remap TUI shortcuts",
+            SlashCommand::Vim => "toggle Vim mode for the composer",
             SlashCommand::ElevateSandbox => "set up elevated agent sandbox",
             SlashCommand::SandboxReadRoot => {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::Research => "toggle research tool integrations",
-            SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
+            SlashCommand::Account => "sign in / out of your ATA account",
+            SlashCommand::ReadingView => "configure the reading-view display mode",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => "toggle voice mode for this ATA session",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT, API key, language)",
+            SlashCommand::Memories => "configure memory use and generation",
+            SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
-            SlashCommand::Account => "manage your ATA account",
+            SlashCommand::Plugins => "browse plugins",
+            SlashCommand::Workspace => {
+                "summarize the active workspace; manage with `ata workspace`"
+            }
+            SlashCommand::Jobs => "summarize scheduled jobs; manage with `ata jobs`",
+            SlashCommand::Research => {
+                "summarize research toolkit status; run one-off via `ata research`"
+            }
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -142,9 +174,29 @@ impl SlashCommand {
             SlashCommand::Review
                 | SlashCommand::Rename
                 | SlashCommand::Plan
+                | SlashCommand::Goal
                 | SlashCommand::Fast
+                | SlashCommand::Ide
+                | SlashCommand::Keymap
+                | SlashCommand::Mcp
+                | SlashCommand::Raw
+                | SlashCommand::Side
+                | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
-                | SlashCommand::Team
+                | SlashCommand::Workspace
+        )
+    }
+
+    /// Whether this command remains available inside an active side conversation.
+    pub fn available_in_side_conversation(self) -> bool {
+        matches!(
+            self,
+            SlashCommand::Copy
+                | SlashCommand::Raw
+                | SlashCommand::Diff
+                | SlashCommand::Mention
+                | SlashCommand::Status
+                | SlashCommand::Ide
         )
     }
 
@@ -156,50 +208,61 @@ impl SlashCommand {
             | SlashCommand::Fork
             | SlashCommand::Init
             | SlashCommand::Compact
-            // | SlashCommand::Undo
             | SlashCommand::Model
             | SlashCommand::Fast
             | SlashCommand::Personality
-            | SlashCommand::Approvals
             | SlashCommand::Permissions
+            | SlashCommand::Keymap
+            | SlashCommand::Vim
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::Research
+            | SlashCommand::Account
+            | SlashCommand::ReadingView
+            | SlashCommand::Memories
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear
-            | SlashCommand::Account
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff
             | SlashCommand::Copy
+            | SlashCommand::Raw
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Hooks
             | SlashCommand::Status
             | SlashCommand::DebugConfig
-            | SlashCommand::Jobs
-            | SlashCommand::Mobile
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Goal
             | SlashCommand::Mcp
             | SlashCommand::Apps
+            | SlashCommand::Plugins
+            | SlashCommand::Workspace
+            | SlashCommand::Jobs
+            | SlashCommand::Research
+            | SlashCommand::Title
+            | SlashCommand::Statusline
+            | SlashCommand::AutoReview
             | SlashCommand::Feedback
+            | SlashCommand::Ide
             | SlashCommand::Quit
-            | SlashCommand::Exit => true,
+            | SlashCommand::Exit
+            | SlashCommand::Side => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
-            SlashCommand::Voice => true,
-            SlashCommand::VoiceSetup => true,
             SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Team => true,
-            SlashCommand::Statusline => false,
             SlashCommand::Theme => false,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => true,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => true,
         }
     }
 
@@ -236,5 +299,25 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn certain_commands_are_available_during_task() {
+        assert!(SlashCommand::Goal.available_during_task());
+        assert!(SlashCommand::Ide.available_during_task());
+        assert!(SlashCommand::Title.available_during_task());
+        assert!(SlashCommand::Statusline.available_during_task());
+        assert!(SlashCommand::Raw.available_during_task());
+        assert!(SlashCommand::Raw.available_in_side_conversation());
+        assert!(SlashCommand::Raw.supports_inline_args());
+    }
+
+    #[test]
+    fn auto_review_command_is_approve() {
+        assert_eq!(SlashCommand::AutoReview.command(), "approve");
+        assert_eq!(
+            SlashCommand::from_str("approve"),
+            Ok(SlashCommand::AutoReview)
+        );
     }
 }

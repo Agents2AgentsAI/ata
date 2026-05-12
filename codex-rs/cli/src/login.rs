@@ -8,27 +8,15 @@
 //! support can request from users.
 
 use codex_app_server_protocol::AuthMode;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::CLIENT_ID;
-use codex_core::auth::PROVIDER_ANTHROPIC;
-use codex_core::auth::PROVIDER_GEMINI;
-use codex_core::auth::PROVIDER_OPENAI;
-use codex_core::auth::ProviderAuthMethod;
-use codex_core::auth::ProviderAuthSource;
-use codex_core::auth::get_provider_api_key;
-use codex_core::auth::list_configured_providers;
-use codex_core::auth::login_with_provider_api_key;
-use codex_core::auth::logout_provider;
-use codex_core::auth::provider_env_var;
+use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
-use codex_core::config::edit::ConfigEditsBuilder;
-use codex_core::config::edit::default_model_for_provider;
-use codex_login::GeminiServerOptions;
+use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions;
+use codex_login::login_with_access_token;
+use codex_login::login_with_api_key;
+use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
-use codex_login::run_gemini_login_server;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
@@ -47,7 +35,8 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
-const OAUTH_LOGIN_DISABLED_MESSAGE: &str = "OAuth login is disabled. Use ChatGPT login instead.";
+const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
+    "Access token login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
@@ -120,7 +109,7 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
 
 fn print_login_server_start(actual_port: u16, auth_url: &str) {
     eprintln!(
-        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `codex login --device-auth` instead."
+        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `ata login --device-auth` instead."
     );
 }
 
@@ -155,7 +144,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
     match login_with_chatgpt(
-        config.codex_home,
+        config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
     )
@@ -176,16 +165,6 @@ pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
-    run_login_with_provider_api_key(cli_config_overrides, api_key, None).await
-}
-
-/// Login with an API key for a specific provider.
-/// If provider is None, defaults to OpenAI.
-pub async fn run_login_with_provider_api_key(
-    cli_config_overrides: CliConfigOverrides,
-    api_key: String,
-    provider: Option<String>,
-) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
     tracing::info!("starting api key login flow");
@@ -195,23 +174,13 @@ pub async fn run_login_with_provider_api_key(
         std::process::exit(1);
     }
 
-    let provider_id = validate_provider_id(provider.as_deref());
-
-    match login_with_provider_api_key(
+    match login_with_api_key(
         &config.codex_home,
-        provider_id,
         &api_key,
         config.cli_auth_credentials_store_mode,
     ) {
         Ok(_) => {
-            let default_model = default_model_for_provider(provider_id);
-            if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-                .set_model(default_model, None, Some(provider_id.to_string()))
-                .apply_blocking()
-            {
-                eprintln!("Warning: failed to set default model for provider {provider_id}: {err}");
-            }
-            eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
@@ -221,104 +190,77 @@ pub async fn run_login_with_provider_api_key(
     }
 }
 
-/// Login with OAuth for a specific provider.
-/// Currently supported only for Gemini.
-pub async fn run_login_with_provider_oauth(
+pub async fn run_login_with_access_token(
     cli_config_overrides: CliConfigOverrides,
-    provider: Option<String>,
+    access_token: String,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
     let _login_log_guard = init_login_file_logging(&config);
-    tracing::info!("starting provider oauth login flow");
+    tracing::info!("starting access token login flow");
 
-    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Chatgpt)) {
-        eprintln!("{OAUTH_LOGIN_DISABLED_MESSAGE}");
+    if matches!(config.forced_login_method, Some(ForcedLoginMethod::Api)) {
+        eprintln!("{ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE}");
         std::process::exit(1);
     }
 
-    let provider_id = validate_provider_id(provider.as_deref());
-    if provider_id != PROVIDER_GEMINI {
-        eprintln!(
-            "OAuth login is currently supported only for provider: {PROVIDER_GEMINI}. Use --with-api-key for {provider_id}."
-        );
-        std::process::exit(1);
-    }
-
-    let opts = GeminiServerOptions::new(
-        config.codex_home.clone(),
+    match login_with_access_token(
+        &config.codex_home,
+        &access_token,
         config.cli_auth_credentials_store_mode,
-    );
-    match run_gemini_login_server(opts) {
-        Ok(server) => {
-            print_login_server_start(server.actual_port, &server.auth_url);
-            match server.block_until_done().await {
-                Ok(()) => {
-                    let default_model = default_model_for_provider(provider_id);
-                    if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
-                        .set_model(default_model, None, Some(provider_id.to_string()))
-                        .apply_blocking()
-                    {
-                        eprintln!(
-                            "Warning: failed to set default model for provider {provider_id}: {err}"
-                        );
-                    }
-                    eprintln!("{LOGIN_SUCCESS_MESSAGE} for provider: {provider_id}");
-                    std::process::exit(0);
-                }
-                Err(err) => {
-                    eprintln!("Error logging in: {err}");
-                    std::process::exit(1);
-                }
-            }
+        Some(&config.chatgpt_base_url),
+    )
+    .await
+    {
+        Ok(_) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
         }
-        Err(err) => {
-            eprintln!("Error logging in: {err}");
+        Err(e) => {
+            eprintln!("Error logging in with access token: {e}");
             std::process::exit(1);
         }
     }
 }
 
-/// Validate and normalize provider ID.
-fn validate_provider_id(provider: Option<&str>) -> &str {
-    match provider {
-        None => PROVIDER_OPENAI,
-        Some(p) => match p.to_lowercase().as_str() {
-            "openai" => PROVIDER_OPENAI,
-            "anthropic" => PROVIDER_ANTHROPIC,
-            "gemini" | "google" | "google-gemini" => PROVIDER_GEMINI,
-            _ => {
-                eprintln!("Unknown provider: {p}. Valid providers: openai, anthropic, gemini");
-                std::process::exit(1);
-            }
-        },
-    }
+pub fn read_api_key_from_stdin() -> String {
+    read_stdin_secret(
+        "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | codex login --with-api-key`.",
+        "Reading API key from stdin...",
+        "No API key provided via stdin.",
+    )
 }
 
-pub fn read_api_key_from_stdin() -> String {
+pub fn read_access_token_from_stdin() -> String {
+    read_stdin_secret(
+        "--with-access-token expects the access token on stdin. Try piping it, e.g. `printenv CODEX_ACCESS_TOKEN | codex login --with-access-token`.",
+        "Reading access token from stdin...",
+        "No access token provided via stdin.",
+    )
+}
+
+fn read_stdin_secret(terminal_message: &str, reading_message: &str, empty_message: &str) -> String {
     let mut stdin = std::io::stdin();
 
     if stdin.is_terminal() {
-        eprintln!(
-            "--with-api-key expects the API key on stdin. Try piping it, e.g. `printenv OPENAI_API_KEY | ata login --with-api-key`."
-        );
+        eprintln!("{terminal_message}");
         std::process::exit(1);
     }
 
-    eprintln!("Reading API key from stdin...");
+    eprintln!("{reading_message}");
 
     let mut buffer = String::new();
     if let Err(err) = stdin.read_to_string(&mut buffer) {
-        eprintln!("Failed to read API key from stdin: {err}");
+        eprintln!("Failed to read stdin: {err}");
         std::process::exit(1);
     }
 
-    let api_key = buffer.trim().to_string();
-    if api_key.is_empty() {
-        eprintln!("No API key provided via stdin.");
+    let secret = buffer.trim().to_string();
+    if secret.is_empty() {
+        eprintln!("{empty_message}");
         std::process::exit(1);
     }
 
-    api_key
+    secret
 }
 
 /// Login using the OAuth device code flow.
@@ -336,7 +278,7 @@ pub async fn run_login_with_device_code(
     }
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home,
+        config.codex_home.to_path_buf(),
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
@@ -375,7 +317,7 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
     let mut opts = ServerOptions::new(
-        config.codex_home,
+        config.codex_home.to_path_buf(),
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
@@ -420,289 +362,137 @@ pub async fn run_login_with_device_code_fallback_to_browser(
     }
 }
 
-pub async fn run_login_with_a2a(cli_config_overrides: CliConfigOverrides) -> ! {
+/// Headless OAuth flow for non-OpenAI providers. Currently only `copilot`
+/// is supported. This drives the same device-code flow the TUI onboarding
+/// picker uses, but prints the user code + verification URI to stderr
+/// instead of rendering an interactive screen.
+pub async fn run_login_with_provider(
+    cli_config_overrides: CliConfigOverrides,
+    provider: &str,
+) -> ! {
+    if provider != "copilot" {
+        eprintln!(
+            "Unknown provider '{provider}'. Currently `copilot` is the only supported OAuth provider for `ata login provider`."
+        );
+        std::process::exit(2);
+    }
+
     let config = load_config_or_exit(cli_config_overrides).await;
+    let _file_log_guard = init_login_file_logging(&config);
 
-    let ata_config = codex_core::config::types::AtaAccountConfig::default();
-    let client = codex_core::supabase::SupabaseClient::new(
-        ata_config.supabase_url,
-        ata_config.supabase_anon_key,
-    );
-
-    // Prompt for email
-    eprint!("Enter your email: ");
-    let mut email = String::new();
-    std::io::stdin().read_line(&mut email).unwrap_or_default();
-    let email = email.trim();
-    if email.is_empty() {
-        eprintln!("Email is required.");
-        std::process::exit(1);
-    }
-
-    // Send OTP
-    eprintln!("Sending sign-in code to {email}...");
-    if let Err(e) = codex_login::send_ata_otp(&client, email).await {
-        eprintln!("Failed to send sign-in code: {e}");
-        std::process::exit(1);
-    }
-    eprintln!("Check your email for a 6-digit code.");
-
-    // Prompt for OTP
-    eprint!("Enter code: ");
-    let mut otp = String::new();
-    std::io::stdin().read_line(&mut otp).unwrap_or_default();
-    let otp = otp.trim();
-    if otp.is_empty() {
-        eprintln!("Code is required.");
-        std::process::exit(1);
-    }
-
-    // Verify OTP
-    match codex_login::verify_ata_otp(&client, email, otp).await {
-        Ok(session) => {
-            if let Err(e) = codex_core::supabase::save_ata_session(&config.codex_home, &session) {
-                eprintln!("Failed to save session: {e}");
-                std::process::exit(1);
-            }
-            eprintln!("Successfully signed in with A2A account!");
-            if !session.user.email.is_empty() {
-                eprintln!("Email: {}", session.user.email);
-            }
-            std::process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("Sign-in failed: {e}");
+    let device = match codex_core::auth_public::start_copilot_device_flow().await {
+        Ok(device) => device,
+        Err(err) => {
+            eprintln!("Failed to start GitHub Copilot login: {err}");
             std::process::exit(1);
         }
+    };
+
+    eprintln!();
+    eprintln!("Open this URL in your browser to authorize:");
+    eprintln!("    {}", device.verification_uri);
+    eprintln!();
+    eprintln!("Enter this one-time code:");
+    eprintln!("    {}", device.user_code);
+    eprintln!();
+    eprintln!("Waiting for authorization...");
+
+    let token = match codex_core::auth_public::poll_copilot_access_token(&device).await {
+        Ok(token) => token,
+        Err(err) => {
+            eprintln!("Authorization failed: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(err) = codex_core::auth_public::complete_copilot_login(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        token,
+    )
+    .await
+    {
+        eprintln!("Token exchange failed: {err}");
+        std::process::exit(1);
     }
+
+    // Persist `model_provider = "copilot"` and `model = "gpt-4o"` so the
+    // next launch uses Copilot without manual `-c model=...` flags. This
+    // mirrors what the TUI device-code path does in
+    // app-server::AccountRequestProcessor::login_copilot_device_code_response.
+    if let Err(err) = codex_core::config::edit::ConfigEditsBuilder::new(&config.codex_home)
+        .set_model(Some("gpt-4o"), None, Some("copilot".to_string()))
+        .apply()
+        .await
+    {
+        eprintln!(
+            "Login succeeded but failed to persist model_provider=copilot to config.toml: {err}"
+        );
+    }
+
+    eprintln!();
+    eprintln!("{LOGIN_SUCCESS_MESSAGE} with GitHub Copilot.");
+    std::process::exit(0);
 }
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    // Show ChatGPT auth status if available
-    let mut chatgpt_auth = false;
-    match CodexAuth::from_auth_storage(&config.codex_home, config.cli_auth_credentials_store_mode) {
-        Ok(Some(auth)) => match auth.api_auth_mode() {
-            AuthMode::ApiKey => {
-                // Don't show legacy status, fall through to provider list
-            }
-            AuthMode::Chatgpt => {
+    match CodexAuth::from_auth_storage(
+        &config.codex_home,
+        config.cli_auth_credentials_store_mode,
+        Some(&config.chatgpt_base_url),
+    )
+    .await
+    {
+        Ok(Some(auth)) => match auth.auth_mode() {
+            AuthMode::ApiKey => match auth.get_token() {
+                Ok(api_key) => {
+                    eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Unexpected error retrieving API key: {e}");
+                    std::process::exit(1);
+                }
+            },
+            AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens => {
                 eprintln!("Logged in using ChatGPT");
-                chatgpt_auth = true;
+                std::process::exit(0);
             }
-            AuthMode::ChatgptAuthTokens => {
-                eprintln!("Logged in using ChatGPT (external tokens)");
-                chatgpt_auth = true;
-            }
-            AuthMode::Ata => {
-                eprintln!("Logged in using ATA account");
+            AuthMode::AgentIdentity => {
+                eprintln!("Logged in using access token");
+                std::process::exit(0);
             }
         },
-        Ok(None) => {}
+        Ok(None) => {
+            eprintln!("Not logged in");
+            std::process::exit(1);
+        }
         Err(e) => {
             eprintln!("Error checking login status: {e}");
             std::process::exit(1);
         }
     }
-
-    // Show configured providers
-    let providers =
-        list_configured_providers(&config.codex_home, config.cli_auth_credentials_store_mode);
-
-    if providers.is_empty() {
-        if chatgpt_auth {
-            std::process::exit(0);
-        }
-        eprintln!("No provider credentials configured");
-        std::process::exit(1);
-    }
-
-    eprintln!("Configured provider credentials:");
-    for provider in &providers {
-        let source = match provider.source {
-            ProviderAuthSource::Stored => "stored",
-            ProviderAuthSource::Environment => "env",
-        };
-        eprintln!(
-            "  {} ({source}, {})",
-            provider.provider_id,
-            auth_method_label(provider.method)
-        );
-    }
-
-    // Check ATA session status independently
-    if let Some(ata_session) = codex_core::supabase::load_ata_session(&config.codex_home)
-        .ok()
-        .flatten()
-    {
-        if codex_core::supabase::is_session_expired(&ata_session) {
-            eprintln!("ATA account: {} (session expired)", ata_session.user.email);
-        } else {
-            eprintln!("ATA account: {}", ata_session.user.email);
-        }
-    } else {
-        eprintln!("ATA account: not signed in");
-    }
-
-    std::process::exit(0);
 }
 
-/// List all configured providers.
-pub async fn run_list_providers(cli_config_overrides: CliConfigOverrides) -> ! {
+pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
 
-    let providers =
-        list_configured_providers(&config.codex_home, config.cli_auth_credentials_store_mode);
-
-    if providers.is_empty() {
-        eprintln!("No providers configured");
-        eprintln!();
-        eprintln!("To configure a provider, run:");
-        eprintln!("  ata login --provider <provider>");
-        eprintln!();
-        eprintln!("Available providers: openai, anthropic, gemini");
-        std::process::exit(0);
-    }
-
-    eprintln!("Configured providers:");
-    for provider in &providers {
-        let source = match provider.source {
-            ProviderAuthSource::Stored => "stored",
-            ProviderAuthSource::Environment => "env",
-        };
-
-        // Show env var hint for environment-sourced keys
-        let hint = if provider.source == ProviderAuthSource::Environment {
-            provider_env_var(&provider.provider_id)
-                .map(|v| format!(" (${v})"))
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-
-        eprintln!(
-            "  {} ({source}, {}){}",
-            provider.provider_id,
-            auth_method_label(provider.method),
-            hint
-        );
-    }
-    std::process::exit(0);
-}
-
-/// Logout a specific provider or all providers.
-pub async fn run_logout_provider(
-    cli_config_overrides: CliConfigOverrides,
-    provider: Option<String>,
-) -> ! {
-    let config = load_config_or_exit(cli_config_overrides).await;
-
-    match provider {
-        Some(p) => {
-            let provider_id = validate_provider_id(Some(&p));
-
-            // Check if this provider is set via environment variable
-            if get_provider_api_key(
-                &config.codex_home,
-                provider_id,
-                config.cli_auth_credentials_store_mode,
-            )
-            .is_some()
-                && let Some(env_var) = provider_env_var(provider_id)
-                && std::env::var(env_var).is_ok()
-            {
-                eprintln!(
-                    "Note: {provider_id} API key is set via ${env_var} environment variable."
-                );
-                eprintln!("Removing stored credentials will not affect the environment variable.");
-            }
-
-            match logout_provider(
-                &config.codex_home,
-                provider_id,
-                config.cli_auth_credentials_store_mode,
-            ) {
-                Ok(true) => {
-                    eprintln!("Successfully logged out of {provider_id}");
-                    std::process::exit(0);
-                }
-                Ok(false) => {
-                    eprintln!("No stored credentials found for {provider_id}");
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Error logging out: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        None => {
-            // Logout all (existing behavior)
-            let auth_manager = AuthManager::new(
-                config.codex_home.clone(),
-                false,
-                config.cli_auth_credentials_store_mode,
-            );
-            match auth_manager.logout() {
-                Ok(true) => {
-                    eprintln!("Successfully logged out");
-                    std::process::exit(0);
-                }
-                Ok(false) => {
-                    eprintln!("Not logged in");
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Error logging out: {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
-}
-
-pub async fn run_logout(cli_config_overrides: CliConfigOverrides, ata_only: bool) -> ! {
-    let config = load_config_or_exit(cli_config_overrides).await;
-
-    if ata_only {
-        match codex_core::supabase::delete_ata_session(&config.codex_home) {
-            Ok(true) => eprintln!("ATA session removed."),
-            Ok(false) => eprintln!("No ATA session found."),
-            Err(e) => {
-                eprintln!("Failed to remove ATA session: {e}");
-                std::process::exit(1);
-            }
-        }
-        std::process::exit(0);
-    }
-
-    let auth_manager = AuthManager::new(
-        config.codex_home.clone(),
-        false,
-        config.cli_auth_credentials_store_mode,
-    );
-    match auth_manager.logout() {
+    match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
         Ok(true) => {
             eprintln!("Successfully logged out");
+            std::process::exit(0);
         }
         Ok(false) => {
             eprintln!("Not logged in");
+            std::process::exit(0);
         }
         Err(e) => {
             eprintln!("Error logging out: {e}");
             std::process::exit(1);
         }
     }
-
-    // Also delete ATA session if present
-    match codex_core::supabase::delete_ata_session(&config.codex_home) {
-        Ok(true) => eprintln!("ATA session removed."),
-        Ok(false) => {} // No ATA session to remove
-        Err(e) => eprintln!("Warning: failed to remove ATA session: {e}"),
-    }
-
-    std::process::exit(0);
 }
 
 async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
@@ -723,7 +513,6 @@ async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config
     }
 }
 
-#[allow(dead_code)]
 fn safe_format_key(key: &str) -> String {
     if key.len() <= 13 {
         return "***".to_string();
@@ -731,14 +520,6 @@ fn safe_format_key(key: &str) -> String {
     let prefix = &key[..8];
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
-}
-
-fn auth_method_label(method: ProviderAuthMethod) -> &'static str {
-    match method {
-        ProviderAuthMethod::ApiKey => "api_key",
-        ProviderAuthMethod::Oauth => "oauth",
-        ProviderAuthMethod::ApiKeyAndOauth => "api_key+oauth",
-    }
 }
 
 #[cfg(test)]

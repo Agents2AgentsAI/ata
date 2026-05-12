@@ -370,7 +370,7 @@ async fn cmd_run(name: &str) -> anyhow::Result<()> {
 
     let db = SchedulerDb::open_default().await?;
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-    let runs_dir = home.join("scheduler").join("runs");
+    let runs_dir = home.join("scheduler").join("runs").into_path_buf();
 
     // Ensure the job exists in the DB (the runs table has a FK to jobs).
     ensure_job_in_db(&db, name, &def).await?;

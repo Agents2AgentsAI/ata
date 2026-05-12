@@ -51,6 +51,7 @@ pub struct UploadedFile {
     pub provider: String,
     pub expires_at: Option<SystemTime>,
     pub source_path: PathBuf,
+    pub needs_refresh: bool,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]

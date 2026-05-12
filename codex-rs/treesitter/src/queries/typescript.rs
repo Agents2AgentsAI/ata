@@ -63,6 +63,15 @@ const VARIABLES_QUERY: &str = r#"
   pattern: (identifier) @var.name)
 "#;
 
+const CONDITION_EXPRESSIONS_QUERY: &str = r#"
+(if_statement) @condition.expr
+(while_statement) @condition.expr
+(do_statement) @condition.expr
+(for_statement) @condition.expr
+(switch_statement) @condition.expr
+(ternary_expression) @condition.expr
+"#;
+
 const NON_CODE_QUERY: &str = r#"
 (comment) @skip
 (string) @skip
@@ -86,6 +95,7 @@ const JS_SYMBOLS_QUERY: &str = r#"
 "#;
 
 const JS_CALLERS_QUERY: &str = CALLERS_QUERY;
+const JS_CONDITION_EXPRESSIONS_QUERY: &str = CONDITION_EXPRESSIONS_QUERY;
 
 const JS_NON_CODE_QUERY: &str = NON_CODE_QUERY;
 
@@ -158,6 +168,7 @@ pub fn config() -> LanguageConfig {
         symbols_query: SYMBOLS_QUERY,
         callers_query: CALLERS_QUERY,
         variables_query: VARIABLES_QUERY,
+        condition_expressions_query: CONDITION_EXPRESSIONS_QUERY,
         non_code_query: NON_CODE_QUERY,
         definition_matcher: ts_definition_line,
         test_symbol_matcher: is_test_symbol,
@@ -172,6 +183,7 @@ pub fn javascript_config() -> LanguageConfig {
         symbols_query: JS_SYMBOLS_QUERY,
         callers_query: JS_CALLERS_QUERY,
         variables_query: JS_VARIABLES_QUERY,
+        condition_expressions_query: JS_CONDITION_EXPRESSIONS_QUERY,
         non_code_query: JS_NON_CODE_QUERY,
         definition_matcher: js_definition_line,
         test_symbol_matcher: is_test_symbol,

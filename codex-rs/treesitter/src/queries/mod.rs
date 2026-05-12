@@ -25,6 +25,7 @@ pub struct LanguageConfig {
     pub symbols_query: &'static str,
     pub callers_query: &'static str,
     pub variables_query: &'static str,
+    pub condition_expressions_query: &'static str,
     pub non_code_query: &'static str,
     pub definition_matcher: fn(line: &str, name: &str) -> bool,
     pub test_symbol_matcher: fn(name: &str, file: &str) -> bool,

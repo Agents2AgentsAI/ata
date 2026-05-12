@@ -1,27 +1,31 @@
+use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
-use codex_protocol::request_user_input::RequestUserInputEvent;
+use codex_app_server_protocol::ToolRequestUserInputParams;
 use crossterm::event::KeyEvent;
+#[cfg(not(target_os = "linux"))]
+use ratatui::text::Line;
 
 use super::CancellationEvent;
 
-/// Context extracted from a reading view for voice mode integration.
-///
-/// When voice mode is active and the user is in a document reader, this struct
-/// carries the current reading context so the agent can provide reading-view-aware
-/// explanations rather than generic voice responses.
+/// Voice mode narration context surfaced by reading-view-style overlays.
+/// Used by voice_mode to know what to read aloud and where to anchor karaoke.
+#[cfg(not(target_os = "linux"))]
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(all(not(target_os = "linux"), feature = "voice-input")),
-    allow(dead_code)
-)]
 pub(crate) struct ReadingViewVoiceContext {
     pub(crate) title: String,
     pub(crate) document_id: String,
     pub(crate) section_index: usize,
     pub(crate) heading: String,
     pub(crate) selection: Option<String>,
+}
+
+/// Reason an active bottom-pane view finished.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ViewCompletion {
+    Accepted,
+    Cancelled,
 }
 
 /// Trait implemented by every view that can be shown in the bottom pane.
@@ -35,6 +39,19 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Return the completion reason once the view has finished.
+    fn completion(&self) -> Option<ViewCompletion> {
+        None
+    }
+
+    /// Return true when this view should be removed after a child view is accepted.
+    fn dismiss_after_child_accept(&self) -> bool {
+        false
+    }
+
+    /// Clear any pending child-flow cleanup marker after a child view is cancelled.
+    fn clear_dismiss_after_child_accept(&mut self) {}
+
     /// Stable identifier for views that need external refreshes while open.
     fn view_id(&self) -> Option<&'static str> {
         None
@@ -43,6 +60,12 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Actual item index for list-based views that want to preserve selection
     /// across external refreshes.
     fn selected_index(&self) -> Option<usize> {
+        None
+    }
+
+    /// Active tab id for tabbed list-based views.
+    #[allow(dead_code)]
+    fn active_tab_id(&self) -> Option<&str> {
         None
     }
 
@@ -92,8 +115,8 @@ pub(crate) trait BottomPaneView: Renderable {
     /// consumed.
     fn try_consume_user_input_request(
         &mut self,
-        request: RequestUserInputEvent,
-    ) -> Option<RequestUserInputEvent> {
+        request: ToolRequestUserInputParams,
+    ) -> Option<ToolRequestUserInputParams> {
         Some(request)
     }
 
@@ -106,8 +129,51 @@ pub(crate) trait BottomPaneView: Renderable {
         Some(request)
     }
 
-    /// Forward a document section update (full replace) to this view (no-op by default).
+    /// Dismiss a request that was resolved by another client.
+    ///
+    /// Returns `true` when the view changed state.
+    fn dismiss_app_server_request(&mut self, _request: &ResolvedAppServerRequest) -> bool {
+        false
+    }
+
+    /// Whether this view means the session is blocked waiting for the user.
+    ///
+    /// Views that return `true` surface an "Action Required" terminal title
+    /// instead of the normal working spinner so terminal tabs clearly show that
+    /// Codex needs user input.
+    fn terminal_title_requires_action(&self) -> bool {
+        false
+    }
+
+    /// Return the next time-based redraw this view needs while it is active.
+    fn next_frame_delay(&self) -> Option<std::time::Duration> {
+        None
+    }
+
+    // ─── ATA reading-view + voice integration hooks ───────────────────────
+    // Default implementations let regular views ignore these. The reading
+    // view overlay overrides them.
+
+    /// If this view just closed and represents a document reader, return the
+    /// document id so the host can release any cached state for it.
+    /// (Wired during the closed-document tracking follow-up.)
     #[allow(dead_code)]
+    fn closed_document_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether the view's composer (if any) currently owns focus. Used by
+    /// chatwidget to decide whether keystrokes should be routed to the view's
+    /// internal composer or trigger global actions. Wired with the PTT
+    /// composer key handler follow-up.
+    #[cfg(not(target_os = "linux"))]
+    #[allow(dead_code)]
+    fn is_composer_focused(&self) -> bool {
+        false
+    }
+
+    /// Apply a `update_document_section` tool result to the view if it owns
+    /// the matching document.
     fn handle_document_section_update(
         &mut self,
         _document_id: &str,
@@ -116,8 +182,8 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Forward a document section append to this view (no-op by default).
-    #[allow(dead_code)]
+    /// Apply an `append_to_section` tool result to the view if it owns the
+    /// matching document.
     fn handle_document_section_append(
         &mut self,
         _document_id: &str,
@@ -128,8 +194,8 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Forward a new document section insertion to this view (no-op by default).
-    #[allow(dead_code)]
+    /// Apply an `add_document_section` tool result to the view if it owns the
+    /// matching document.
     fn handle_document_section_add(
         &mut self,
         _document_id: &str,
@@ -141,8 +207,8 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Forward a document section patch (find-and-replace) to this view (no-op by default).
-    #[allow(dead_code)]
+    /// Apply a `patch_document_section` tool result to the view if it owns
+    /// the matching document.
     fn handle_document_section_patch(
         &mut self,
         _document_id: &str,
@@ -154,69 +220,38 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Notify this view that the agent turn has completed. Views that wait for
-    /// tool calls (e.g. document reader waiting for `update_document_section`)
-    /// should use this to clear any "waiting" state.
-    #[allow(dead_code)]
+    /// Notify the view that the agent's turn finished, regardless of how it
+    /// ended. The reading view uses this to clear pending-section markers if
+    /// the agent never called an update tool.
     fn handle_turn_complete(&mut self) {}
 
-    /// Return the document ID if this view is a document reader that was closed.
-    ///
-    /// Used by `BottomPane` to track which documents have been dismissed so
-    /// that replayed `PresentDocument` events (e.g. after an agent switch) do
-    /// not re-open a reader the user already closed.
-    fn closed_document_id(&self) -> Option<&str> {
-        None
-    }
-
-    // ─── Voice-mode-only trait methods ─────────────────────────────────
-    // These exist only when voice-input is available (non-Linux + feature).
-
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    /// Voice-mode integration hooks. Reading-view overlays override these to
+    /// participate in voice narration; everything else gets a no-op.
+    #[cfg(not(target_os = "linux"))]
     fn voice_context(&self) -> Option<ReadingViewVoiceContext> {
         None
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_status(&mut self, _status: Option<String>) {}
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_tts_flash_msg(&mut self, _msg: Option<String>) {}
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_tts_paused(&mut self, _paused: bool) {}
 
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
-    fn voice_tts_paused(&self) -> bool {
-        false
-    }
-
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
-    fn voice_status(&self) -> Option<String> {
-        None
-    }
-
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_pending_voice_question(&mut self, _section: usize, _question: String) {}
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-    fn set_voice_karaoke_lines(
-        &mut self,
-        _lines: Option<Vec<ratatui::text::Line<'static>>>,
-        _append: bool,
-    ) {
-    }
+    #[cfg(not(target_os = "linux"))]
+    fn set_voice_karaoke_lines(&mut self, _lines: Option<Vec<Line<'static>>>, _append: bool) {}
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_reading_progress(
         &mut self,
         _word_idx: Option<usize>,
         _heading_words_to_skip: usize,
     ) {
-    }
-
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
-    fn is_composer_focused(&self) -> bool {
-        false
     }
 }

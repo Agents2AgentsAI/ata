@@ -145,7 +145,7 @@ impl BottomPane {
     /// When the active view is a document reader, this extracts the current
     /// section context so voice transcriptions can be routed with
     /// reading-view-aware instructions.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn reading_view_voice_context(
         &self,
     ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
@@ -156,7 +156,7 @@ impl BottomPane {
     ///
     /// Used by voice mode to skip PTT interception so Space types into the
     /// composer immediately instead of starting voice recording.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn is_view_composer_focused(&self) -> bool {
         self.view_stack
             .last()
@@ -164,7 +164,7 @@ impl BottomPane {
     }
 
     /// Update the voice mode status text in the active document reader.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
         if let Some(view) = self.view_stack.last_mut() {
             view.set_voice_status(status);
@@ -173,7 +173,7 @@ impl BottomPane {
     }
 
     /// Set a temporary flash message in the active document reader.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_tts_flash_msg(&mut self, msg: Option<String>) {
         if let Some(view) = self.view_stack.last_mut() {
             view.set_tts_flash_msg(msg);
@@ -182,7 +182,7 @@ impl BottomPane {
     }
 
     /// Update the TTS paused state in the active document reader.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_tts_paused(&mut self, paused: bool) {
         if let Some(view) = self.view_stack.last_mut() {
             view.set_voice_tts_paused(paused);
@@ -191,7 +191,7 @@ impl BottomPane {
     }
 
     /// Query the TTS paused state of the active document reader.
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(all(test, not(target_os = "linux")))]
     pub(crate) fn is_document_reader_tts_paused(&self) -> bool {
         self.view_stack
             .last()
@@ -199,14 +199,14 @@ impl BottomPane {
     }
 
     /// Query the voice status text of the active document reader.
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(all(test, not(target_os = "linux")))]
     pub(crate) fn document_reader_voice_status(&self) -> Option<String> {
         self.view_stack.last().and_then(|v| v.voice_status())
     }
 
     /// Mark a section as pending a voice question answer (same inline
     /// indicator as text questions).
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_pending_voice_question(
         &mut self,
         section: usize,
@@ -220,7 +220,7 @@ impl BottomPane {
 
     /// Push karaoke-highlighted lines into the active document reader's content area.
     /// When `append` is true, lines are shown after the existing content (Q&A mode).
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_karaoke_lines(
         &mut self,
         lines: Option<Vec<ratatui::text::Line<'static>>>,
@@ -236,7 +236,7 @@ impl BottomPane {
     ///
     /// During narration this highlights the rendered line containing the
     /// given word, preserving full markdown formatting.
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_reading_progress(
         &mut self,
         word_idx: Option<usize>,

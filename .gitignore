@@ -10,6 +10,7 @@ node_modules
 # build
 dist/
 bazel-*
+user.bazelrc
 build/
 out/
 storybook-static/
@@ -51,6 +52,7 @@ yarn-error.log*
 # env
 .env*
 !.env.example
+.venv/
 
 # package
 *.tgz
@@ -91,3 +93,6 @@ CHANGELOG.ignore.md
 __pycache__/
 *.pyc
 
+# TUI test reports — committed selectively, not by default.
+codex-rs/tests/tui/reports/*
+!codex-rs/tests/tui/reports/.gitkeep

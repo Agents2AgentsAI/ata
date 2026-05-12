@@ -15,10 +15,10 @@ use super::ProviderOauthCredential;
 use super::clear_provider_oauth_credential;
 use super::get_provider_oauth_credential;
 use super::login_with_provider_oauth;
-use crate::default_client::build_reqwest_client;
-use crate::error::CodexErr;
-use crate::error::Result;
 use crate::util::redact_error_body;
+use codex_login::default_client::build_reqwest_client;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 
 pub const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
 pub const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
@@ -213,6 +213,10 @@ pub(crate) async fn force_refresh_gemini_oauth_context(
     .await
 }
 
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the refresh lock serializes concurrent token refreshes for the duration of the network call"
+)]
 async fn ensure_gemini_oauth_context_with_refresh(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,

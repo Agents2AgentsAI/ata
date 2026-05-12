@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
+use codex_git_utils::get_git_repo_root;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use schemars::JsonSchema;
@@ -161,22 +162,6 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     format!("cwd-{short}")
 }
 
-fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
-    let mut dir = base_dir.to_path_buf();
-
-    loop {
-        if dir.join(".git").exists() {
-            return Some(dir);
-        }
-
-        if !dir.pop() {
-            break;
-        }
-    }
-
-    None
-}
-
 pub(crate) fn compute_keyring_account(codex_home: &Path) -> String {
     let canonical = codex_home
         .canonicalize()
@@ -204,6 +189,20 @@ mod tests {
     #[test]
     fn environment_id_fallback_has_cwd_prefix() {
         let dir = tempfile::tempdir().expect("tempdir");
+        // If the tempdir resolves inside a git repo (e.g., on CI runners
+        // where `TMPDIR` is mapped underneath the checked-out workspace),
+        // `environment_id_from_cwd` returns the repo's directory name
+        // instead of the `cwd-<hash>` fallback we are trying to verify.
+        // Skip the assertion in that case so the test still meaningfully
+        // exercises the fallback branch on developer machines / hermetic
+        // environments without producing false negatives on shared CI.
+        if get_git_repo_root(dir.path()).is_some() {
+            eprintln!(
+                "skipping fallback test: {} is inside a git repo",
+                dir.path().display()
+            );
+            return;
+        }
         let env_id = environment_id_from_cwd(dir.path());
         let canonical = dir
             .path()
@@ -234,7 +233,7 @@ mod tests {
         manager.set(&scope, &name, "token-1")?;
         assert_eq!(manager.get(&scope, &name)?, Some("token-1".to_string()));
 
-        let listed = manager.list(None)?;
+        let listed = manager.list(/*scope_filter*/ None)?;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].name, name);
 

@@ -49,6 +49,18 @@ pub fn file_capabilities_for(provider_id: &str, model: Option<&str>) -> FileCapa
             max_upload_file_size: DEFAULT_MAX_UPLOAD_FILE_SIZE,
             ..FileCapabilityConfig::default()
         },
+        // Copilot proxies OpenAI's Responses API for gpt-5.x and Claude, both
+        // of which accept inline PDF parts. Mirror OpenAI's caps. Older Copilot
+        // models that still route through /chat/completions may reject inline
+        // PDFs — accepting that risk in exchange for native PDF on the
+        // mainline models.
+        "copilot" => FileCapabilityConfig {
+            supports_pdf: true,
+            max_inline_file_size: 50 * 1024 * 1024,
+            max_upload_file_size: DEFAULT_MAX_UPLOAD_FILE_SIZE,
+            max_inline_payload_bytes: 50 * 1024 * 1024,
+            ..FileCapabilityConfig::default()
+        },
         _ => FileCapabilityConfig::default(),
     };
 
@@ -81,6 +93,7 @@ mod tests {
         assert!(file_capabilities_for("openai", None).supports_pdf);
         assert!(file_capabilities_for("anthropic", None).supports_pdf);
         assert!(file_capabilities_for("gemini", None).supports_pdf);
+        assert!(file_capabilities_for("copilot", None).supports_pdf);
     }
 
     #[test]
@@ -105,7 +118,7 @@ mod tests {
     #[test]
     fn upload_limits_are_capped_by_local_processing_limit() {
         use codex_utils_file::MAX_FILE_SIZE;
-        for provider_id in ["openai", "anthropic", "gemini"] {
+        for provider_id in ["openai", "anthropic", "gemini", "copilot"] {
             let caps = file_capabilities_for(provider_id, None);
             assert!(caps.max_upload_file_size <= MAX_FILE_SIZE);
         }

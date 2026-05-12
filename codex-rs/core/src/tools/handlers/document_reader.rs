@@ -1,5 +1,3 @@
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
@@ -7,8 +5,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::JsonSchema;
-use async_trait::async_trait;
 use codex_protocol::document_reader::AddDocumentSectionArgs;
 use codex_protocol::document_reader::AddDocumentSectionEvent;
 use codex_protocol::document_reader::AppendDocumentSectionEvent;
@@ -21,7 +17,13 @@ use codex_protocol::document_reader::UpdateDocumentSectionArgs;
 use codex_protocol::document_reader::UpdateDocumentSectionEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use regex_lite::Regex;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -42,6 +44,35 @@ fn strip_citation_markers(text: &str) -> String {
     RE.replace_all(text, "").into_owned()
 }
 
+/// Strip any agent-authored `<!-- CODEX_SECTION_META … -->` blocks from
+/// content the agent provides via update/append/add/patch tool calls.
+///
+/// `foldable` and `summary` are expected as separate tool parameters,
+/// and the metadata comment is added by `serialize_section_metadata`
+/// when the section is rendered. When the agent embeds the comment
+/// inline, it has historically supplied a malformed multi-line JSON
+/// (with literal newlines inside the `summary` value). The on-disk
+/// parser at `parse_section_metadata_line` only recognizes the comment
+/// when the prefix and suffix are on the SAME line, so the malformed
+/// block is treated as visible content and leaks the entire summary
+/// payload into the rendered section.
+///
+/// Strip both well-formed (single-line) and malformed (multi-line)
+/// metadata comments from agent-supplied content. Any `foldable` /
+/// `summary` set via the tool parameters wins.
+fn strip_agent_authored_metadata(text: &str) -> String {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        // `(?s)` makes `.` match newlines so we catch the multi-line
+        // malformed form. Non-greedy `.*?` so we don't eat past the
+        // first closing ` -->`.
+        match Regex::new(r"(?s)<!--\s*CODEX_SECTION_META\s.*?-->\s*\n?") {
+            Ok(re) => re,
+            Err(err) => panic!("invalid CODEX_SECTION_META strip regex: {err}"),
+        }
+    });
+    RE.replace_all(text, "").into_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Cached document state
 // ---------------------------------------------------------------------------
@@ -49,6 +80,8 @@ fn strip_citation_markers(text: &str) -> String {
 struct CachedSection {
     heading: String,
     content: String,
+    foldable: bool,
+    summary: Option<String>,
 }
 
 struct CachedDocument {
@@ -69,6 +102,10 @@ impl CachedDocument {
                 out.push_str(&section.heading);
                 out.push('\n');
             }
+            if let Some(metadata) = serialize_section_metadata(section) {
+                out.push_str(&metadata);
+                out.push('\n');
+            }
             out.push_str(&section.content);
             if !out.ends_with('\n') {
                 out.push('\n');
@@ -87,9 +124,12 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
 
     for line in content.lines() {
         if let Some(heading_text) = line.strip_prefix("## ") {
+            let (metadata, visible_content) = split_section_metadata(current_content);
             sections.push(CachedSection {
                 heading: current_heading,
-                content: current_content,
+                content: visible_content,
+                foldable: metadata.foldable,
+                summary: metadata.summary,
             });
             current_heading = heading_text.trim().to_string();
             current_content = String::new();
@@ -101,9 +141,12 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
         }
     }
 
+    let (metadata, visible_content) = split_section_metadata(current_content);
     sections.push(CachedSection {
         heading: current_heading,
-        content: current_content,
+        content: visible_content,
+        foldable: metadata.foldable,
+        summary: metadata.summary,
     });
 
     // Drop the empty preamble section when the document starts with `## `.
@@ -113,6 +156,59 @@ fn parse_sections(content: &str) -> Vec<CachedSection> {
     }
 
     sections
+}
+
+const SECTION_METADATA_PREFIX: &str = "<!-- CODEX_SECTION_META ";
+const SECTION_METADATA_SUFFIX: &str = " -->";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct SectionMetadata {
+    #[serde(default)]
+    foldable: bool,
+    #[serde(default)]
+    summary: Option<String>,
+}
+
+fn serialize_section_metadata(section: &CachedSection) -> Option<String> {
+    let metadata = SectionMetadata {
+        foldable: section.foldable,
+        summary: section.summary.clone(),
+    };
+    if !metadata.foldable && metadata.summary.is_none() {
+        return None;
+    }
+    let json = serde_json::to_string(&metadata).ok()?;
+    Some(format!(
+        "{SECTION_METADATA_PREFIX}{json}{SECTION_METADATA_SUFFIX}"
+    ))
+}
+
+fn parse_section_metadata_line(line: &str) -> Option<SectionMetadata> {
+    let trimmed = line.trim();
+    let json = trimmed
+        .strip_prefix(SECTION_METADATA_PREFIX)?
+        .strip_suffix(SECTION_METADATA_SUFFIX)?;
+    serde_json::from_str(json).ok()
+}
+
+fn split_section_metadata(content: String) -> (SectionMetadata, String) {
+    let mut metadata = SectionMetadata::default();
+    let mut visible_lines = Vec::new();
+    let mut parsing_metadata = true;
+
+    for line in content.lines() {
+        if parsing_metadata && let Some(parsed) = parse_section_metadata_line(line) {
+            metadata = parsed;
+            continue;
+        }
+        if parsing_metadata && line.trim().is_empty() {
+            continue;
+        }
+        parsing_metadata = false;
+        visible_lines.push(line);
+    }
+
+    (metadata, visible_lines.join("\n"))
 }
 
 /// If the document has unfilled streaming sections, return a reminder string
@@ -140,6 +236,7 @@ fn next_streaming_section(doc: &CachedDocument) -> Option<(usize, String)> {
 }
 
 // @agent-facing
+#[allow(dead_code)]
 fn reading_view_display_mode_guidance() -> &'static str {
     "\
     READING VIEW DISPLAY MODES: The current turn may include a short state line like \
@@ -165,6 +262,7 @@ fn reading_view_display_mode_guidance() -> &'static str {
     Describe meaning, not visual symbols."
 }
 
+#[allow(dead_code)]
 const READING_VIEW_CONTENT_STYLE_GUIDANCE: &str = "Content style: write straight prose that continues the section's voice. \
      Do NOT use a Q:/A: format. If the answer would be unclear without context, \
      a short italic lead-in is fine (e.g. *On dropout:* ...), but skip it when \
@@ -172,17 +270,25 @@ const READING_VIEW_CONTENT_STYLE_GUIDANCE: &str = "Content style: write straight
      bold/italic topic lines like '**On the efficiency gains:**' or \
      '*Regarding caching:*' — just write the content directly.";
 
+#[allow(dead_code)]
 const READING_VIEW_SUMMARY_GUIDANCE: &str = "SUMMARY (required): Always set the `summary` parameter to a short descriptive \
      label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
      This is used as a section label regardless of foldable.";
 
-const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: For supplementary content (explanations, examples, deep dives), \
-     set foldable=true. Direct answers, corrections, and rewrites should NOT be foldable \
-     (foldable=false, the default).";
+#[allow(dead_code)]
+const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: Set foldable=true for any inserted answer, explanation, \
+     example, or deep dive — the user can collapse and re-expand it with `f`. \
+     Only set foldable=false when the user explicitly asked for a permanent \
+     rewrite of the original passage (i.e. update_document_section / a patch \
+     that REPLACES old_text rather than appending after it). Default to \
+     foldable=true unless you are sure the content is meant to overwrite the \
+     original passage.";
 
+#[allow(dead_code)]
 const READING_VIEW_TOOL_CALL_ONLY_GUIDANCE: &str =
     "Do NOT output plain text; only tool calls are visible to the user.";
 
+#[allow(dead_code)]
 const READING_VIEW_REWRITE_BOUNDARY_GUIDANCE: &str =
     "Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.";
 
@@ -197,6 +303,7 @@ pub fn reading_view_display_mode_state(mode: ReadingViewDisplayMode) -> &'static
     }
 }
 
+#[allow(dead_code)]
 pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -210,6 +317,7 @@ pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -
     )
 }
 
+#[allow(dead_code)]
 pub fn reading_view_section_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -249,12 +357,19 @@ pub enum ReadingViewDisplayMode {
     #[default]
     Tui,
     /// Browser with full HTML/KaTeX/Mermaid rendering.
+    #[allow(dead_code)]
     Browser,
 }
 
 pub struct DocumentCache {
     docs: Mutex<HashMap<String, CachedDocument>>,
     display_mode: Mutex<ReadingViewDisplayMode>,
+}
+
+impl Default for DocumentCache {
+    fn default() -> Self {
+        Self::with_display_mode(ReadingViewDisplayMode::default())
+    }
 }
 
 impl DocumentCache {
@@ -267,6 +382,7 @@ impl DocumentCache {
 
     /// Set the display mode (called by the UI layer when the user changes
     /// reading view mode).
+    #[allow(dead_code)]
     pub fn set_display_mode(&self, mode: ReadingViewDisplayMode) {
         if let Ok(mut m) = self.display_mode.lock() {
             *m = mode;
@@ -296,6 +412,7 @@ impl DocumentCache {
     /// (e.g. `present_reading_view(document_id=...)` without title/content)
     /// can serve the cached version instantly instead of forcing the agent
     /// to regenerate the document from scratch.
+    #[allow(dead_code)]
     pub fn restore_document(&self, document_id: String, title: String, content: &str) {
         let sections = parse_sections(content);
         let mut cache = self.lock();
@@ -308,84 +425,9 @@ impl DocumentCache {
             },
         );
     }
-
-    /// Apply a section update to a cached document (used during resume
-    /// replay to keep the cache in sync with `UpdateDocumentSection` events).
-    pub fn replay_update_section(&self, document_id: &str, section_index: usize, content: &str) {
-        let mut cache = self.lock();
-        if let Some(doc) = cache.get_mut(document_id)
-            && let Some(section) = doc.sections.get_mut(section_index)
-        {
-            if let Some(rest) = content.strip_prefix("## ") {
-                if let Some(nl) = rest.find('\n') {
-                    section.heading = rest[..nl].trim().to_string();
-                    section.content = rest[nl + 1..].to_string();
-                } else {
-                    section.heading = rest.trim().to_string();
-                    section.content = String::new();
-                }
-            } else {
-                section.content = content.to_string();
-            }
-        }
-    }
-
-    /// Append content to a cached section (used during resume replay).
-    pub fn replay_append_section(&self, document_id: &str, section_index: usize, content: &str) {
-        let mut cache = self.lock();
-        if let Some(doc) = cache.get_mut(document_id)
-            && let Some(section) = doc.sections.get_mut(section_index)
-        {
-            if !section.content.is_empty() && !section.content.ends_with('\n') {
-                section.content.push('\n');
-            }
-            section.content.push_str(content);
-        }
-    }
-
-    /// Insert a new section after the given index (used during resume replay).
-    pub fn replay_add_section(
-        &self,
-        document_id: &str,
-        after_section_index: i32,
-        heading: &str,
-        content: &str,
-    ) {
-        let mut cache = self.lock();
-        if let Some(doc) = cache.get_mut(document_id) {
-            let insert_pos = if after_section_index < 0 {
-                0
-            } else {
-                let idx = after_section_index as usize;
-                (idx + 1).min(doc.sections.len())
-            };
-            doc.sections.insert(
-                insert_pos,
-                CachedSection {
-                    heading: heading.to_string(),
-                    content: content.to_string(),
-                },
-            );
-        }
-    }
-
-    /// Apply a find-and-replace patch to a cached section (used during resume replay).
-    pub fn replay_patch_section(
-        &self,
-        document_id: &str,
-        section_index: usize,
-        old_text: &str,
-        new_text: &str,
-    ) {
-        let mut cache = self.lock();
-        if let Some(doc) = cache.get_mut(document_id)
-            && let Some(section) = doc.sections.get_mut(section_index)
-        {
-            section.content = section.content.replace(old_text, new_text);
-        }
-    }
 }
 
+#[allow(dead_code)]
 pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
     match config
         .config_layer_stack
@@ -405,40 +447,59 @@ pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingV
     }
 }
 
+pub(crate) fn reading_view_tools_enabled(config: &Config) -> bool {
+    config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|t| t.get("reading_view"))
+        .and_then(|v| {
+            v.clone()
+                .try_into::<crate::config::types::ReadingViewToml>()
+                .ok()
+        })
+        .and_then(|rv| rv.mode)
+        .as_deref()
+        != Some("disabled")
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
 
-pub struct DocumentReaderHandler;
+pub struct DocumentReaderHandler {
+    pub tool_name: ToolName,
+}
+
+impl DocumentReaderHandler {
+    pub fn new(tool_name: ToolName) -> Self {
+        Self { tool_name }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tool specs
 // ---------------------------------------------------------------------------
 
 // @agent-facing
+#[allow(dead_code)]
 pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "document_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Unique slug identifying this document for targeted updates".to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Unique slug identifying this document for targeted updates".to_string(),
+        )),
     );
     properties.insert(
         "title".to_string(),
-        JsonSchema::String {
-            description: Some("Display title for the document".to_string()),
-        },
+        JsonSchema::string(Some("Display title for the document".to_string())),
     );
     properties.insert(
         "content".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Full markdown content. Use ## headings to define sections.".to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Full markdown content. Use ## headings to define sections.".to_string(),
+        )),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -525,38 +586,32 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         ),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["document_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["document_id".to_string()]),
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 });
 
 // @agent-facing
+#[allow(dead_code)]
 pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "document_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "The document to update (must match a previous present_reading_view call)"
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "The document to update (must match a previous present_reading_view call)".to_string(),
+        )),
     );
     properties.insert(
         "section_index".to_string(),
-        JsonSchema::Number {
-            description: Some("0-based section index to replace".to_string()),
-        },
+        JsonSchema::number(Some("0-based section index to replace".to_string())),
     );
     properties.insert(
         "content".to_string(),
-        JsonSchema::String {
-            description: Some("New markdown content for the section".to_string()),
-        },
+        JsonSchema::string(Some("New markdown content for the section".to_string())),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -574,61 +629,55 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         ),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec![
+            Some(vec![
                 "document_id".to_string(),
                 "section_index".to_string(),
                 "content".to_string(),
             ]),
-            additional_properties: Some(false.into()),
-        },
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 });
 
 // @agent-facing
+#[allow(dead_code)]
 pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "document_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "The document to update (must match a previous present_reading_view call)"
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "The document to update (must match a previous present_reading_view call)".to_string(),
+        )),
     );
     properties.insert(
         "section_index".to_string(),
-        JsonSchema::Number {
-            description: Some("0-based section index to append to".to_string()),
-        },
+        JsonSchema::number(Some("0-based section index to append to".to_string())),
     );
     properties.insert(
         "content".to_string(),
-        JsonSchema::String {
-            description: Some("Markdown content to append at the end of the section".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Markdown content to append at the end of the section".to_string(),
+        )),
     );
     properties.insert(
         "foldable".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, content appears in a collapsible region. Use for supplementary \
-                 content (explanations, examples). Default: false."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::boolean(Some(
+            "When true, content appears in a collapsible region the user can fold/expand with `f`. \
+             Set true for inserted answers, explanations, and examples. \
+             Set false ONLY when the patch replaces the original passage with a permanent rewrite. \
+             Default: true for append/patch when not specified."
+                .to_string(),
+        )),
     );
     properties.insert(
         "summary".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
+                .to_string(),
+        )),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -647,67 +696,59 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         ),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec![
+            Some(vec![
                 "document_id".to_string(),
                 "section_index".to_string(),
                 "content".to_string(),
             ]),
-            additional_properties: Some(false.into()),
-        },
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 });
 
 // @agent-facing
+#[allow(dead_code)]
 pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "document_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "The document to update (must match a previous present_reading_view call)"
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "The document to update (must match a previous present_reading_view call)".to_string(),
+        )),
     );
     properties.insert(
         "section_index".to_string(),
-        JsonSchema::Number {
-            description: Some("0-based section index to patch".to_string()),
-        },
+        JsonSchema::number(Some("0-based section index to patch".to_string())),
     );
     properties.insert(
         "old_text".to_string(),
-        JsonSchema::String {
-            description: Some("Exact text to find within the section content".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Exact text to find within the section content".to_string(),
+        )),
     );
     properties.insert(
         "new_text".to_string(),
-        JsonSchema::String {
-            description: Some("Replacement text".to_string()),
-        },
+        JsonSchema::string(Some("Replacement text".to_string())),
     );
     properties.insert(
         "foldable".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, content appears in a collapsible region. Use for supplementary \
-                 content (explanations, examples). Default: false."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::boolean(Some(
+            "When true, content appears in a collapsible region the user can fold/expand with `f`. \
+             Set true for inserted answers, explanations, and examples. \
+             Set false ONLY when the patch replaces the original passage with a permanent rewrite. \
+             Default: true for append/patch when not specified."
+                .to_string(),
+        )),
     );
     properties.insert(
         "summary".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Short descriptive label for this content (5-10 words). Always provide this. Used as fold title when collapsed."
+                .to_string(),
+        )),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -729,70 +770,58 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         ),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec![
+            Some(vec![
                 "document_id".to_string(),
                 "section_index".to_string(),
                 "old_text".to_string(),
                 "new_text".to_string(),
             ]),
-            additional_properties: Some(false.into()),
-        },
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 });
 
+#[allow(dead_code)]
 pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
         "document_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "The document to update (must match a previous present_reading_view call)"
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "The document to update (must match a previous present_reading_view call)".to_string(),
+        )),
     );
     properties.insert(
         "after_section_index".to_string(),
-        JsonSchema::Number {
-            description: Some(
-                "Insert the new section AFTER this 0-based index. Use -1 to insert at the beginning."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::number(Some(
+            "Insert the new section AFTER this 0-based index. Use -1 to insert at the beginning."
+                .to_string(),
+        )),
     );
     properties.insert(
         "heading".to_string(),
-        JsonSchema::String {
-            description: Some("The ## heading for the new section".to_string()),
-        },
+        JsonSchema::string(Some("The ## heading for the new section".to_string())),
     );
     properties.insert(
         "content".to_string(),
-        JsonSchema::String {
-            description: Some("Markdown content for the section body".to_string()),
-        },
+        JsonSchema::string(Some("Markdown content for the section body".to_string())),
     );
     properties.insert(
         "foldable".to_string(),
-        JsonSchema::Boolean {
-            description: Some(
-                "When true, the new section starts collapsed. Use for supplementary \
-                 content. Default: false."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::boolean(Some(
+            "When true, the new section starts collapsed. Use for supplementary \
+             content. Default: false."
+                .to_string(),
+        )),
     );
     properties.insert(
         "summary".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Short descriptive label for this section (5-10 words). Used as fold title when collapsed."
-                    .to_string(),
-            ),
-        },
+        JsonSchema::string(Some(
+            "Short descriptive label for this section (5-10 words). Used as fold title when collapsed."
+                .to_string(),
+        )),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -812,16 +841,16 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
         ),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec![
+            Some(vec![
                 "document_id".to_string(),
                 "after_section_index".to_string(),
                 "heading".to_string(),
                 "content".to_string(),
             ]),
-            additional_properties: Some(false.into()),
-        },
+            Some(false.into()),
+        ),
         output_schema: None,
     })
 });
@@ -830,9 +859,12 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 // ToolHandler impl
 // ---------------------------------------------------------------------------
 
-#[async_trait]
 impl ToolHandler for DocumentReaderHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -859,9 +891,14 @@ impl ToolHandler for DocumentReaderHandler {
             }
         };
 
-        let doc_cache = &session.document_cache;
+        let doc_cache: &DocumentCache = &session.document_cache;
+        if !reading_view_tools_enabled(turn.config.as_ref()) {
+            return Err(FunctionCallError::RespondToModel(
+                "Reading view tools are disabled for this session.".to_string(),
+            ));
+        }
 
-        let content = match tool_name.as_str() {
+        let content = match tool_name.name.as_str() {
             "present_reading_view" => {
                 let args: PresentDocumentArgs = serde_json::from_str(&arguments).map_err(|e| {
                     FunctionCallError::RespondToModel(format!(
@@ -870,7 +907,12 @@ impl ToolHandler for DocumentReaderHandler {
                 })?;
 
                 // Resolve title and content: use provided values, or fall back to cache.
-                let (title, doc_content, _is_outline_only, _section_count) = {
+                let (title, doc_content, _is_outline_only, _section_count): (
+                    String,
+                    String,
+                    bool,
+                    usize,
+                ) = {
                     let mut cache = doc_cache.lock();
                     match (args.title, args.content) {
                         (Some(t), Some(c)) => {
@@ -897,7 +939,7 @@ impl ToolHandler for DocumentReaderHandler {
                         _ => {
                             // Re-display from cache.
                             if let Some(cached) = cache.get(&args.document_id) {
-                                (cached.title.clone(), cached.to_markdown(), false, 0)
+                                (cached.title.clone(), cached.to_markdown(), false, 0_usize)
                             } else {
                                 return Err(FunctionCallError::RespondToModel(format!(
                                     "No cached document with id \"{}\". \
@@ -921,6 +963,7 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: doc_id.clone(),
                                 title: title.clone(),
                                 content: doc_content.clone(),
+                                is_reopen: false,
                             }),
                         )
                         .await;
@@ -969,6 +1012,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -994,9 +1038,10 @@ impl ToolHandler for DocumentReaderHandler {
                 }
 
                 // Mirror the update in the cache and advance streaming state.
-                let (streaming_msg, reopen_payload) = {
+                let (streaming_msg, reopen_payload, section_metadata) = {
                     let mut cache = doc_cache.lock();
                     let mut msg: Option<String> = None;
+                    let mut metadata: (bool, Option<String>) = (false, None);
                     if let Some(doc) = cache.get_mut(&args.document_id) {
                         if let Some(section) = doc.sections.get_mut(args.section_index) {
                             if let Some(rest) = args.content.strip_prefix("## ") {
@@ -1010,6 +1055,7 @@ impl ToolHandler for DocumentReaderHandler {
                             } else {
                                 section.content = args.content.clone();
                             }
+                            metadata = (section.foldable, section.summary.clone());
                         }
                         // Advance streaming_next.
                         if let Some(next) = doc.streaming_next {
@@ -1045,7 +1091,7 @@ impl ToolHandler for DocumentReaderHandler {
                     } else {
                         None
                     };
-                    (msg, reopen)
+                    (msg, reopen, metadata)
                 };
 
                 // Re-open the reading view if the user closed it (non-streaming).
@@ -1059,6 +1105,7 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: args.document_id.clone(),
                                 title,
                                 content: full_content,
+                                is_reopen: true,
                             }),
                         )
                         .await;
@@ -1074,6 +1121,8 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: args.document_id,
                                 section_index: args.section_index,
                                 content: args.content,
+                                foldable: section_metadata.0,
+                                summary: section_metadata.1,
                             }),
                         )
                         .await;
@@ -1090,6 +1139,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1123,6 +1173,11 @@ impl ToolHandler for DocumentReaderHandler {
                                 section.content.push('\n');
                             }
                             section.content.push_str(&args.content);
+                            // Append defaults to foldable so the inserted answer
+                            // is collapsible with `f` — see
+                            // READING_VIEW_FOLDABLE_GUIDANCE.
+                            section.foldable = args.foldable.unwrap_or(true);
+                            section.summary = args.summary.clone();
                         }
                         streaming_unfilled_reminder(doc)
                     } else {
@@ -1140,7 +1195,7 @@ impl ToolHandler for DocumentReaderHandler {
                     (reminder, reopen)
                 };
 
-                let foldable = args.foldable.unwrap_or(false);
+                let foldable = args.foldable.unwrap_or(true);
                 let summary = args.summary;
 
                 // Re-open the reading view if the user closed it (non-streaming).
@@ -1154,6 +1209,7 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: args.document_id.clone(),
                                 title,
                                 content: full_content,
+                                is_reopen: true,
                             }),
                         )
                         .await;
@@ -1188,6 +1244,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.content = strip_citation_markers(&args.content);
+                args.content = strip_agent_authored_metadata(&args.content);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1222,6 +1279,8 @@ impl ToolHandler for DocumentReaderHandler {
                             CachedSection {
                                 heading: args.heading.clone(),
                                 content: args.content.clone(),
+                                foldable: args.foldable.unwrap_or(false),
+                                summary: args.summary.clone(),
                             },
                         );
                         Some(insert_at)
@@ -1250,6 +1309,7 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: args.document_id.clone(),
                                 title,
                                 content: full_content,
+                                is_reopen: true,
                             }),
                         )
                         .await;
@@ -1282,6 +1342,7 @@ impl ToolHandler for DocumentReaderHandler {
                         ))
                     })?;
                 args.new_text = strip_citation_markers(&args.new_text);
+                args.new_text = strip_agent_authored_metadata(&args.new_text);
                 if !doc_cache.contains(&args.document_id) {
                     return Err(FunctionCallError::RespondToModel(format!(
                         "No document with id \"{}\" is currently being viewed. \
@@ -1325,6 +1386,11 @@ impl ToolHandler for DocumentReaderHandler {
                         {
                             section.content =
                                 section.content.replacen(&args.old_text, &args.new_text, 1);
+                            // Patch defaults to foldable so an inserted answer
+                            // is collapsible with `f` — see
+                            // READING_VIEW_FOLDABLE_GUIDANCE.
+                            section.foldable = args.foldable.unwrap_or(true);
+                            section.summary = args.summary.clone();
                         }
                         streaming_unfilled_reminder(doc)
                     } else {
@@ -1342,7 +1408,7 @@ impl ToolHandler for DocumentReaderHandler {
                     (reminder, reopen)
                 };
 
-                let foldable = args.foldable.unwrap_or(false);
+                let foldable = args.foldable.unwrap_or(true);
                 let summary = args.summary;
 
                 // Re-open the reading view if the user closed it (non-streaming).
@@ -1356,6 +1422,7 @@ impl ToolHandler for DocumentReaderHandler {
                                 document_id: args.document_id.clone(),
                                 title,
                                 content: full_content,
+                                is_reopen: true,
                             }),
                         )
                         .await;
@@ -1424,10 +1491,14 @@ mod tests {
                 CachedSection {
                     heading: "Overview".to_string(),
                     content: String::new(),
+                    foldable: false,
+                    summary: None,
                 },
                 CachedSection {
                     heading: "Method".to_string(),
                     content: String::new(),
+                    foldable: false,
+                    summary: None,
                 },
             ],
             streaming_next: Some(1),

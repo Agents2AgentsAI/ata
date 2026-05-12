@@ -1,11 +1,11 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
-assertion_line: 6253
+assertion_line: 7582
 expression: terminal.backend()
 ---
 "                                                            "
 "› /res                                                      "
 "                                                            "
-"                                                            "
 "  /resume    resume a saved chat                            "
-"  /research  toggle research tool integrations              "
+"  /research  summarize research toolkit status; run one-off "
+"             via `ata research`                             "

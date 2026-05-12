@@ -226,6 +226,7 @@ mod tests {
                     provider: "mock".to_string(),
                     expires_at: None,
                     source_path: file_path.to_path_buf(),
+                    needs_refresh: false,
                 }),
                 MockOutcome::Failure => Err(FileUploadError::Request("upload failed".to_string())),
             }

@@ -1,85 +1,271 @@
-use crate::config::ConfigToml;
-use crate::config::types::RawMcpServerConfig;
-use crate::features::FEATURES;
-use schemars::r#gen::SchemaGenerator;
-use schemars::r#gen::SchemaSettings;
+// Re-export base schema utilities from codex_config.
+pub use codex_config::schema::canonicalize;
+
 use schemars::schema::InstanceType;
 use schemars::schema::ObjectValidation;
-use schemars::schema::RootSchema;
 use schemars::schema::Schema;
 use schemars::schema::SchemaObject;
-use serde_json::Map;
-use serde_json::Value;
 use std::path::Path;
 
-/// Schema for the `[features]` map with known + legacy keys only.
-pub(crate) fn features_schema(schema_gen: &mut SchemaGenerator) -> Schema {
-    let mut object = SchemaObject {
+/// Schema for the top-level `treesitter` key.
+///
+/// The value is an untagged enum in Rust (`TreeSitterConfig` in `code_intel.rs`)
+/// that accepts either a plain boolean (enable/disable) or a configuration
+/// object with detailed settings. Because the config is consumed from the TOML
+/// layer stack rather than a typed `ConfigToml` field, inject the schema here as
+/// a post-processing step.
+fn treesitter_config_schema() -> SchemaObject {
+    let bool_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Boolean.into()),
+        ..Default::default()
+    });
+
+    let mut obj_props = schemars::Map::new();
+    obj_props.insert(
+        "max_file_size".to_string(),
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Integer.into()),
+            number: Some(Box::new(schemars::schema::NumberValidation {
+                minimum: Some(0.0),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }),
+    );
+    for arr_key in &["ignore_patterns", "ignore_extensions", "disabled_languages"] {
+        obj_props.insert(
+            arr_key.to_string(),
+            Schema::Object(SchemaObject {
+                instance_type: Some(InstanceType::Array.into()),
+                array: Some(Box::new(schemars::schema::ArrayValidation {
+                    items: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                        Schema::Object(SchemaObject {
+                            instance_type: Some(InstanceType::String.into()),
+                            ..Default::default()
+                        }),
+                    ))),
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(schemars::schema::Metadata {
+                    default: Some(serde_json::json!([])),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+        );
+    }
+    obj_props.insert(
+        "annotation_store_path".to_string(),
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            ..Default::default()
+        }),
+    );
+    obj_props.insert(
+        "persist_annotations".to_string(),
+        Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Boolean.into()),
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                default: Some(serde_json::json!(true)),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }),
+    );
+
+    let obj_schema = Schema::Object(SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(ObjectValidation {
+            properties: obj_props,
+            additional_properties: Some(Box::new(Schema::Bool(false))),
+            ..Default::default()
+        })),
         ..Default::default()
-    };
+    });
 
-    let mut validation = ObjectValidation::default();
-    for feature in FEATURES {
-        validation
-            .properties
-            .insert(feature.key.to_string(), schema_gen.subschema_for::<bool>());
-    }
-    for legacy_key in crate::features::legacy_feature_keys() {
-        validation
-            .properties
-            .insert(legacy_key.to_string(), schema_gen.subschema_for::<bool>());
-    }
-    validation.additional_properties = Some(Box::new(Schema::Bool(false)));
-    object.object = Some(Box::new(validation));
+    let null_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Null.into()),
+        ..Default::default()
+    });
 
-    Schema::Object(object)
+    SchemaObject {
+        metadata: Some(Box::new(schemars::schema::Metadata {
+            description: Some("TreeSitter indexing configuration.".to_string()),
+            default: Some(serde_json::json!(null)),
+            ..Default::default()
+        })),
+        subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
+            any_of: Some(vec![bool_schema, obj_schema, null_schema]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
 }
 
-/// Schema for the `[mcp_servers]` map using the raw input shape.
-pub(crate) fn mcp_servers_schema(schema_gen: &mut SchemaGenerator) -> Schema {
-    let mut object = SchemaObject {
+/// Schema for the top-level `lsp` key.
+fn lsp_config_schema() -> SchemaObject {
+    let bool_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Boolean.into()),
+        ..Default::default()
+    });
+
+    let full_server_schema = Schema::Object(SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(ObjectValidation {
+            properties: schemars::Map::from_iter([
+                (
+                    "command".to_string(),
+                    Schema::Object(SchemaObject {
+                        instance_type: Some(InstanceType::Array.into()),
+                        array: Some(Box::new(schemars::schema::ArrayValidation {
+                            items: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                                Schema::Object(SchemaObject {
+                                    instance_type: Some(InstanceType::String.into()),
+                                    ..Default::default()
+                                }),
+                            ))),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }),
+                ),
+                (
+                    "extensions".to_string(),
+                    Schema::Object(SchemaObject {
+                        instance_type: Some(InstanceType::Array.into()),
+                        array: Some(Box::new(schemars::schema::ArrayValidation {
+                            items: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                                Schema::Object(SchemaObject {
+                                    instance_type: Some(InstanceType::String.into()),
+                                    ..Default::default()
+                                }),
+                            ))),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }),
+                ),
+                (
+                    "root_markers".to_string(),
+                    Schema::Object(SchemaObject {
+                        instance_type: Some(InstanceType::Array.into()),
+                        array: Some(Box::new(schemars::schema::ArrayValidation {
+                            items: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                                Schema::Object(SchemaObject {
+                                    instance_type: Some(InstanceType::String.into()),
+                                    ..Default::default()
+                                }),
+                            ))),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }),
+                ),
+                (
+                    "env".to_string(),
+                    Schema::Object(SchemaObject {
+                        instance_type: Some(InstanceType::Object.into()),
+                        object: Some(Box::new(ObjectValidation {
+                            additional_properties: Some(Box::new(Schema::Object(SchemaObject {
+                                instance_type: Some(InstanceType::String.into()),
+                                ..Default::default()
+                            }))),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }),
+                ),
+                ("initialization_options".to_string(), Schema::Bool(true)),
+                (
+                    "disabled".to_string(),
+                    Schema::Object(SchemaObject {
+                        instance_type: Some(InstanceType::Boolean.into()),
+                        ..Default::default()
+                    }),
+                ),
+            ]),
+            additional_properties: Some(Box::new(Schema::Bool(false))),
+            ..Default::default()
+        })),
         ..Default::default()
-    };
+    });
 
-    let validation = ObjectValidation {
-        additional_properties: Some(Box::new(schema_gen.subschema_for::<RawMcpServerConfig>())),
+    let disabled_only_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(ObjectValidation {
+            properties: schemars::Map::from_iter([(
+                "disabled".to_string(),
+                Schema::Object(SchemaObject {
+                    instance_type: Some(InstanceType::Boolean.into()),
+                    ..Default::default()
+                }),
+            )]),
+            required: vec!["disabled".to_string()].into_iter().collect(),
+            additional_properties: Some(Box::new(Schema::Bool(false))),
+            ..Default::default()
+        })),
         ..Default::default()
-    };
-    object.object = Some(Box::new(validation));
+    });
 
-    Schema::Object(object)
-}
+    let object_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(ObjectValidation {
+            additional_properties: Some(Box::new(Schema::Object(SchemaObject {
+                subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
+                    any_of: Some(vec![full_server_schema, disabled_only_schema]),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }))),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
 
-/// Build the config schema for `config.toml`.
-pub fn config_schema() -> RootSchema {
-    SchemaSettings::draft07()
-        .with(|settings| {
-            settings.option_add_null_type = false;
-        })
-        .into_generator()
-        .into_root_schema_for::<ConfigToml>()
-}
+    let null_schema = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Null.into()),
+        ..Default::default()
+    });
 
-/// Canonicalize a JSON value by sorting its keys.
-fn canonicalize(value: &Value) -> Value {
-    match value {
-        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
-        Value::Object(map) => {
-            let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-            let mut sorted = Map::with_capacity(map.len());
-            for (key, child) in entries {
-                sorted.insert(key.clone(), canonicalize(child));
-            }
-            Value::Object(sorted)
-        }
-        _ => value.clone(),
+    SchemaObject {
+        metadata: Some(Box::new(schemars::schema::Metadata {
+            description: Some("LSP server configuration.".to_string()),
+            default: Some(serde_json::json!(null)),
+            ..Default::default()
+        })),
+        subschemas: Some(Box::new(schemars::schema::SubschemaValidation {
+            any_of: Some(vec![bool_schema, object_schema, null_schema]),
+            ..Default::default()
+        })),
+        ..Default::default()
     }
 }
 
-/// Render the config schema as pretty-printed JSON.
+/// Build the config schema for `config.toml`, extending the upstream schema
+/// with ATA-specific `lsp` and `treesitter` entries.
+pub fn config_schema() -> schemars::schema::RootSchema {
+    let mut schema = codex_config::schema::config_schema();
+
+    schema
+        .schema
+        .object
+        .get_or_insert_with(Default::default)
+        .properties
+        .insert("lsp".to_string(), Schema::Object(lsp_config_schema()));
+    schema
+        .schema
+        .object
+        .get_or_insert_with(Default::default)
+        .properties
+        .insert(
+            "treesitter".to_string(),
+            Schema::Object(treesitter_config_schema()),
+        );
+
+    schema
+}
+
+/// Render the config schema as pretty-printed JSON (with ATA extensions).
 pub fn config_schema_json() -> anyhow::Result<Vec<u8>> {
     let schema = config_schema();
     let value = serde_json::to_value(schema)?;
@@ -88,7 +274,7 @@ pub fn config_schema_json() -> anyhow::Result<Vec<u8>> {
     Ok(json)
 }
 
-/// Write the config schema fixture to disk.
+/// Write the ATA-extended config schema fixture to disk.
 pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
     let json = config_schema_json()?;
     std::fs::write(out_path, json)?;

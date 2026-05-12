@@ -136,6 +136,7 @@ impl FileUploadService for GeminiFileUpload {
             provider: "gemini".to_string(),
             expires_at: parse_expiration_time(file_metadata.expiration_time.as_deref()),
             source_path: file_path.to_path_buf(),
+            needs_refresh: false,
         })
     }
 

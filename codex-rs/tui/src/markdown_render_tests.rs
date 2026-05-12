@@ -12,7 +12,19 @@ use crate::markdown_render::render_markdown_text_with_width_and_cwd;
 use insta::assert_snapshot;
 
 fn render_markdown_text_for_cwd(input: &str, cwd: &Path) -> Text<'static> {
-    render_markdown_text_with_width_and_cwd(input, None, Some(cwd))
+    render_markdown_text_with_width_and_cwd(input, /*width*/ None, Some(cwd))
+}
+
+fn plain_lines(text: &Text<'_>) -> Vec<String> {
+    text.lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect()
 }
 
 #[test]
@@ -671,7 +683,20 @@ fn file_link_hides_destination() {
         "[codex-rs/tui/src/markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs)",
         Path::new("/Users/example/code/codex"),
     );
-    let expected = Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
+    let expected =
+        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs".cyan()]));
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn file_link_decodes_percent_encoded_bare_path_destination() {
+    let text = render_markdown_text_for_cwd(
+        "[report](/Users/example/code/codex/Example%20Folder/R%C3%A9sum%C3%A9/report.md)",
+        Path::new("/Users/example/code/codex"),
+    );
+    let expected = Text::from(Line::from_iter([
+        "Example Folder/Résumé/report.md".cyan(),
+    ]));
     assert_eq!(text, expected);
 }
 
@@ -681,7 +706,9 @@ fn file_link_appends_line_number_when_label_lacks_it() {
         "[markdown_render.rs](/Users/example/code/codex/codex-rs/tui/src/markdown_render.rs:74)",
         Path::new("/Users/example/code/codex"),
     );
-    let expected = Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74".cyan()]));
+    let expected = Text::from(Line::from_iter([
+        "codex-rs/tui/src/markdown_render.rs:74".cyan(),
+    ]));
     assert_eq!(text, expected);
 }
 
@@ -702,7 +729,9 @@ fn file_link_appends_hash_anchor_when_label_lacks_it() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -713,7 +742,9 @@ fn file_link_uses_target_path_for_hash_anchor() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -724,7 +755,9 @@ fn file_link_appends_range_when_label_lacks_it() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -735,7 +768,9 @@ fn file_link_uses_target_path_for_range() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -746,7 +781,9 @@ fn file_link_appends_hash_range_when_label_lacks_it() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -771,7 +808,9 @@ fn file_link_uses_target_path_for_hash_range() {
         Path::new("/Users/example/code/codex"),
     );
     let expected =
-        Text::from(Line::from_iter(["codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan()]));
+        Text::from(Line::from_iter([
+            "codex-rs/tui/src/markdown_render.rs:74:3-76:9".cyan(),
+        ]));
     assert_eq!(text, expected);
 }
 
@@ -1099,6 +1138,46 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
         })
         .collect();
     assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
+}
+
+#[test]
+fn list_item_after_code_block_keeps_blank_separator() {
+    let md = "1. First:\n\n   ```rust\n   fn first() {}\n   ```\n\n2. Second:\n";
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    assert_eq!(
+        lines,
+        vec!["1. First:", "", "   fn first() {}", "", "2. Second:"]
+    );
+    assert_snapshot!(
+        "list_item_after_code_block_keeps_blank_separator",
+        lines.join("\n")
+    );
+}
+
+#[test]
+fn outer_list_item_after_nested_code_block_keeps_blank_separator() {
+    let md = "1. First:\n   - Nested:\n\n     ```rust\n     fn first() {}\n     ```\n\n2. Second:\n";
+    let text = render_markdown_text(md);
+    let lines = plain_lines(&text);
+    assert_eq!(
+        lines,
+        vec![
+            "1. First:",
+            "    - Nested:",
+            "",
+            "      fn first() {}",
+            "",
+            "2. Second:",
+        ]
+    );
+}
+
+#[test]
+fn list_item_after_simple_item_stays_compact() {
+    let md = "1. First\n\n2. Second\n";
+    let text = render_markdown_text(md);
+    assert_eq!(plain_lines(&text), vec!["1. First", "2. Second"]);
 }
 
 #[test]

@@ -317,7 +317,7 @@ fn browser_finalize_read_aloud_text(cleaned: String) -> String {
 }
 
 fn append_browser_reading_view_debug_log(message: &str) {
-    let Ok(home) = codex_core::config::find_codex_home() else {
+    let Ok(home) = crate::legacy_core::config::find_codex_home() else {
         return;
     };
     let path = home.join("logs/browser-reading-view.log");
@@ -366,19 +366,19 @@ fn browser_selection_word_offset(section_markdown: &str, selected_text: &str) ->
 
 fn browser_read_aloud_text(markdown: &str) -> String {
     let normalized = browser_prepare_read_aloud_markdown(&browser_preserve_spoken_tags(markdown));
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     let cleaned = crate::chatwidget::voice_mode::clean_for_tts(&normalized);
-    #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+    #[cfg(not(not(target_os = "linux")))]
     let cleaned = normalized;
     browser_finalize_read_aloud_text(cleaned)
 }
 
 pub fn browser_read_aloud_markup(markdown: &str) -> String {
     let normalized = browser_prepare_read_aloud_markdown(&browser_strip_voice_tags_only(markdown));
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     let cleaned =
         crate::chatwidget::voice_mode::clean_for_tts_preserving_equation_markers(&normalized);
-    #[cfg(not(all(not(target_os = "linux"), feature = "voice-input")))]
+    #[cfg(not(not(target_os = "linux")))]
     let cleaned = normalized;
     browser_finalize_read_aloud_text(cleaned)
 }
@@ -388,7 +388,7 @@ fn browser_resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>
         return format!("ata --yolo resume {thread_id}");
     }
 
-    codex_core::util::resume_command(thread_name, None)
+    crate::legacy_core::util::resume_command(thread_name, None)
         .map(|command| command.replacen("ata ", "ata --yolo ", 1))
         .unwrap_or_else(|| "ata --yolo resume <session-id>".to_string())
 }
@@ -401,6 +401,9 @@ impl ChatWidget {
     }
 
     /// Returns `true` when the document reader view is the active bottom pane view.
+    /// Used by the chat composer to gate certain shortcuts; the call site
+    /// integration is a follow-up.
+    #[allow(dead_code)]
     pub(crate) fn is_document_reader_active(&self) -> bool {
         self.bottom_pane.is_document_reader_active()
     }
@@ -408,7 +411,7 @@ impl ChatWidget {
     /// Whether the reading view feature is enabled and not set to Disabled mode.
     /// Also disabled in Plan mode so the reading view doesn't interfere with planning.
     fn is_reading_view_enabled(&self) -> bool {
-        self.config.features.enabled(Feature::ReadingView)
+        self.config.features.enabled(codex_features::Feature::ReadingView)
             && self.reading_view_mode != crate::app_event::ReadingViewMode::Disabled
             && self.active_mode_kind() != ModeKind::Plan
     }
@@ -461,9 +464,10 @@ impl ChatWidget {
             return;
         }
         let tx = self.app_event_tx.clone();
-        let assets_root = Some(
+        let assets_root: Option<std::path::PathBuf> = Some(
             self.config
                 .codex_home
+                .as_path()
                 .join("knowledge-base")
                 .join("assets"),
         );
@@ -709,9 +713,6 @@ impl ChatWidget {
         section_index: Option<usize>,
         selected_text: Option<String>,
     ) {
-        use codex_protocol::protocol::Op;
-        use codex_protocol::user_input::UserInput;
-
         let title = &self.reading_view_browser_title;
         let doc_id = &self.reading_view_browser_doc_id;
 
@@ -744,12 +745,12 @@ impl ChatWidget {
             section_content
         };
 
-        let selection_guidance = codex_core::reading_view_selection_follow_up_guidance(
-            codex_core::ReadingViewDisplayMode::Browser,
+        let selection_guidance = crate::legacy_core::reading_view_selection_follow_up_guidance(
+            crate::legacy_core::ReadingViewDisplayMode::Browser,
         );
         let section_guidance =
-            codex_core::reading_view_section_follow_up_guidance(
-                codex_core::ReadingViewDisplayMode::Browser,
+            crate::legacy_core::reading_view_section_follow_up_guidance(
+                crate::legacy_core::ReadingViewDisplayMode::Browser,
             );
 
         // Build context similar to the TUI document reader's submit_follow_up.
@@ -785,13 +786,8 @@ impl ChatWidget {
         };
 
         self.last_turn_was_local_submit = true;
-        self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: context,
-                text_elements: vec![],
-            }],
-            final_output_json_schema: None,
-        }));
+        self.app_event_tx
+            .send(AppEvent::SubmitUserText { text: context });
 
         // Show "thinking" indicator in the browser.
         let ws_msg = serde_json::json!({

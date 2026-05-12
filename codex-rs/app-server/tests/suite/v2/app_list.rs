@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -27,15 +28,16 @@ use codex_app_server_protocol::AppScreenshot;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AuthMode;
+use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::AuthDotJson;
-use codex_core::auth::save_auth;
+use codex_config::types::AuthCredentialsStoreMode;
+use codex_login::AuthDotJson;
+use codex_login::save_auth;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::JsonObject;
@@ -54,7 +56,9 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+// Bazel CI can spend tens of seconds starting app-server subprocesses or
+// processing app-list RPCs under load.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn list_apps_returns_empty_when_connectors_disabled() -> Result<()> {
@@ -111,17 +115,79 @@ async fn list_apps_returns_empty_with_api_key_auth() -> Result<()> {
     save_auth(
         codex_home.path(),
         &AuthDotJson {
-            version: None,
             auth_mode: Some(AuthMode::ApiKey),
             openai_api_key: Some("test-api-key".to_string()),
             tokens: None,
             last_refresh: None,
-            providers: Default::default(),
+            agent_identity: None,
+            ..Default::default()
         },
         AuthCredentialsStoreMode::File,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_apps_list_request(AppsListParams {
+            limit: Some(50),
+            cursor: None,
+            thread_id: None,
+            force_refetch: false,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let AppsListResponse { data, next_cursor } = to_response(response)?;
+    assert!(data.is_empty());
+    assert!(next_cursor.is_none());
+
+    server_handle.abort();
+    let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_apps_returns_empty_when_workspace_codex_plugins_disabled() -> Result<()> {
+    let connectors = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta".to_string(),
+        description: Some("Beta connector".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let tools = vec![connector_tool("beta", "Beta App")?];
+    let (server_url, server_handle) = start_apps_server_with_workspace_plugins_enabled(
+        connectors, tools, /*workspace_plugins_enabled*/ false,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123")
+            .plan_type("team"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1203,6 +1269,108 @@ async fn list_apps_force_refetch_patches_updates_from_cached_snapshots() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn experimental_feature_enablement_set_refreshes_apps_list_when_apps_turn_on() -> Result<()> {
+    let initial_connectors = vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha v1".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }];
+    let (server_url, server_handle, server_control) = start_apps_server_with_delays_and_control(
+        initial_connectors,
+        Vec::new(),
+        Duration::ZERO,
+        Duration::ZERO,
+    )
+    .await?;
+
+    let codex_home = TempDir::new()?;
+    write_connectors_config(codex_home.path(), &server_url)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-enable-refresh")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let disable_request = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("apps".to_string(), false)]),
+        })
+        .await?;
+    let _disable_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(disable_request)),
+    )
+    .await??;
+
+    server_control.set_connectors(vec![AppInfo {
+        id: "alpha".to_string(),
+        name: "Alpha".to_string(),
+        description: Some("Alpha v2".to_string()),
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        branding: None,
+        app_metadata: None,
+        labels: None,
+        install_url: None,
+        is_accessible: false,
+        is_enabled: true,
+        plugin_display_names: Vec::new(),
+    }]);
+    server_control.set_tools(vec![connector_tool("alpha", "Alpha App")?]);
+
+    let enable_request = mcp
+        .send_experimental_feature_enablement_set_request(ExperimentalFeatureEnablementSetParams {
+            enablement: BTreeMap::from([("apps".to_string(), true)]),
+        })
+        .await?;
+    let _enable_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(enable_request)),
+    )
+    .await??;
+
+    let update = read_app_list_updated_notification(&mut mcp).await?;
+    assert_eq!(
+        update.data,
+        vec![AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha v2".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: true,
+            is_enabled: true,
+            plugin_display_names: Vec::new(),
+        }]
+    );
+
+    server_handle.abort();
+    Ok(())
+}
+
 async fn read_app_list_updated_notification(
     mcp: &mut McpProcess,
 ) -> Result<AppListUpdatedNotification> {
@@ -1224,6 +1392,7 @@ struct AppsServerState {
     expected_account_id: String,
     response: Arc<StdMutex<serde_json::Value>>,
     directory_delay: Duration,
+    workspace_plugins_enabled: bool,
 }
 
 #[derive(Clone)]
@@ -1307,11 +1476,45 @@ async fn start_apps_server_with_delays(
     Ok((server_url, server_handle))
 }
 
+async fn start_apps_server_with_workspace_plugins_enabled(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+    workspace_plugins_enabled: bool,
+) -> Result<(String, JoinHandle<()>)> {
+    let (server_url, server_handle, _server_control) =
+        start_apps_server_with_delays_and_control_inner(
+            connectors,
+            tools,
+            Duration::ZERO,
+            Duration::ZERO,
+            workspace_plugins_enabled,
+        )
+        .await?;
+    Ok((server_url, server_handle))
+}
+
 async fn start_apps_server_with_delays_and_control(
     connectors: Vec<AppInfo>,
     tools: Vec<Tool>,
     directory_delay: Duration,
     tools_delay: Duration,
+) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
+    start_apps_server_with_delays_and_control_inner(
+        connectors,
+        tools,
+        directory_delay,
+        tools_delay,
+        /*workspace_plugins_enabled*/ true,
+    )
+    .await
+}
+
+async fn start_apps_server_with_delays_and_control_inner(
+    connectors: Vec<AppInfo>,
+    tools: Vec<Tool>,
+    directory_delay: Duration,
+    tools_delay: Duration,
+    workspace_plugins_enabled: bool,
 ) -> Result<(String, JoinHandle<()>, AppsServerControl)> {
     let response = Arc::new(StdMutex::new(
         json!({ "apps": connectors, "next_token": null }),
@@ -1322,6 +1525,7 @@ async fn start_apps_server_with_delays_and_control(
         expected_account_id: "account-123".to_string(),
         response: response.clone(),
         directory_delay,
+        workspace_plugins_enabled,
     };
     let state = Arc::new(state);
     let server_control = AppsServerControl {
@@ -1347,6 +1551,10 @@ async fn start_apps_server_with_delays_and_control(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
         )
+        .route(
+            "/accounts/account-123/settings",
+            get(workspace_settings_response),
+        )
         .with_state(state)
         .nest_service("/api/codex/apps", mcp_service);
 
@@ -1355,6 +1563,30 @@ async fn start_apps_server_with_delays_and_control(
     });
 
     Ok((format!("http://{addr}"), handle, server_control))
+}
+
+async fn workspace_settings_response(
+    State(state): State<Arc<AppsServerState>>,
+    headers: HeaderMap,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    let bearer_ok = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == state.expected_bearer);
+    let account_ok = headers
+        .get("chatgpt-account-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == state.expected_account_id);
+
+    if !bearer_ok || !account_ok {
+        Err(StatusCode::UNAUTHORIZED)
+    } else {
+        Ok(Json(json!({
+            "beta_settings": {
+                "enable_plugins": state.workspace_plugins_enabled
+            }
+        })))
+    }
 }
 
 async fn list_directory_connectors(

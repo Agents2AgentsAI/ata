@@ -1,4 +1,15 @@
-use super::*;
+use codex_login::CodexHttpClient;
+use codex_login::REFRESH_TOKEN_EXPIRED_MESSAGE;
+use codex_login::REFRESH_TOKEN_INVALIDATED_MESSAGE;
+use codex_login::REFRESH_TOKEN_REUSED_MESSAGE;
+use codex_login::REFRESH_TOKEN_UNKNOWN_MESSAGE;
+use codex_login::REFRESH_TOKEN_URL;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_login::RefreshTokenError;
+use codex_protocol::auth::RefreshTokenFailedError;
+use codex_protocol::auth::RefreshTokenFailedReason;
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct RefreshRequest {
@@ -125,4 +136,21 @@ fn extract_refresh_token_error_code(body: &str) -> Option<String> {
 fn refresh_token_endpoint() -> String {
     std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
+}
+
+/// Local copy of `codex_login::auth::util::try_parse_error_message`, which is
+/// `pub(crate)` over there. Keeps the duplicate refresh logic in this fork-only
+/// module self-contained.
+fn try_parse_error_message(text: &str) -> String {
+    let json = serde_json::from_str::<serde_json::Value>(text).unwrap_or_default();
+    if let Some(error) = json.get("error")
+        && let Some(message) = error.get("message")
+        && let Some(message_str) = message.as_str()
+    {
+        return message_str.to_string();
+    }
+    if text.is_empty() {
+        return "Unknown error".to_string();
+    }
+    text.to_string()
 }

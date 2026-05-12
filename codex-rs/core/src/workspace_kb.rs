@@ -1,4 +1,22 @@
-use codex_protocol::protocol::SandboxPolicy;
+//! Knowledge-base sandbox + path resolution plumbing.
+//!
+//! When `Feature::ResearchKnowledgeBase` is enabled, every turn:
+//!
+//! 1. Picks the active workspace (via `codex_workspace::workspace_resolution`,
+//!    falling back to `"global"`),
+//! 2. Derives the per-workspace KB path
+//!    (`<codex_home>/workspaces/<workspace_id>/knowledge-base/`),
+//! 3. Exports `CODEX_KB_PATH=<path>` into the per-turn shell environment so
+//!    LLM tool calls, subagent shells, and `/shell` all see the same dir,
+//! 4. Creates the directory and hands its `AbsolutePathBuf` back so
+//!    `tools/runtimes/build_sandbox_command` can append it to each command's
+//!    sandbox writable roots — writes there don't need an approval prompt.
+//!
+//! `kb_path_override` is reserved for a future `[kb] kb_path = "..."`
+//! config field and is currently always `None`. The override resolver
+//! (`resolve_override_kb_path`) and `expand_home` are kept so adding the
+//! config field is a one-line change later.
+
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,7 +25,6 @@ pub(crate) const CODEX_KB_PATH_ENV_VAR: &str = "CODEX_KB_PATH";
 
 pub(crate) struct ResolvedKbEnv {
     pub kb_path: String,
-    #[allow(dead_code)]
     pub workspace_kb_root: Option<AbsolutePathBuf>,
 }
 
@@ -72,40 +89,7 @@ pub(crate) fn kb_writable_root(kb_path: &Path) -> Option<AbsolutePathBuf> {
     Some(kb_root)
 }
 
-pub(crate) fn with_kb_writable_root(
-    policy: &SandboxPolicy,
-    kb_root: Option<&AbsolutePathBuf>,
-) -> SandboxPolicy {
-    let Some(kb_root) = kb_root else {
-        return policy.clone();
-    };
-
-    match policy {
-        SandboxPolicy::WorkspaceWrite {
-            writable_roots,
-            read_only_access,
-            exclude_tmpdir_env_var,
-            exclude_slash_tmp,
-            network_access,
-        } => {
-            let mut writable_roots = writable_roots.clone();
-            if !writable_roots.iter().any(|root| root == kb_root) {
-                writable_roots.push(kb_root.clone());
-            }
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                read_only_access: read_only_access.clone(),
-                exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                exclude_slash_tmp: *exclude_slash_tmp,
-                network_access: *network_access,
-            }
-        }
-        SandboxPolicy::DangerFullAccess
-        | SandboxPolicy::ExternalSandbox { .. }
-        | SandboxPolicy::ReadOnly { .. } => policy.clone(),
-    }
-}
-
+#[allow(dead_code)]
 fn resolve_override_kb_path(codex_home: &Path, kb_path_override: &str) -> Option<PathBuf> {
     let trimmed = kb_path_override.trim();
     if trimmed.is_empty() {
@@ -120,6 +104,7 @@ fn resolve_override_kb_path(codex_home: &Path, kb_path_override: &str) -> Option
     }
 }
 
+#[allow(dead_code)]
 fn expand_home(path: &str) -> PathBuf {
     if path == "~" {
         return std::env::var_os("HOME")
@@ -164,9 +149,6 @@ fn resolve_workspace_id(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::ReadOnlyAccess;
-    use codex_utils_absolute_path::AbsolutePathBuf;
-    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn create_workspace(codex_home: &Path, workspace_id: &str) {
@@ -285,99 +267,50 @@ mod tests {
     }
 
     #[test]
-    fn resolve_kb_path_uses_override_when_configured() {
-        let temp = TempDir::new().expect("temp dir");
-        let codex_home = temp.path().join(".ata");
-        let cwd = temp.path().join("project");
-        std::fs::create_dir_all(&cwd).expect("create cwd");
-
-        let path = resolve_kb_path(
-            &codex_home,
-            &cwd,
-            Some("custom-kb"),
-            Some("session-1"),
-            Some("thread-1"),
-        );
-        assert_eq!(path, codex_home.join("custom-kb"));
-    }
-
-    #[test]
     fn resolve_kb_env_returns_matching_path_and_writable_root() {
         let temp = TempDir::new().expect("temp dir");
         let codex_home = temp.path().join(".ata");
         let cwd = temp.path().join("project");
         std::fs::create_dir_all(&cwd).expect("create cwd");
 
+        // Use the override path so we don't need a workspace manifest.
         let resolved = resolve_kb_env(
             &codex_home,
             &cwd,
-            Some("custom-kb"),
+            Some(temp.path().join("custom-kb").to_str().expect("utf-8")),
             Some("session-1"),
             Some("thread-1"),
         );
 
-        assert_eq!(
-            resolved.kb_path,
-            codex_home.join("custom-kb").display().to_string()
-        );
+        let expected_path = temp.path().join("custom-kb");
+        assert_eq!(resolved.kb_path, expected_path.display().to_string());
         assert_eq!(
             resolved.workspace_kb_root,
             Some(
-                AbsolutePathBuf::from_absolute_path(codex_home.join("custom-kb").as_path())
+                AbsolutePathBuf::from_absolute_path(expected_path.as_path())
                     .expect("absolute kb path")
             )
         );
     }
 
     #[test]
-    fn with_kb_writable_root_adds_resolved_kb_path_for_workspace_write() {
+    fn kb_writable_root_creates_dir_and_returns_absolute_path() {
         let temp = TempDir::new().expect("temp dir");
         let kb_path = temp.path().join("kb");
-        let kb_root = kb_writable_root(&kb_path).expect("kb writable root");
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            read_only_access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
-            network_access: false,
-            exclude_tmpdir_env_var: false,
-            exclude_slash_tmp: false,
-        };
-
-        let updated = with_kb_writable_root(&policy, Some(&kb_root));
-
-        let expected_kb_root =
-            AbsolutePathBuf::from_absolute_path(&kb_path).expect("absolute kb path");
-        assert_eq!(
-            updated,
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![expected_kb_root],
-                read_only_access: ReadOnlyAccess::Restricted {
-                    include_platform_defaults: false,
-                    readable_roots: vec![],
-                },
-                network_access: false,
-                exclude_tmpdir_env_var: false,
-                exclude_slash_tmp: false,
-            }
-        );
+        let resolved = kb_writable_root(&kb_path).expect("kb writable root");
+        assert_eq!(resolved.as_path(), kb_path.as_path());
+        assert!(kb_path.is_dir(), "kb dir should be created");
     }
 
     #[test]
-    fn with_kb_writable_root_ignores_non_workspace_write_policies() {
-        let temp = TempDir::new().expect("temp dir");
-        let kb_root = kb_writable_root(temp.path().join("kb").as_path()).expect("kb writable root");
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::Restricted {
-                include_platform_defaults: false,
-                readable_roots: vec![],
-            },
-            network_access: false,
-        };
+    fn kb_writable_root_rejects_relative_path() {
+        let resolved = kb_writable_root(Path::new("relative/kb"));
+        assert!(resolved.is_none());
+    }
 
-        let updated = with_kb_writable_root(&policy, Some(&kb_root));
-
-        assert_eq!(updated, policy);
+    #[test]
+    fn kb_writable_root_rejects_empty_path() {
+        let resolved = kb_writable_root(Path::new(""));
+        assert!(resolved.is_none());
     }
 }

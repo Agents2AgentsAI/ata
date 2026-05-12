@@ -1,8 +1,5 @@
-import path from "node:path";
-
 import { describe, expect, it } from "@jest/globals";
 
-import { Ata } from "../src/ata";
 import { ThreadEvent } from "../src/index";
 
 import {
@@ -12,8 +9,7 @@ import {
   sse,
   startResponsesTestProxy,
 } from "./responsesProxy";
-
-const ataExecPath = path.join(process.cwd(), "..", "..", "codex-rs", "target", "debug", "ata");
+import { createMockClient } from "./testCodex";
 
 describe("Ata", () => {
   it("returns thread events", async () => {
@@ -21,10 +17,9 @@ describe("Ata", () => {
       statusCode: 200,
       responseBodies: [sse(responseStarted(), assistantMessage("Hi!"), responseCompleted())],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const result = await thread.runStreamed("Hello, world!");
 
@@ -55,11 +50,13 @@ describe("Ata", () => {
             cached_input_tokens: 12,
             input_tokens: 42,
             output_tokens: 5,
+            reasoning_output_tokens: 0,
           },
         },
       ]);
       expect(thread.id).toEqual(expect.any(String));
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -80,10 +77,9 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const first = await thread.runStreamed("first input");
       await drainEvents(first.events);
@@ -106,6 +102,7 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -126,10 +123,9 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     try {
-      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
-
       const originalThread = client.startThread();
       const first = await originalThread.runStreamed("first input");
       await drainEvents(first.events);
@@ -154,6 +150,7 @@ describe("Ata", () => {
       )?.text;
       expect(assistantText).toBe("First response");
     } finally {
+      cleanup();
       await close();
     }
   });
@@ -169,6 +166,7 @@ describe("Ata", () => {
         ),
       ],
     });
+    const { client, cleanup } = createMockClient(url);
 
     const schema = {
       type: "object",
@@ -180,8 +178,6 @@ describe("Ata", () => {
     } as const;
 
     try {
-      const client = new Ata({ ataPathOverride: ataExecPath, baseUrl: url, apiKey: "test" });
-
       const thread = client.startThread();
       const streamed = await thread.runStreamed("structured", { outputSchema: schema });
       await drainEvents(streamed.events);
@@ -198,6 +194,7 @@ describe("Ata", () => {
         schema,
       });
     } finally {
+      cleanup();
       await close();
     }
   });

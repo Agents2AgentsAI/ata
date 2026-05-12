@@ -89,6 +89,60 @@
       "prefer_websockets": false
     },
     {
+      "slug": "claude-opus-4-7",
+      "display_name": "Claude Opus 4-7",
+      "description": "Anthropic's flagship model: 1M context with adaptive + max reasoning.",
+      "default_reasoning_level": "max",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning depth (Opus 4.7+)"
+        },
+        {
+          "effort": "adaptive",
+          "description": "Automatically adjusts reasoning depth based on task complexity"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning budget (Opus 4.7 only)"
+        }
+      ],
+      "shell_type": "default",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 22,
+      "upgrade": null,
+      "base_instructions": "",
+      "supports_reasoning_summaries": false,
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": null,
+      "truncation_policy": {
+        "mode": "bytes",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": false,
+      "context_window": 1000000,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "prefer_websockets": false
+    },
+    {
       "slug": "gemini-3-pro-preview",
       "display_name": "Gemini 3 Pro",
       "description": "Google's advanced model for complex tasks.",

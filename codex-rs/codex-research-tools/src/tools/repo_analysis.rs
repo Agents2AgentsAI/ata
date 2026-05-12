@@ -590,6 +590,7 @@ fn deserialize_cache_entry(output: FetchOutput) -> Result<RepoHealth> {
     }
 }
 
+#[allow(clippy::await_holding_invalid_type)]
 async fn ensure_cloned(repo_ref: &RepoRef) -> Result<RepoCheckout> {
     let cache_root = repo_cache_dir();
     tokio::fs::create_dir_all(&cache_root)
