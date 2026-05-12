@@ -398,7 +398,11 @@ jobs:
             exit 1
           fi
 
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' }}
+      # Only sign + notarize the dmg when binary signing is also enabled — a dmg
+      # whose contents are unsigned (HAS_APPLE_SIGNING=false skips the binary
+      # signing step above) is rejected by Apple notarization as "Invalid".
+      # When signing is off we still build the dmg above and ship it unsigned.
+      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.HAS_APPLE_SIGNING == 'true' }}
         name: MacOS code signing (dmg)
         uses: ./.github/actions/macos-code-sign
         with:
