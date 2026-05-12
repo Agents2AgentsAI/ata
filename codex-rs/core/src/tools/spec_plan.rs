@@ -321,6 +321,44 @@ pub fn build_tool_registry_builder(
         }
     }
 
+    if config.data_tools_enabled
+        && let Some(toolkit) = params.data_toolkit
+    {
+        for def in codex_data_tools::tool_specs::all_tool_defs() {
+            if !toolkit.is_tool_configured(def.id) {
+                continue;
+            }
+
+            let parameters = match codex_tools::parse_tool_input_schema(&def.input_schema) {
+                Ok(schema) => schema,
+                Err(err) => {
+                    tracing::warn!(
+                        tool = def.native_name,
+                        error = %err,
+                        "skipping data tool with unparsable schema"
+                    );
+                    continue;
+                }
+            };
+
+            builder.push_spec(
+                ToolSpec::Function(ResponsesApiTool {
+                    name: def.native_name.to_string(),
+                    description: def.description.to_string(),
+                    strict: false,
+                    parameters,
+                    output_schema: None,
+                    defer_loading: None,
+                }),
+                /*supports_parallel_tool_calls*/ false,
+            );
+            builder.register_handler(Arc::new(crate::tools::handlers::DataBridgeHandler::new(
+                def.native_name,
+                Arc::clone(toolkit),
+            )));
+        }
+    }
+
     let deferred_dynamic_tools = params
         .dynamic_tools
         .iter()

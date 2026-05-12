@@ -6,7 +6,6 @@ pub(crate) mod attach_url_files;
 #[cfg(feature = "treesitter")]
 pub(crate) mod code_intel;
 pub(crate) mod crop_figure;
-#[cfg(feature = "data")]
 pub(crate) mod data;
 pub(crate) mod document_reader;
 mod dynamic;
@@ -67,8 +66,8 @@ pub use attach_url_files::AttachUrlFilesHandler;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 pub use crop_figure::CropFigureHandler;
-#[cfg(feature = "data")]
 pub(crate) use data::DataBridgeHandler;
+pub(crate) use data::build_data_config;
 pub use document_reader::DocumentReaderHandler;
 pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;

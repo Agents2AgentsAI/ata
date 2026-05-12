@@ -1,3 +1,4 @@
+use crate::data::SharedDataToolkit;
 use crate::function_tool::FunctionCallError;
 use crate::research::SharedResearchToolkit;
 use crate::sandboxing::SandboxPermissions;
@@ -51,6 +52,7 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
     pub(crate) research_toolkit: Option<&'a Arc<SharedResearchToolkit>>,
+    pub(crate) data_toolkit: Option<&'a Arc<SharedDataToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))]
     pub(crate) multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }
@@ -65,6 +67,7 @@ impl ToolRouter {
             discoverable_tools,
             dynamic_tools,
             research_toolkit,
+            data_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         } = params;
@@ -76,6 +79,7 @@ impl ToolRouter {
             discoverable_tools,
             dynamic_tools,
             research_toolkit,
+            data_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         );
