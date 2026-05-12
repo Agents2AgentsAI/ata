@@ -260,6 +260,9 @@ pub enum Feature {
     ResearchRepoAnalysis,
     /// ATA-private: knowledge-base persistence (cards, journal, cross-paper reports).
     ResearchKnowledgeBase,
+    /// ATA-private: master toggle for the data tool integrations (HuggingFace /
+    /// Kaggle dataset discovery, download, and management).
+    DataTools,
 }
 
 impl Feature {
@@ -534,6 +537,10 @@ impl Features {
             || self.enabled(Feature::ResearchPaperSearch)
             || self.enabled(Feature::ResearchHackerNews)
             || self.enabled(Feature::ResearchPatents)
+    }
+
+    pub fn has_any_data_enabled(&self) -> bool {
+        self.enabled(Feature::DataTools)
     }
 
     pub fn normalize_dependencies(&mut self) {
@@ -1305,6 +1312,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::DataTools,
+        key: "data_tools",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
 ];
 

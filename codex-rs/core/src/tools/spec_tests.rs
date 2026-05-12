@@ -294,6 +294,7 @@ fn build_specs_with_unavailable_tools(
         /*discoverable_tools*/ None,
         dynamic_tools,
         /*research_toolkit*/ None,
+        /*data_toolkit*/ None,
         #[cfg(any(feature = "lsp", feature = "treesitter"))]
         None,
     )
@@ -358,6 +359,7 @@ async fn assert_model_tools(
             discoverable_tools: None,
             dynamic_tools: &[],
             research_toolkit: None,
+            data_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },
@@ -902,6 +904,7 @@ async fn request_plugin_install_requires_apps_and_plugins_features() {
             discoverable_tools.clone(),
             &[],
             /*research_toolkit*/ None,
+            /*data_toolkit*/ None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             None,
         )

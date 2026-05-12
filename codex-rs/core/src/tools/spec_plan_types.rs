@@ -1,3 +1,4 @@
+use crate::data::SharedDataToolkit;
 use crate::research::SharedResearchToolkit;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -18,6 +19,7 @@ pub struct ToolRegistryBuildParams<'a> {
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
     pub tool_search_entries: &'a [crate::tools::tool_search_entry::ToolSearchEntry],
     pub research_toolkit: Option<&'a Arc<SharedResearchToolkit>>,
+    pub data_toolkit: Option<&'a Arc<SharedDataToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))]
     pub multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }

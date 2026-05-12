@@ -1,3 +1,4 @@
+use crate::data::SharedDataToolkit;
 use crate::research::SharedResearchToolkit;
 use crate::shell::Shell;
 use crate::shell::ShellType;
@@ -75,6 +76,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
     research_toolkit: Option<&Arc<SharedResearchToolkit>>,
+    data_toolkit: Option<&Arc<SharedDataToolkit>>,
     #[cfg(any(feature = "lsp", feature = "treesitter"))] multi_root_state: Option<
         &Arc<crate::state::MultiRootState>,
     >,
@@ -137,6 +139,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             },
             tool_search_entries: &tool_search_entries,
             research_toolkit,
+            data_toolkit,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state,
         },
