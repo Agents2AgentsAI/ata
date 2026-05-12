@@ -137,32 +137,34 @@ prepare_cargo_deny_env() {
   mkdir -p "${CARGO_HOME}/advisory-dbs"
 }
 
-# Mirror the rusty_v8 ptrcomp_sandbox archive override done by
-# .github/workflows/ata-ci-platform.yml. Without these env vars the v8 build
-# script tries to fetch from denoland/rusty_v8, which does not publish the
-# `ptrcomp_sandbox` variant and returns HTTP 404. The openai/codex release
-# does publish it for every host triple.
+# Mirror the rusty_v8 archive handling in .github/workflows/ata-ci-platform.yml:
+# only the musl targets need an override (denoland/rusty_v8 ships no musl
+# prebuilt; the openai/codex release republishes a plain `release` musl
+# variant). Every other target — including this dev machine — falls back to the
+# v8 build script's default denoland `release` download. Neither archive
+# enables `v8_enable_sandbox`, which is what `codex-v8-poc`'s
+# `linked_v8_has_no_sandbox` test asserts.
 prepare_rusty_v8_env() {
+  local target
+  target="$(rustc -vV | awk -F': ' '/^host:/ {print $2}')"
+  case "${target}" in
+    *-linux-musl) ;;
+    *) return 0 ;;
+  esac
   if [[ -n "${RUSTY_V8_ARCHIVE-}" && -n "${RUSTY_V8_SRC_BINDING_PATH-}" ]]; then
     return 0
   fi
   local version
   version="$(python3 "${repo_root}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
-  local target
-  target="$(rustc -vV | awk -F': ' '/^host:/ {print $2}')"
   local base_url="https://github.com/openai/codex/releases/download/rusty-v8-v${version}"
   local binding_dir="${TMPDIR:-/tmp}/codex-rusty-v8-${version}"
-  local binding_path="${binding_dir}/src_binding_ptrcomp_sandbox_release_${target}.rs"
+  local binding_path="${binding_dir}/src_binding_release_${target}.rs"
   mkdir -p "${binding_dir}"
   if [[ ! -f "${binding_path}" ]]; then
-    curl -fsSL "${base_url}/$(basename "${binding_path}")" -o "${binding_path}"
+    curl -fsSL "${base_url}/src_binding_release_${target}.rs" -o "${binding_path}"
   fi
-  export RUSTY_V8_ARCHIVE="${base_url}/librusty_v8_ptrcomp_sandbox_release_${target}.a.gz"
+  export RUSTY_V8_ARCHIVE="${base_url}/librusty_v8_release_${target}.a.gz"
   export RUSTY_V8_SRC_BINDING_PATH="${binding_path}"
-  export GN_ARGS="${GN_ARGS:-use_custom_libcxx=false}"
-  case "${target}" in
-    *-linux-gnu|*-linux-musl) export CXXSTDLIB="${CXXSTDLIB:-c++}" ;;
-  esac
 }
 
 cd "${cargo_rs_dir}"

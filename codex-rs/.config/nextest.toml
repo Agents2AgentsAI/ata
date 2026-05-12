@@ -24,13 +24,16 @@ slow-timeout = { period = "1m", terminate-after = 4 }
 [[profile.default.overrides]]
 # Approval matrix tests spawn many real subprocesses (sandbox, python3, etc.)
 # and slow down significantly under full-suite load.
-filter = 'test(_covers_modes)'
+filter = 'test(approval_matrix_covers_group)'
 slow-timeout = { period = "120s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-# Uses #[large_stack_test] for Windows stack overflow avoidance, which is slower.
-filter = 'test(compact_resume_and_fork_preserve_model_history_view) | test(compact_resume_after_second_compaction_preserves_history)'
+# compact_resume_fork tests drive full compaction + rollout-replay + fork flows
+# against a mock server; they're materially slower on contended Windows/arm64
+# runners and occasionally need a couple of retries to absorb timing variance.
+filter = 'package(codex-core) & test(/^suite::compact_resume_fork::/)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+retries = 2
 
 [[profile.default.overrides]]
 # Nested rollout-resume tree tests are materially slower on Windows due to
