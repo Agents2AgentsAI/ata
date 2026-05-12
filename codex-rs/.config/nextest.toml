@@ -119,6 +119,15 @@ slow-timeout = { period = "120s", terminate-after = 2 }
 retries = 2
 
 [[profile.default.overrides]]
+# WebRTC sideband close-race tests assert that an in-flight handshake aborts
+# before the mock server records it. The race window is bounded by the
+# accept_delay (≤1s) and is tight on slow arm64 runners (Graviton), where
+# the abort occasionally loses to the handshake. Retry to absorb that.
+filter = 'package(codex-core) & test(/^suite::realtime_conversation::conversation_webrtc_/)'
+slow-timeout = { period = "60s", terminate-after = 2 }
+retries = 2
+
+[[profile.default.overrides]]
 # These tests create restricted-token Windows child processes and private desktops.
 # Serialize them to avoid exhausting Windows session/global desktop resources in CI.
 filter = 'package(codex-windows-sandbox) & test(legacy_)'
