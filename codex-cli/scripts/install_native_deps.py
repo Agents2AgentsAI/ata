@@ -51,10 +51,10 @@ BINARY_COMPONENTS = {
         binary_basename="bwrap",
         targets=LINUX_TARGETS,
     ),
-    "codex": BinaryComponent(
-        artifact_prefix="codex",
-        dest_dir="codex",
-        binary_basename="codex",
+    "ata": BinaryComponent(
+        artifact_prefix="ata",
+        dest_dir="ata",
+        binary_basename="ata",
     ),
     "ata-responses-api-proxy": BinaryComponent(
         artifact_prefix="ata-responses-api-proxy",
@@ -141,8 +141,8 @@ def parse_args() -> argparse.Namespace:
         choices=tuple(list(BINARY_COMPONENTS) + ["rg"]),
         help=(
             "Limit installation to the specified components."
-            " May be repeated. Defaults to bwrap, codex, codex-windows-sandbox-setup,"
-            " codex-command-runner, and rg."
+            " May be repeated. Defaults to bwrap, ata, ata-windows-sandbox-setup,"
+            " ata-command-runner, and rg."
         ),
     )
     parser.add_argument(
@@ -166,9 +166,9 @@ def main() -> int:
 
     components = args.components or [
         "bwrap",
-        "codex",
-        "codex-windows-sandbox-setup",
-        "codex-command-runner",
+        "ata",
+        "ata-windows-sandbox-setup",
+        "ata-command-runner",
         "rg",
     ]
 

@@ -61,14 +61,14 @@ PACKAGE_EXPANSIONS: dict[str, list[str]] = {
 }
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
-    "codex": [],
-    "codex-linux-x64": ["bwrap", "codex", "rg"],
-    "codex-linux-arm64": ["bwrap", "codex", "rg"],
-    "codex-darwin-x64": ["codex", "rg"],
-    "codex-darwin-arm64": ["codex", "rg"],
-    "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
-    "codex-responses-api-proxy": ["codex-responses-api-proxy"],
-    "codex-sdk": [],
+    "ata": [],
+    "ata-linux-x64": ["bwrap", "ata", "rg"],
+    "ata-linux-arm64": ["bwrap", "ata", "rg"],
+    "ata-darwin-x64": ["ata", "rg"],
+    "ata-darwin-arm64": ["ata", "rg"],
+    "ata-win32-x64": ["ata", "rg", "ata-windows-sandbox-setup", "ata-command-runner"],
+    "ata-responses-api-proxy": ["ata-responses-api-proxy"],
+    "ata-sdk": [],
 }
 
 PACKAGE_TARGET_FILTERS: dict[str, str] = {
@@ -78,12 +78,15 @@ PACKAGE_TARGET_FILTERS: dict[str, str] = {
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
+# NOTE: `codex-resources` is the literal directory name the Rust runtime looks
+# for next to the executable (see codex-rs/linux-sandbox/src/bundled_bwrap.rs);
+# do not rename it. `ata` is where bin/ata.js expects the binary.
 COMPONENT_DEST_DIR: dict[str, str] = {
     "bwrap": "codex-resources",
-    "codex": "codex",
-    "codex-responses-api-proxy": "codex-responses-api-proxy",
-    "codex-windows-sandbox-setup": "codex",
-    "codex-command-runner": "codex",
+    "ata": "ata",
+    "ata-responses-api-proxy": "ata-responses-api-proxy",
+    "ata-windows-sandbox-setup": "ata",
+    "ata-command-runner": "ata",
     "rg": "path",
 }
 

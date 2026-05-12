@@ -46,12 +46,12 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-responses-api-proxy"
+            binaries: "ata ata-responses-api-proxy"
             runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
-            binaries: "codex-windows-sandbox-setup codex-command-runner"
+            binaries: "ata-windows-sandbox-setup ata-command-runner"
             runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
@@ -124,7 +124,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
+      WINDOWS_BINARIES: "ata ata-responses-api-proxy ata-windows-sandbox-setup ata-command-runner codex-app-server"
 
     strategy:
       fail-fast: false
