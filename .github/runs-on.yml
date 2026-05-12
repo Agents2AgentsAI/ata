@@ -60,6 +60,10 @@ runners:
   # `release-linux-*` pools used the compute-optimized c7i/c7a family (2:1
   # vCPU:GB), which can't satisfy "8 vCPU + 32 GB" so runs-on.io provisioned a
   # 16 GB box and the `--release` build of `--bin ata` OOM'd ~15 min in.
+  # NOTE: rust-release.yml selects these pools WITHOUT `extras=s3-cache` (CI
+  # uses it, the release path must not — see the comment by the release `build`
+  # matrix entries: that extra rewrites ACTIONS_RESULTS_URL to the runs-on
+  # agent and breaks `actions/upload-artifact` on the release jobs).
   release-windows-x64:
     image: windows25-vstoolchain-x64
     family: ["c7i", "m7i"]
