@@ -67,7 +67,6 @@ PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
     "codex-darwin-x64": ["codex", "rg"],
     "codex-darwin-arm64": ["codex", "rg"],
     "codex-win32-x64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
-    "codex-win32-arm64": ["codex", "rg", "codex-windows-sandbox-setup", "codex-command-runner"],
     "codex-responses-api-proxy": ["codex-responses-api-proxy"],
     "codex-sdk": [],
 }

@@ -586,18 +586,15 @@ $target = $null
 $platformLabel = $null
 $npmTag = $null
 switch ($architecture) {
-    "Arm64" {
-        $target = "aarch64-pc-windows-msvc"
-        $platformLabel = "Windows (ARM64)"
-        $npmTag = "win32-arm64"
-    }
     "X64" {
         $target = "x86_64-pc-windows-msvc"
         $platformLabel = "Windows (x64)"
         $npmTag = "win32-x64"
     }
     default {
-        Write-Error "Unsupported architecture: $architecture"
+        # Windows ARM64 is not built/released; x64 binaries can run under
+        # the OS x64 emulator if needed.
+        Write-Error "Unsupported architecture: $architecture (only Windows x64 is released)"
         exit 1
     }
 }

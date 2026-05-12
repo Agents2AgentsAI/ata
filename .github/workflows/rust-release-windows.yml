@@ -40,49 +40,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Windows ARM64 is intentionally not built/released — no runner
+        # (CI or release) for that target.
         include:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: primary
-            binaries: "codex codex-responses-api-proxy"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: helpers
-            binaries: "codex-windows-sandbox-setup codex-command-runner"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
-          - runner: windows-arm64
-            target: aarch64-pc-windows-msvc
-            bundle: app-server
-            binaries: "codex-app-server"
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

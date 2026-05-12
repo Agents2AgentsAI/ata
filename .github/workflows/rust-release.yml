@@ -184,7 +184,7 @@ jobs:
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install Zig
-        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        uses: mlugg/setup-zig@v2
         with:
           version: 0.14.1
 
@@ -253,10 +253,27 @@ jobs:
           echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Configure musl rusty_v8 artifact overrides and verify checksums
-        uses: ./.github/actions/setup-rusty-v8-musl
-        with:
-          target: ${{ matrix.target }}
+        name: Configure musl rusty_v8 artifact overrides
+        # `denoland/rusty_v8` does not ship a musl prebuilt for any v8
+        # version; the upstream Codex release republishes a plain `release`
+        # musl variant. All other targets fall back to the v8 build script's
+        # default download from denoland. Neither archive enables
+        # `v8_enable_sandbox`, matching `codex-v8-poc`'s `linked_v8_has_no_sandbox`.
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive="${base_url}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
 
       - if: ${{ contains(matrix.target, 'linux') && matrix.bundle == 'primary' }}
         name: Build bwrap and export digest
@@ -749,7 +766,6 @@ jobs:
             "dist/npm/codex-npm-darwin-x64-${VERSION}.tgz"
             "dist/npm/codex-npm-darwin-arm64-${VERSION}.tgz"
             "dist/npm/codex-npm-win32-x64-${VERSION}.tgz"
-            "dist/npm/codex-npm-win32-arm64-${VERSION}.tgz"
           )
 
           for required_tarball in "${platform_tarballs[@]}" "${root_tarball}"; do
