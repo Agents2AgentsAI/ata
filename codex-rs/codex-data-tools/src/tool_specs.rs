@@ -16,15 +16,8 @@ pub struct ToolDef {
 pub fn all_tool_defs() -> Vec<ToolDef> {
     let mut defs = Vec::new();
 
-    #[cfg(feature = "huggingface")]
-    {
-        defs.extend(huggingface_tools());
-    }
-
-    #[cfg(feature = "kaggle")]
-    {
-        defs.extend(kaggle_tools());
-    }
+    defs.extend(huggingface_tools());
+    defs.extend(kaggle_tools());
 
     // Common tools that work across sources
     defs.extend(common_tools());
@@ -164,7 +157,6 @@ fn common_tools() -> Vec<ToolDef> {
     ]
 }
 
-#[cfg(feature = "huggingface")]
 fn huggingface_tools() -> Vec<ToolDef> {
     vec![ToolDef {
         id: "hf_dataset_info",
@@ -189,7 +181,6 @@ fn huggingface_tools() -> Vec<ToolDef> {
     }]
 }
 
-#[cfg(feature = "kaggle")]
 fn kaggle_tools() -> Vec<ToolDef> {
     vec![
         ToolDef {

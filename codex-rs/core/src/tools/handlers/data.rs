@@ -3,7 +3,6 @@ use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use codex_data_tools::config::DataConfig;
 use codex_data_tools::error::DataError;
 use codex_data_tools::types::DatasetDownloadParams;
@@ -21,7 +20,7 @@ use codex_secrets::environment_id_from_cwd;
 use futures::FutureExt;
 use serde::Serialize;
 
-use crate::config::DataToolsToml;
+use crate::config::types::DataToolsToml;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -29,14 +28,22 @@ use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
 
 pub(crate) struct DataBridgeHandler {
+    tool_name: ToolName,
     toolkit: Arc<codex_data_tools::DataToolkit>,
 }
 
 impl DataBridgeHandler {
-    pub(crate) fn new(toolkit: Arc<codex_data_tools::DataToolkit>) -> Self {
-        Self { toolkit }
+    pub(crate) fn new(
+        tool_name: impl Into<String>,
+        toolkit: Arc<codex_data_tools::DataToolkit>,
+    ) -> Self {
+        Self {
+            tool_name: ToolName::plain(tool_name.into()),
+            toolkit,
+        }
     }
 
     async fn execute_native_tool(
@@ -159,9 +166,12 @@ impl DataBridgeHandler {
     }
 }
 
-#[async_trait]
 impl ToolHandler for DataBridgeHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        self.tool_name.clone()
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -181,7 +191,7 @@ impl ToolHandler for DataBridgeHandler {
             }
         };
 
-        self.execute_native_tool(tool_name.as_str(), arguments.as_str())
+        self.execute_native_tool(tool_name.name.as_str(), arguments.as_str())
             .await
     }
 }
@@ -304,8 +314,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::default_client::build_reqwest_client;
     use codex_data_tools::types::DatasetSearchResult;
+    use codex_login::default_client::build_reqwest_client;
     use pretty_assertions::assert_eq;
     use wiremock::Mock;
     use wiremock::MockServer;
@@ -336,10 +346,13 @@ mod tests {
             ..DataConfig::default()
         };
 
-        let handler = DataBridgeHandler::new(Arc::new(codex_data_tools::DataToolkit::new(
-            build_reqwest_client(),
-            config,
-        )));
+        let handler = DataBridgeHandler::new(
+            "dataset_search",
+            Arc::new(codex_data_tools::DataToolkit::new(
+                build_reqwest_client(),
+                config,
+            )),
+        );
 
         let output = handler
             .execute_native_tool(

@@ -287,6 +287,7 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
             discoverable_tools: None,
             dynamic_tools: exec.turn.dynamic_tools.as_slice(),
             research_toolkit: exec.turn.research_toolkit.as_ref(),
+            data_toolkit: exec.turn.data_toolkit.as_ref(),
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: exec.session.services.multi_root_state.as_ref(),
         },

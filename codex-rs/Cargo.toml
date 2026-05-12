@@ -521,7 +521,6 @@ ignored = [
     "codex-elevenlabs",
     "codex-treesitter",
     "codex-lsp-client",
-    "codex-data-tools",
     "codex-test-macros",
     "md-5",
     "cpal",

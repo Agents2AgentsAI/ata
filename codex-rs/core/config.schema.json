@@ -412,6 +412,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "data_tools": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -4080,6 +4083,9 @@
           "type": "boolean"
         },
         "connectors": {
+          "type": "boolean"
+        },
+        "data_tools": {
           "type": "boolean"
         },
         "default_mode_request_user_input": {
