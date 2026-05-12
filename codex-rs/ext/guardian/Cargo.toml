@@ -1,12 +1,13 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-git-attribution"
+name = "codex-guardian"
 version.workspace = true
 
 [lib]
-name = "codex_git_attribution"
+name = "codex_guardian"
 path = "src/lib.rs"
+test = false
 doctest = false
 
 [lints]
@@ -15,8 +16,4 @@ workspace = true
 [dependencies]
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
-codex-features = { workspace = true }
 codex-protocol = { workspace = true }
-
-[dev-dependencies]
-pretty_assertions = { workspace = true }
