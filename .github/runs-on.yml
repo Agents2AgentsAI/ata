@@ -55,12 +55,17 @@ runners:
     retry: when-interrupted
 
   # --- Release (bigger for LTO, on-demand for reliability) ---
+  # Sized to match the ci-linux-* pools: the `--release` build of `--bin ata`
+  # (the whole codex-tui dep tree — cpal/syntect/arboard/x11rb/...) was killing
+  # 4 vCPU / 16 GB runners ~15 min in (exit 143, "runner received shutdown
+  # signal"). 8-16 vCPU / 32-64 GB on-demand + retry-on-interrupt fixes it.
   release-linux-x64:
     image: ubuntu24-full-x64
     family: ["c7i", "c7a"]
     cpu: [8, 16]
-    ram: [16, 32]
+    ram: [32, 64]
     spot: false
+    retry: when-interrupted
 
   release-linux-arm64:
     image: ubuntu24-full-arm64
@@ -68,6 +73,7 @@ runners:
     cpu: [8, 16]
     ram: [32, 64]
     spot: false
+    retry: when-interrupted
 
   release-windows-x64:
     image: windows25-vstoolchain-x64
