@@ -57,3 +57,64 @@ jobs:
           fi
 
           echo "Keyword scan passed."
+
+      - name: Check release config for re-clobbered upstream identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          # These files carry ATA-specific release customizations that upstream
+          # `codex` merges have repeatedly clobbered with their `codex`-named
+          # versions (compare the rust-v0.5.1 tag against HEAD). Fail here so the
+          # regression is caught at the merge PR rather than at release time.
+          release_files=(
+            .github/workflows/rust-release.yml
+            .github/workflows/rust-release-windows.yml
+            .github/workflows/rust-release-zsh.yml
+            .github/dotslash-config.json
+            .github/dotslash-zsh-config.json
+            codex-cli/scripts/build_npm_package.py
+            codex-cli/scripts/install_native_deps.py
+            scripts/stage_npm_packages.py
+            scripts/install/install.sh
+            scripts/install/install.ps1
+          )
+          existing=()
+          for f in "${release_files[@]}"; do
+            [[ -f "$f" ]] && existing+=("$f")
+          done
+          if [[ ${#existing[@]} -eq 0 ]]; then
+            echo "No release config files found to check."
+            exit 0
+          fi
+
+          failed=false
+          forbidden=(
+            'codex-runners'                # upstream self-hosted runner group (ATA uses runs-on.io)
+            'codex-npm-'                   # upstream npm tarball names (ATA uses ata-npm-)
+            'OpenAI.Codex'                 # winget identifier / Windows install dir
+            '--package[[:space:]]+codex'   # ATA stages --package ata / ata-responses-api-proxy / ata-sdk
+            'setup-rusty-v8-musl'          # nonexistent composite action (ATA inlines the override)
+            'developers\.openai\.com'      # upstream Vercel deploy hook
+          )
+          for pattern in "${forbidden[@]}"; do
+            if grep -EnH -- "$pattern" "${existing[@]}"; then
+              echo "::error::Release config contains a re-clobbered upstream identifier matching: $pattern"
+              failed=true
+            fi
+          done
+
+          # `openai/codex` is allowed in these files ONLY on a `releases/download/`
+          # URL — that's the upstream rusty_v8 prebuilt-archive fetch, which ATA
+          # legitimately reuses (it does not host its own). Any other reference
+          # (api.github.com/repos/openai/codex/..., @openai/codex, ...) is a leftover.
+          if grep -EnH -- 'openai/codex' "${existing[@]}" | grep -v 'releases/download/'; then
+            echo "::error::Release config references openai/codex outside the rusty_v8 archive download"
+            failed=true
+          fi
+
+          if [[ "$failed" == "true" ]]; then
+            echo "An upstream merge likely re-clobbered an ATA release file."
+            echo "Diff the offending file against the rust-v0.5.1 tag and re-apply the ATA customization."
+            exit 1
+          fi
+          echo "Release config check passed."
