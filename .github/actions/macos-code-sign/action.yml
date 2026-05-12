@@ -6,7 +6,7 @@ inputs:
     required: true
   binaries:
     description: Space-delimited binary basenames to sign and notarize.
-    default: "codex codex-responses-api-proxy"
+    default: "ata ata-responses-api-proxy"
   sign-binaries:
     description: Whether to sign and notarize the macOS binaries.
     required: false
@@ -218,7 +218,7 @@ runs:
 
         source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
-        dmg_name="codex-${TARGET}.dmg"
+        dmg_name="ata-${TARGET}.dmg"
         dmg_path="codex-rs/target/${TARGET}/release/${dmg_name}"
 
         if [[ ! -f "$dmg_path" ]]; then
