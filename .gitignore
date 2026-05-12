@@ -92,3 +92,7 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
+
+# TUI test reports — committed selectively, not by default.
+codex-rs/tests/tui/reports/*
+!codex-rs/tests/tui/reports/.gitkeep

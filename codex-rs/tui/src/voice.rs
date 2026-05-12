@@ -15,8 +15,30 @@ use tracing::error;
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
 
+/// PCM buffer captured during a PTT recording. For realtime mode `data` is
+/// always empty (frames are streamed through `AppEventSender` instead).
+pub struct RecordedAudio {
+    pub data: Vec<i16>,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+impl RecordedAudio {
+    pub fn duration_seconds(&self) -> f32 {
+        if self.sample_rate == 0 || self.channels == 0 {
+            return 0.0;
+        }
+        let frames = self.data.len() / usize::from(self.channels).max(1);
+        frames as f32 / self.sample_rate as f32
+    }
+}
+
 pub struct VoiceCapture {
     stream: Option<cpal::Stream>,
+    sample_rate: u32,
+    channels: u16,
+    /// `Some` for PTT (`start_ptt`), `None` for streaming realtime mode.
+    data: Option<Arc<Mutex<Vec<i16>>>>,
     stopped: Arc<AtomicBool>,
     last_peak: Arc<AtomicU16>,
 }
@@ -44,21 +66,58 @@ impl VoiceCapture {
 
         Ok(Self {
             stream: Some(stream),
+            sample_rate,
+            channels,
+            data: None,
             stopped,
             last_peak,
         })
     }
 
-    pub fn stop(mut self) -> Result<Vec<i16>, String> {
+    /// Start capture that buffers raw mic samples locally for later retrieval
+    /// (used by PTT → WAV → ElevenLabs STT). Does not stream to the agent.
+    pub fn start_ptt(config: &Config) -> Result<Self, String> {
+        let (device, config) = select_realtime_input_device_and_config(config)?;
+
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let last_peak = Arc::new(AtomicU16::new(0));
+
+        let stream =
+            build_ptt_input_stream(&device, &config, Arc::clone(&data), last_peak.clone())?;
+        stream
+            .play()
+            .map_err(|e| format!("failed to start input stream: {e}"))?;
+
+        Ok(Self {
+            stream: Some(stream),
+            sample_rate,
+            channels,
+            data: Some(data),
+            stopped,
+            last_peak,
+        })
+    }
+
+    pub fn stop(mut self) -> Result<RecordedAudio, String> {
         // Mark stopped so any metering task can exit cleanly.
         self.stopped.store(true, Ordering::SeqCst);
         // Dropping the stream stops capture.
         self.stream.take();
-        // v0.129.0's VoiceCapture pushes audio frames through the
-        // AppEventSender as they arrive, so there is no local buffer to
-        // return. Voice mode's PTT path will see an empty buffer for now;
-        // wire-up of in-memory PCM accumulation is tracked as follow-up.
-        Ok(Vec::new())
+        let data = match self.data.take() {
+            Some(buf) => buf
+                .lock()
+                .map_err(|_| "failed to lock audio buffer".to_string())?
+                .clone(),
+            None => Vec::new(),
+        };
+        Ok(RecordedAudio {
+            data,
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+        })
     }
 
     pub fn stopped_flag(&self) -> Arc<AtomicBool> {
@@ -190,6 +249,69 @@ fn build_realtime_input_stream(
     }
 }
 
+fn build_ptt_input_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    data: Arc<Mutex<Vec<i16>>>,
+    last_peak: Arc<AtomicU16>,
+) -> Result<cpal::Stream, String> {
+    match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[f32], _| {
+                        let peak = peak_f32(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend(input.iter().copied().map(f32_to_i16));
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[i16], _| {
+                        let peak = peak_i16(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend_from_slice(input);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[u16], _| {
+                        let mut samples = Vec::with_capacity(input.len());
+                        let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.append(&mut samples);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        _ => Err("unsupported input sample format".to_string()),
+    }
+}
+
 fn send_realtime_audio_chunk(
     tx: &AppEventSender,
     samples: Vec<i16>,
@@ -287,6 +409,12 @@ pub(crate) struct RealtimeAudioPlayer {
     queue: Arc<Mutex<VecDeque<i16>>>,
     output_sample_rate: u32,
     output_channels: u16,
+    /// Shared with the cpal callback; when true, the callback emits silence
+    /// without draining the queue.
+    paused: Arc<AtomicBool>,
+    /// Total samples drained by the cpal callback. Used to compute the
+    /// playback cursor for karaoke alignment.
+    samples_played: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl RealtimeAudioPlayer {
@@ -296,7 +424,15 @@ impl RealtimeAudioPlayer {
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
-        let stream = build_output_stream(&device, &config, Arc::clone(&queue))?;
+        let paused = Arc::new(AtomicBool::new(false));
+        let samples_played = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let stream = build_output_stream(
+            &device,
+            &config,
+            Arc::clone(&queue),
+            Arc::clone(&paused),
+            Arc::clone(&samples_played),
+        )?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
@@ -305,6 +441,8 @@ impl RealtimeAudioPlayer {
             queue,
             output_sample_rate,
             output_channels,
+            paused,
+            samples_played,
         })
     }
 
@@ -373,18 +511,15 @@ impl RealtimeAudioPlayer {
     }
 
     pub(crate) fn pause(&self) {
-        // Without direct cpal stream pause we approximate by clearing the
-        // queue; future work can add a real pause flag in the consumer.
-        self.clear();
+        self.paused.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn resume(&self) {
-        // Counterpart to `pause`: nothing to do because the cpal stream
-        // is always running; queue refill will resume audible output.
+        self.paused.store(false, Ordering::Relaxed);
     }
 
     pub(crate) fn is_paused(&self) -> bool {
-        false
+        self.paused.load(Ordering::Relaxed)
     }
 
     pub(crate) fn has_buffered_audio(&self) -> bool {
@@ -392,11 +527,18 @@ impl RealtimeAudioPlayer {
     }
 
     pub(crate) fn playback_position_ms(&self) -> u64 {
-        0
+        let played = self.samples_played.load(Ordering::Relaxed);
+        let denom = (self.output_sample_rate as u64) * (self.output_channels as u64).max(1);
+        if denom == 0 {
+            return 0;
+        }
+        played.saturating_mul(1_000) / denom
     }
 
     pub(crate) fn reset_playback_position(&self) {
         self.clear();
+        self.samples_played.store(0, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
     }
 
     pub(crate) fn seek_to_ms(&self, _position_ms: u64) {
@@ -410,19 +552,22 @@ impl RealtimeAudioPlayer {
     pub(crate) fn set_playback_speed(&self, _speed: f64) {}
 }
 
-/// Encode a 16 kHz mono PCM buffer into a WAV blob suitable for upload to
+/// Encode a captured PCM buffer into a WAV blob suitable for upload to
 /// ElevenLabs STT. Used by voice_mode after a PTT release.
-pub(crate) fn encode_wav_for_voice_mode(pcm: &[i16]) -> Result<Vec<u8>, String> {
+pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    if audio.sample_rate == 0 || audio.channels == 0 {
+        return Err("invalid recorded audio: zero sample rate or channels".to_string());
+    }
     let spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: 16_000,
+        channels: audio.channels,
+        sample_rate: audio.sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut buf: Vec<u8> = Vec::with_capacity(44 + pcm.len() * 2);
+    let mut buf: Vec<u8> = Vec::with_capacity(44 + audio.data.len() * 2);
     let cursor = std::io::Cursor::new(&mut buf);
     let mut writer = hound::WavWriter::new(cursor, spec).map_err(|e| format!("hound init: {e}"))?;
-    for &sample in pcm {
+    for &sample in &audio.data {
         writer
             .write_sample(sample)
             .map_err(|e| format!("hound write: {e}"))?;
@@ -474,63 +619,138 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
+    paused: Arc<AtomicBool>,
+    samples_played: Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [f32], _| fill_output_f32(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build f32 output stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [i16], _| fill_output_i16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build i16 output stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_output_stream(
-                &config_any,
-                move |output: &mut [u16], _| fill_output_u16(output, &queue),
-                move |err| error!("audio output error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build u16 output stream: {e}")),
+        cpal::SampleFormat::F32 => {
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [f32], _| {
+                        fill_output_f32(output, &queue, &paused, &samples_played)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build f32 output stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [i16], _| {
+                        fill_output_i16(output, &queue, &paused, &samples_played)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build i16 output stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
+            device
+                .build_output_stream(
+                    &config_any,
+                    move |output: &mut [u16], _| {
+                        fill_output_u16(output, &queue, &paused, &samples_played)
+                    },
+                    move |err| error!("audio output error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build u16 output stream: {e}"))
+        }
         other => Err(format!("unsupported output sample format: {other:?}")),
     }
 }
 
-fn fill_output_i16(output: &mut [i16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_i16(
+    output: &mut [i16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
+) {
+    if paused.load(Ordering::Relaxed) {
+        output.fill(0);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            *sample = guard.pop_front().unwrap_or(0);
+        let mut drained: u64 = 0;
+        for sample in output.iter_mut() {
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    v
+                }
+                None => 0,
+            };
+        }
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
         return;
     }
     output.fill(0);
 }
 
-fn fill_output_f32(output: &mut [f32], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_f32(
+    output: &mut [f32],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
+) {
+    if paused.load(Ordering::Relaxed) {
+        output.fill(0.0);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as f32) / (i16::MAX as f32);
+        let mut drained: u64 = 0;
+        for sample in output.iter_mut() {
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    (v as f32) / (i16::MAX as f32)
+                }
+                None => 0.0,
+            };
+        }
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
         return;
     }
     output.fill(0.0);
 }
 
-fn fill_output_u16(output: &mut [u16], queue: &Arc<Mutex<VecDeque<i16>>>) {
+fn fill_output_u16(
+    output: &mut [u16],
+    queue: &Arc<Mutex<VecDeque<i16>>>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
+) {
+    if paused.load(Ordering::Relaxed) {
+        output.fill(32768);
+        return;
+    }
     if let Ok(mut guard) = queue.lock() {
-        for sample in output {
-            let v = guard.pop_front().unwrap_or(0);
-            *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
+        let mut drained: u64 = 0;
+        for sample in output.iter_mut() {
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16
+                }
+                None => 32768,
+            };
+        }
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
         return;
     }

@@ -323,6 +323,10 @@ impl ChatWidget {
             }
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => {
+                self.toggle_voice_mode();
+            }
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => {
                 self.open_voice_setup_popup();
             }
             SlashCommand::Memories => {
@@ -982,6 +986,8 @@ impl ChatWidget {
             | SlashCommand::Theme => QueueDrain::Stop,
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => QueueDrain::Stop,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => QueueDrain::Stop,
         }
     }
 

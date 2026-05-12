@@ -13,6 +13,58 @@ use codex_protocol::user_input::TextElement;
 use super::ChatWidget;
 use super::append_text_with_rebased_elements;
 
+/// Byte range of `text` that should be shown in chat history. System-injected
+/// preambles (voice-mode, reading-view question context) are hidden from
+/// display but kept in the model payload.
+fn displayable_range(text: &str) -> (usize, usize) {
+    let mut start = 0usize;
+    let mut end = text.len();
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        for prefix in crate::chatwidget::voice_mode::voice_mode_instruction_prefixes() {
+            if text.starts_with(prefix) {
+                start = prefix.len();
+                break;
+            }
+        }
+        if start == 0 && text.starts_with(crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION)
+        {
+            start = crate::chatwidget::voice_mode::VOICE_MODE_OFF_INSTRUCTION.len();
+        }
+    }
+
+    // Reading-view close feedback ("[The user closed the document reader…]")
+    // is a pure system message — no user text inside. Hide the entire body.
+    if text[start..].starts_with("[The user closed the document reader") {
+        return (start, start);
+    }
+
+    // Reading-view Tab-to-ask wraps the user question with a system context
+    // block. The agent answers via inline section patches, not chat replies,
+    // so hide the question + system context entirely from the chat history —
+    // otherwise the chat pane competes with the reading view for screen
+    // space and the user sees their own question echoed twice (once in the
+    // section, once in chat).
+    if text[start..].starts_with("[The user is reading ") {
+        return (start, start);
+    }
+    const READER_INSTR_SEP: &str = "\n\n<!-- READER_TOOL_INSTRUCTIONS -->\n";
+    const SELECTION_SUFFIX: &str = "\n\nThe user selected specific text from the section";
+    let tail = &text[start..];
+    let cut_instr = tail.find(READER_INSTR_SEP);
+    let cut_sel = tail.find(SELECTION_SUFFIX);
+    let cut = match (cut_instr, cut_sel) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    if let Some(cut) = cut {
+        end = start + cut;
+    }
+
+    (start, end.max(start))
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct UserMessageDisplay {
     pub(super) message: String,
@@ -46,17 +98,24 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
-        // Strip the reading-view follow-up wrapper before any other display
-        // processing. The reading view sends a long prompt to the agent that
-        // includes a header line, the user's actual question, and a block of
-        // tool instructions delimited by `<!-- READER_TOOL_INSTRUCTIONS -->`.
-        // For chat-history display we want only the user's typed question
-        // (the rest is bookkeeping for the agent and should not be visible).
-        // Same pattern lives at `chatwidget::strip_system_instruction_prefix`
-        // in codex-locus; restoring it here keeps the chat surface clean
-        // without changing what the agent receives.
-        let (message, text_elements) =
-            strip_reader_view_wrapper_for_display(message, text_elements);
+        // Strip system-injected wrappers (voice-mode preambles, reading-view
+        // question wrappers, document-closed feedback) so they never reach
+        // chat history rendering. The agent still sees the raw message.
+        let (vis_start, vis_end) = displayable_range(&message);
+        let message = message[vis_start..vis_end].to_string();
+        let stripped_elements = text_elements.into_iter().filter_map(|element| {
+            let range = element.byte_range;
+            if range.end <= vis_start || range.start >= vis_end {
+                return None;
+            }
+            let new_start = range.start.saturating_sub(vis_start);
+            let new_end = range.end.min(vis_end).saturating_sub(vis_start);
+            Some(element.map_range(|_| ByteRange {
+                start: new_start,
+                end: new_end,
+            }))
+        });
+
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();
@@ -64,8 +123,7 @@ impl ChatWidget {
         // extension. The raw user message goes to the agent, but every surface renders only the
         // request after that delimiter, so keep elements inside the visible request and shift their
         // byte ranges to match.
-        let text_elements = text_elements
-            .into_iter()
+        let text_elements: Vec<TextElement> = stripped_elements
             .filter_map(|element| {
                 let range = element.byte_range;
                 if range.start < prompt_request_offset || range.end > prompt_request_end {
@@ -125,21 +183,31 @@ impl ChatWidget {
                 UserInput::Text {
                     text,
                     text_elements: current_text_elements,
-                } => append_text_with_rebased_elements(
-                    &mut message,
-                    &mut text_elements,
-                    text,
-                    current_text_elements.iter().map(|element| {
-                        let range = element.byte_range.clone();
-                        TextElement::new(
-                            range.clone().into(),
-                            element
-                                .placeholder()
-                                .or_else(|| text.get(range.start..range.end))
-                                .map(str::to_string),
-                        )
-                    }),
-                ),
+                } => {
+                    let (vis_start, vis_end) = displayable_range(text);
+                    let display_text = &text[vis_start..vis_end];
+                    append_text_with_rebased_elements(
+                        &mut message,
+                        &mut text_elements,
+                        display_text,
+                        current_text_elements.iter().filter_map(|element| {
+                            let range = element.byte_range.clone();
+                            if range.end <= vis_start || range.start >= vis_end {
+                                return None;
+                            }
+                            let start = range.start.saturating_sub(vis_start);
+                            let end = range.end.min(vis_end).saturating_sub(vis_start);
+                            let shifted = ByteRange { start, end };
+                            Some(TextElement::new(
+                                shifted,
+                                element
+                                    .placeholder()
+                                    .or_else(|| display_text.get(start..end))
+                                    .map(str::to_string),
+                            ))
+                        }),
+                    );
+                }
                 UserInput::Image { url } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path } => local_images.push(path.clone()),
                 UserInput::Skill { .. }
@@ -156,59 +224,4 @@ impl ChatWidget {
             remote_image_urls,
         )
     }
-}
-
-/// Strip the reading-view follow-up wrapper from a user message so chat
-/// history shows just the user's typed question.
-///
-/// The reading view's `submit_follow_up` builds a turn that looks like:
-///
-/// ```text
-/// [The user is reading "<title>" and asked about the section titled "<heading>"]
-///
-/// <user's actual question>
-///
-/// <!-- READER_TOOL_INSTRUCTIONS -->
-/// Tool target for this turn: ...
-/// ```
-///
-/// The agent needs the whole thing, but the user already sees the
-/// document and the question they typed in the reading-view composer; the
-/// header + tool instructions add no value in chat history and on a
-/// constrained TTY they overwrite the reading view's body when a stale
-/// frame draws on top. Cut at the sentinel and keep just the question.
-///
-/// Also strips the close-feedback message entirely so it doesn't appear
-/// as a phantom user turn after the user dismisses the reader.
-///
-/// `text_elements` are byte-range-anchored to the original message; we
-/// drop them when we substitute a substring because the original ranges
-/// are no longer valid against the new text.
-fn strip_reader_view_wrapper_for_display(
-    message: String,
-    text_elements: Vec<TextElement>,
-) -> (String, Vec<TextElement>) {
-    if message.starts_with("[The user closed the document reader") {
-        return (String::new(), Vec::new());
-    }
-
-    const READER_INSTR_SENTINEL: &str = "<!-- READER_TOOL_INSTRUCTIONS -->";
-    if message.starts_with("[The user is reading")
-        && let Some(cut) = message.find(READER_INSTR_SENTINEL)
-    {
-        let before_sentinel = &message[..cut];
-        let question = if let Some(bracket_end) = before_sentinel.find("]\n\n") {
-            let after_header = &before_sentinel[bracket_end + 3..];
-            if let Some(para_end) = after_header.find("\n\n") {
-                after_header[..para_end].trim().to_string()
-            } else {
-                after_header.trim().to_string()
-            }
-        } else {
-            before_sentinel.trim().to_string()
-        };
-        return (question, Vec::new());
-    }
-
-    (message, text_elements)
 }

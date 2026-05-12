@@ -91,6 +91,85 @@ enum SkillConfigSelector {
     Path(PathBuf),
 }
 
+/// Produces a config edit that sets `[voice_mode] enabled = <bool>`.
+pub fn voice_mode_enabled_edit(enabled: bool) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".to_string(), "enabled".to_string()],
+        value: value(enabled),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode] tts_enabled = <bool>`.
+pub fn voice_mode_tts_edit(enabled: bool) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".to_string(), "tts_enabled".to_string()],
+        value: value(enabled),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode] stt_enabled = <bool>`.
+pub fn voice_mode_stt_edit(enabled: bool) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".to_string(), "stt_enabled".to_string()],
+        value: value(enabled),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode.elevenlabs] api_key = "<key>"`.
+pub fn voice_mode_elevenlabs_api_key_edit(key: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".into(), "elevenlabs".into(), "api_key".into()],
+        value: value(key),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode.elevenlabs] language_code = "<code>"`.
+pub fn voice_mode_elevenlabs_language_edit(code: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec![
+            "voice_mode".into(),
+            "elevenlabs".into(),
+            "language_code".into(),
+        ],
+        value: value(code),
+    }
+}
+
+/// Removes `[voice_mode.elevenlabs] language_code` (auto-detect).
+pub fn voice_mode_elevenlabs_language_clear() -> ConfigEdit {
+    ConfigEdit::ClearPath {
+        segments: vec![
+            "voice_mode".into(),
+            "elevenlabs".into(),
+            "language_code".into(),
+        ],
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode.elevenlabs] speed = <speed>`.
+pub fn voice_mode_elevenlabs_speed_edit(speed: f64) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".into(), "elevenlabs".into(), "speed".into()],
+        value: value(speed),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode] verbosity = "<verbosity>"`.
+pub fn voice_mode_verbosity_edit(verbosity: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".into(), "verbosity".into()],
+        value: value(verbosity),
+    }
+}
+
+/// Produces a config edit that sets `[voice_mode] tts_backend = "<backend>"`.
+pub fn voice_mode_tts_backend_edit(backend: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["voice_mode".into(), "tts_backend".into()],
+        value: value(backend),
+    }
+}
+
 /// Produces a config edit that sets `[tui].theme = "<name>"`.
 pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {

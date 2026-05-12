@@ -214,6 +214,17 @@ const TUI_STUB_MESSAGE: &str = "Not available in TUI yet.";
 ///
 /// The match is exhaustive so that adding a new `TerminalName` variant forces
 /// an explicit decision about which binding that terminal should use.
+/// True iff `text` is a synthetic prompt the TUI injects on behalf of the
+/// user (reading-view question wrapper, document-closed feedback, voice-mode
+/// preambles). Those are kept in the model payload but never go into the
+/// per-thread up-arrow history.
+fn is_system_injected_user_text(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("[The user closed the document reader")
+        || t.starts_with("[The user is reading ")
+        || t.starts_with("[VOICE MODE")
+}
+
 fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyBinding {
     if matches!(
         terminal_info.multiplexer.as_ref(),
@@ -2361,17 +2372,41 @@ impl ChatWidget {
             && let Some(message) = message
             && !message.is_empty()
         {
-            // Forward to TTS in the no-stream-controller branch only; the
-            // delta path below already covers the streamed case.
             #[cfg(not(target_os = "linux"))]
-            if let Some(tts) = self.tts.as_ref() {
+            let voice_active = self
+                .voice_mode_state
+                .as_ref()
+                .is_some_and(voice_mode::VoiceModeState::is_active);
+
+            #[cfg(not(target_os = "linux"))]
+            let display = {
+                let from_replay = true;
+                self.on_voice_mode_agent_delta(message, from_replay)
+                    .unwrap_or_else(|| crate::text_formatting::strip_voice_tags(message))
+            };
+            #[cfg(target_os = "linux")]
+            let display = crate::text_formatting::strip_voice_tags(message);
+
+            // Only route through the upstream simple-TTS manager when ATA
+            // voice mode is NOT active. ATA voice mode owns the audio
+            // pipeline (via `<voice>` tags + tts_worker_loop).
+            #[cfg(not(target_os = "linux"))]
+            if !voice_active && let Some(tts) = self.tts.as_ref() {
                 tts.enqueue_text(message);
             }
-            self.handle_streaming_delta(message.to_string());
+            self.handle_streaming_delta(display);
         }
         #[cfg(not(target_os = "linux"))]
-        if let Some(tts) = self.tts.as_ref() {
-            tts.flush();
+        {
+            let voice_active = self
+                .voice_mode_state
+                .as_ref()
+                .is_some_and(voice_mode::VoiceModeState::is_active);
+            if voice_active {
+                self.on_voice_mode_turn_complete();
+            } else if let Some(tts) = self.tts.as_ref() {
+                tts.flush();
+            }
         }
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
@@ -2380,7 +2415,20 @@ impl ChatWidget {
 
     fn on_agent_message_delta(&mut self, delta: String) {
         #[cfg(not(target_os = "linux"))]
-        if let Some(tts) = self.tts.as_ref() {
+        let voice_active = self
+            .voice_mode_state
+            .as_ref()
+            .is_some_and(voice_mode::VoiceModeState::is_active);
+
+        #[cfg(not(target_os = "linux"))]
+        let delta = {
+            let from_replay = false;
+            self.on_voice_mode_agent_delta(&delta, from_replay)
+                .unwrap_or_else(|| crate::text_formatting::strip_voice_tags(&delta))
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        if !voice_active && let Some(tts) = self.tts.as_ref() {
             tts.enqueue_text(&delta);
         }
         self.handle_streaming_delta(delta);
@@ -5306,6 +5354,36 @@ impl ChatWidget {
                 }
                 return;
             }
+            // Space: push-to-talk when voice mode is active and STT is enabled.
+            // Intercept before the composer handler so PTT works during agent
+            // turns and idle. Skip when the composer has text (user is
+            // typing), or when a blocking popup is active.
+            #[cfg(not(target_os = "linux"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.bottom_pane.ptt_space_allowed()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.is_active() && s.stt_enabled && !s.tts_only)
+                && !self.is_main_composer_typing() =>
+            {
+                match kind {
+                    KeyEventKind::Press => self.on_ptt_press(),
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
+                return;
+            }
             other if other.kind == KeyEventKind::Press => {
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.quit_shortcut_expires_at = None;
@@ -5848,9 +5926,29 @@ impl ChatWidget {
             });
         }
 
+        #[cfg(not(target_os = "linux"))]
+        let voice_prefix: Option<&'static str> = {
+            let state = self.voice_mode_state.as_ref();
+            if state.is_some_and(|s| s.is_active() && s.tts_enabled) {
+                let verbosity = state.map(|s| s.verbosity).unwrap_or_default();
+                Some(crate::chatwidget::voice_mode::voice_mode_instruction(
+                    verbosity,
+                ))
+            } else {
+                None
+            }
+        };
+        #[cfg(target_os = "linux")]
+        let voice_prefix: Option<&'static str> = None;
+
         if !text.is_empty() {
+            let model_text = if let Some(prefix) = voice_prefix {
+                format!("{prefix}{text}")
+            } else {
+                text.clone()
+            };
             items.push(UserInput::Text {
-                text: text.clone(),
+                text: model_text,
                 text_elements: app_server_text_elements(&text_elements),
             });
         }
@@ -6051,7 +6149,9 @@ impl ChatWidget {
                 None
             }
         };
-        if let Some(history_text) = history_text {
+        if let Some(history_text) = history_text
+            && !is_system_injected_user_text(&history_text)
+        {
             self.append_message_history_entry(history_text);
         }
 
@@ -10850,6 +10950,21 @@ impl ChatWidget {
     pub(crate) fn should_handle_vim_insert_escape(&self, key_event: KeyEvent) -> bool {
         self.bottom_pane
             .composer_should_handle_vim_insert_escape(key_event)
+    }
+
+    /// True iff the user is actively typing in the main composer. Used to
+    /// suppress Space-as-PTT when Space would otherwise insert into text.
+    /// Whitespace-only content is treated as empty so a stale trailing space
+    /// from a quick PTT tap doesn't block subsequent PTT activations.
+    #[cfg(not(target_os = "linux"))]
+    fn is_main_composer_typing(&self) -> bool {
+        self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.composer_is_empty()
+            && self
+                .bottom_pane
+                .composer_text()
+                .chars()
+                .any(|c| !c.is_whitespace())
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {

@@ -878,6 +878,7 @@ impl Tui {
     pub fn draw_with_resize_reflow(
         &mut self,
         height: u16,
+        force_full_repaint: bool,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
         // If we are resuming from ^Z, we need to prepare the resume action now so we can apply it
@@ -887,7 +888,7 @@ impl Tui {
             .suspend_context
             .prepare_resume_action(&mut self.terminal, &mut self.alt_saved_viewport);
 
-        stdout().sync_update(|_| {
+        let _ = stdout().sync_update(|_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -903,8 +904,8 @@ impl Tui {
             )?;
             needs_full_repaint |= flushed_history;
 
-            if needs_full_repaint {
-                terminal.invalidate_viewport();
+            if needs_full_repaint || force_full_repaint {
+                terminal.force_full_repaint_next_frame();
             }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
@@ -924,7 +925,8 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        })?;
+        Ok(())
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {

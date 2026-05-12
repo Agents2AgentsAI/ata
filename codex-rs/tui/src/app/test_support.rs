@@ -41,6 +41,8 @@ pub(super) async fn make_test_app() -> App {
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
+        reader_alt_screen_active: false,
+        force_repaint_frames: 0,
         feedback: codex_feedback::CodexFeedback::new(),
         feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

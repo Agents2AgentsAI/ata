@@ -20,7 +20,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
@@ -3010,12 +3009,23 @@ impl Renderable for DocumentReaderView {
         // Clear the reading view area and any inset gap row above (the
         // chatwidget adds a 1-row top inset to the bottom pane; when the
         // reading view fills the terminal that gap can show residual content).
+        // Write an explicit space + default style to every cell — ratatui's
+        // Clear widget calls `cell.reset()` which leaves the symbol as default,
+        // and the subsequent diff renderer treats default-vs-default cells as
+        // unchanged. That skips writes to cells holding stale tmux content
+        // from before the resize, producing the character-interleaving bug.
         let clear_area = if area.y > 0 {
             Rect::new(area.x, area.y - 1, area.width, area.height + 1)
         } else {
             area
         };
-        Clear.render(clear_area, buf);
+        for y in clear_area.top()..clear_area.bottom() {
+            for x in clear_area.left()..clear_area.right() {
+                let cell = &mut buf[(x, y)];
+                cell.reset();
+                cell.set_symbol(" ");
+            }
+        }
 
         let w = area.width;
         let section_count = self.sections.len();
@@ -3840,6 +3850,12 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
     let mut current_content = String::new();
 
     for line in content.lines() {
+        // Hidden machine-readable section metadata emitted by the server
+        // (foldable flag, agent summary). Strip before rendering.
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- CODEX_SECTION_META ") && trimmed.ends_with(" -->") {
+            continue;
+        }
         if let Some(heading_text) = line.strip_prefix("## ") {
             // Flush the previous section.
             sections.push(DocumentSection {

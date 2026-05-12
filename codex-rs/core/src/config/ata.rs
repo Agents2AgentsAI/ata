@@ -66,6 +66,17 @@ pub enum VoiceVerbosity {
     Verbose,
 }
 
+/// Which TTS backend voice mode should use.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TtsBackend {
+    /// ElevenLabs cloud TTS via WebSocket — high quality, requires API key.
+    #[default]
+    Elevenlabs,
+    /// macOS built-in `say` command — no network, no API key, no karaoke.
+    Say,
+}
+
 /// Output mode for the voice mode pipeline.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +110,8 @@ pub struct VoiceModeToml {
     pub stt_enabled: Option<bool>,
     /// Controls how much the agent narrates: "concise" or "verbose".
     pub verbosity: Option<VoiceVerbosity>,
+    /// Which TTS backend to use: "elevenlabs" or "say".
+    pub tts_backend: Option<TtsBackend>,
     /// ElevenLabs API settings (api_key, voice_id, language, speed).
     #[serde(default)]
     pub elevenlabs: Option<codex_config::config_toml::ElevenLabsToml>,

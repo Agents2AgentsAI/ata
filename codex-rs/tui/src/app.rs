@@ -472,6 +472,15 @@ pub(crate) struct App {
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
     pub(crate) backtrack_render_pending: bool,
+    /// True iff we've entered the alternate screen specifically for the
+    /// document reader. Tracks the transition so we leave alt-screen when the
+    /// reader closes.
+    reader_alt_screen_active: bool,
+    /// Countdown of frames remaining to force-full-repaint. Set to a small
+    /// number on resize so we keep forcing fresh writes for several frames,
+    /// outlasting any tmux pane reflow that might be overwriting our cells
+    /// asynchronously after the resize event fires.
+    pub(crate) force_repaint_frames: u8,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
@@ -888,6 +897,8 @@ See the Codex keymap documentation for supported actions and examples."
             terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
+            reader_alt_screen_active: false,
+            force_repaint_frames: 0,
             feedback: feedback.clone(),
             feedback_audience,
             environment_manager,
@@ -1115,6 +1126,93 @@ See the Codex keymap documentation for supported actions and examples."
                         self.backtrack_render_pending = false;
                         self.render_transcript_once(tui);
                     }
+                    // Mirror the document reader's open/closed state into
+                    // the alternate screen so the reader owns the full
+                    // terminal (no scrollback bleed, no resize ghosts).
+                    let reader_active = self.chat_widget.is_document_reader_active();
+                    if reader_active && !self.reader_alt_screen_active {
+                        let alt_ok = tui.is_alt_screen_active();
+                        match tui.enter_alt_screen() {
+                            Ok(()) => tracing::info!(
+                                "[READER-ALT] enter_alt_screen ok (was_active={alt_ok}, now_active={})",
+                                tui.is_alt_screen_active()
+                            ),
+                            Err(err) => {
+                                tracing::warn!("[READER-ALT] enter_alt_screen failed: {err}")
+                            }
+                        }
+                        self.reader_alt_screen_active = true;
+                    } else if !reader_active && self.reader_alt_screen_active {
+                        let _ = tui.leave_alt_screen();
+                        self.reader_alt_screen_active = false;
+                        // Flush any history lines that arrived while the
+                        // reader owned the screen, now that the inline
+                        // viewport is back.
+                        let pending = std::mem::take(&mut self.deferred_history_lines);
+                        if !pending.is_empty() {
+                            tui.insert_history_lines_with_wrap_policy(
+                                pending,
+                                self.history_line_wrap_policy(),
+                            );
+                        }
+                    }
+                    // On any size change while the reader is active, poison
+                    // the previous_buffer so ratatui's diff treats every
+                    // cell as changed in the next frame. Without this, cells
+                    // that the reader doesn't paint to (e.g. trailing
+                    // padding) match the default-space cells in
+                    // previous_buffer and the diff skips them, leaving the
+                    // terminal's stale cells visible.
+                    if reader_active {
+                        let current_size = tui.terminal.size().ok();
+                        let last_size = tui.terminal.last_known_screen_size;
+                        let size_changed = current_size.is_some_and(|s| {
+                            s.width != last_size.width || s.height != last_size.height
+                        });
+                        if matches!(event, TuiEvent::Resize) || size_changed {
+                            tui.terminal.force_full_repaint_next_frame();
+                        }
+                    }
+                    if reader_active && tui.is_alt_screen_active() {
+                        let current_size = tui.terminal.size().ok();
+                        let last_size = tui.terminal.last_known_screen_size;
+                        let size_changed = current_size.is_some_and(|s| {
+                            s.width != last_size.width || s.height != last_size.height
+                        });
+                        if matches!(event, TuiEvent::Resize) || size_changed {
+                            // Write spaces to every cell so tmux's alt-screen
+                            // buffer is positively wiped before ratatui's
+                            // diff renderer takes over. The Clear ANSI plus
+                            // a per-row blank write defeats tmux's reflow
+                            // bringing in stale rows. We deliberately do NOT
+                            // bounce alt-screen — leaving it momentarily
+                            // exposes the normal screen and re-entering can
+                            // carry that content into the new alt-screen
+                            // buffer.
+                            let size = tui.terminal.size().ok();
+                            let backend = tui.terminal.backend_mut();
+                            let _ = crossterm::queue!(
+                                backend,
+                                crossterm::cursor::MoveTo(0, 0),
+                                crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+                            );
+                            if let Some(size) = size {
+                                for y in 0..size.height {
+                                    let _ = crossterm::queue!(
+                                        backend,
+                                        crossterm::cursor::MoveTo(0, y),
+                                        crossterm::style::Print(" ".repeat(size.width as usize)),
+                                    );
+                                }
+                            }
+                            let _ = crossterm::queue!(backend, crossterm::cursor::MoveTo(0, 0),);
+                            let _ = std::io::Write::flush(backend);
+                        }
+                        // Force the next frame to repaint every cell so
+                        // anything tmux smuggled in via reflow gets
+                        // overwritten cleanly.
+                        tui.terminal.invalidate_viewport();
+                    }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
@@ -1126,8 +1224,32 @@ See the Codex keymap documentation for supported actions and examples."
                     self.chat_widget.pre_draw_tick();
                     let desired_height =
                         self.chat_widget.desired_height(tui.terminal.size()?.width);
+                    // When the reader is active and we just detected a
+                    // resize, force MULTIPLE consecutive frames to fully
+                    // repaint. tmux's pane reflow can run asynchronously
+                    // and overwrite our cells after the resize event
+                    // fires; by forcing a few frames in a row we
+                    // out-wait that reflow and leave our content as the
+                    // last-written state.
+                    let resize_detected = reader_active
+                        && (matches!(event, TuiEvent::Resize)
+                            || tui.terminal.size().is_ok_and(|s| {
+                                let last = tui.terminal.last_known_screen_size;
+                                s.width != last.width || s.height != last.height
+                            }));
+                    if resize_detected {
+                        self.force_repaint_frames = 6;
+                    }
+                    let force_full_repaint = self.force_repaint_frames > 0;
+                    if self.force_repaint_frames > 0 {
+                        self.force_repaint_frames -= 1;
+                        // Schedule a follow-up frame so we keep repainting
+                        // even when no other input arrives. 33ms ≈ 30fps.
+                        tui.frame_requester()
+                            .schedule_frame_in(std::time::Duration::from_millis(33));
+                    }
                     if terminal_resize_reflow_enabled {
-                        tui.draw_with_resize_reflow(desired_height, |frame| {
+                        tui.draw_with_resize_reflow(desired_height, force_full_repaint, |frame| {
                             let area = frame.area();
                             self.chat_widget.render(area, frame.buffer);
                             if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
