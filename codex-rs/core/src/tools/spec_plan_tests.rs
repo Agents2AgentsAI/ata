@@ -239,6 +239,7 @@ fn research_toolkit_registration_respects_feature_gates() {
                 wait_agent_timeouts: wait_agent_timeout_options(),
                 tool_search_entries: &[],
                 research_toolkit: Some(&research_toolkit),
+                data_toolkit: None,
                 #[cfg(any(feature = "lsp", feature = "treesitter"))]
                 multi_root_state: None,
             },
@@ -2419,6 +2420,7 @@ fn build_specs_with_optional_tool_namespaces<'a>(
             wait_agent_timeouts: wait_agent_timeout_options(),
             tool_search_entries: &[],
             research_toolkit: None,
+            data_toolkit: None,
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: None,
         },

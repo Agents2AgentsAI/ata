@@ -170,11 +170,25 @@ pub struct ResearchToolsToml {
     pub zotero_storage_dir: Option<String>,
 }
 
+/// Data tools configuration parsed from `[data]` in config.toml. Layered on
+/// top of env-var-resolved `DataConfig` defaults; any field left as `None`
+/// falls back to the env-var value or codex-home secret.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DataToolsToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huggingface_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kaggle_username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kaggle_key: Option<String>,
+}
+
 /// ATA-side `crate::config::types::*` re-exports. Upstream's
 /// `codex_config::types::*` items are not affected.
 pub mod ata;
 
 pub mod types {
+    pub use super::DataToolsToml;
     pub use super::ReadingViewToml;
     pub use super::ResearchToolsToml;
     pub use super::ata::AtaAccountConfig;

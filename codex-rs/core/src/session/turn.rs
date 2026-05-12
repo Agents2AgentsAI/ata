@@ -1326,6 +1326,7 @@ pub(crate) async fn built_tools(
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
             research_toolkit: turn_context.research_toolkit.as_ref(),
+            data_toolkit: turn_context.data_toolkit.as_ref(),
             #[cfg(any(feature = "lsp", feature = "treesitter"))]
             multi_root_state: sess.services.multi_root_state.as_ref(),
         },

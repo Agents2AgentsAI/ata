@@ -2522,6 +2522,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-data-tools",
  "codex-elevenlabs",
  "codex-exec-server",
  "codex-execpolicy",

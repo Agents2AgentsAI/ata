@@ -86,6 +86,7 @@ pub(crate) struct TurnContext {
     pub(crate) tools_config: ToolsConfig,
     pub(crate) features: ManagedFeatures,
     pub(crate) research_toolkit: Option<Arc<crate::research::SharedResearchToolkit>>,
+    pub(crate) data_toolkit: Option<Arc<crate::data::SharedDataToolkit>>,
     /// Resolved knowledge-base root for this turn, derived from
     /// `CODEX_KB_PATH` in the per-turn shell environment. When `Some`,
     /// `tools/runtimes/build_sandbox_command` automatically extends each
@@ -277,6 +278,7 @@ impl TurnContext {
             tools_config,
             features,
             research_toolkit: self.research_toolkit.clone(),
+            data_toolkit: self.data_toolkit.clone(),
             workspace_kb_root: self.workspace_kb_root.clone(),
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -596,6 +598,22 @@ impl Session {
                 research_config,
             ))
         });
+        let data_toolkit = tools_config.data_tools_enabled.then(|| {
+            let effective_config = per_turn_config.config_layer_stack.effective_config();
+            let data_toml: Option<crate::config::DataToolsToml> = effective_config
+                .as_table()
+                .and_then(|table| table.get("data"))
+                .and_then(|value| value.clone().try_into().ok());
+            let data_config = crate::tools::handlers::build_data_config(
+                data_toml.as_ref(),
+                per_turn_config.codex_home.as_path(),
+                cwd.as_path(),
+            );
+            Arc::new(codex_data_tools::DataToolkit::new(
+                codex_login::default_client::build_reqwest_client(),
+                data_config,
+            ))
+        });
 
         let per_turn_config = Arc::new(per_turn_config);
         // Resolve a sandbox-writable KB root from the per-turn shell
@@ -651,6 +669,7 @@ impl Session {
             tools_config,
             features: per_turn_config.features.clone(),
             research_toolkit,
+            data_toolkit,
             workspace_kb_root,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
