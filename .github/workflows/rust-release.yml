@@ -1,15 +1,15 @@
 # Release workflow for codex-rs.
 # To release, follow a workflow like:
 # ```
-# git tag -a rust-v0.1.0 -m "Release 0.1.0"
-# git push origin rust-v0.1.0
+# git tag -a v0.1.0 -m "Release 0.1.0"
+# git push origin v0.1.0
 # ```
 
 name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      - "v*.*.*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,11 +30,11 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#rust-v}"
+          tag_ver="${GITHUB_REF_NAME#v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -579,8 +579,8 @@ jobs:
         id: release_name
         run: |
           # Extract the version from the tag name, which is in the format
-          # "rust-v0.1.0".
-          version="${GITHUB_REF_NAME#rust-v}"
+          # "v0.1.0".
+          version="${GITHUB_REF_NAME#v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
