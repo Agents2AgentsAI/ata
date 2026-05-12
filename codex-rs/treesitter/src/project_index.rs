@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use ignore::gitignore::Gitignore;
 use ignore::gitignore::GitignoreBuilder;
 
@@ -32,6 +34,7 @@ pub struct ProjectIndex {
     extra_ignores: Option<Gitignore>,
     file_tree: FileTree,
     symbol_table: SymbolTable,
+    content_cache: Option<Arc<DashMap<String, Arc<String>>>>,
 }
 
 impl ProjectIndex {
@@ -56,6 +59,7 @@ impl ProjectIndex {
             extra_ignores,
             file_tree,
             symbol_table,
+            content_cache: None,
         };
 
         if index.config.persist_annotations
@@ -136,6 +140,10 @@ impl ProjectIndex {
         ops::search_symbols(&self.symbol_table, query, limit)
     }
 
+    pub fn build_callers_index(&self) -> ops::CallersIndex {
+        ops::build_callers_index(&self.root, &self.file_tree)
+    }
+
     pub fn list_symbols(
         &self,
         kind: Option<SymbolKind>,
@@ -161,13 +169,61 @@ impl ProjectIndex {
         )
     }
 
+    pub fn find_callers_at(
+        &self,
+        symbol: &str,
+        rel_file: &str,
+        limit: usize,
+        byte_offset: usize,
+    ) -> Result<ops::CallersResult, String> {
+        ops::find_callers_at(
+            &self.root,
+            &self.file_tree,
+            &self.symbol_table,
+            symbol,
+            rel_file,
+            limit,
+            byte_offset,
+        )
+    }
+
     pub fn find_tests(
         &self,
         symbol: &str,
         rel_file: &str,
         limit: usize,
     ) -> Result<ops::TestsResult, String> {
-        ops::find_tests(&self.root, &self.symbol_table, symbol, rel_file, limit)
+        ops::find_tests(
+            &self.root,
+            &self.symbol_table,
+            symbol,
+            rel_file,
+            limit,
+            self.content_cache.as_ref(),
+        )
+    }
+
+    pub fn enable_content_cache(&mut self) {
+        if self.content_cache.is_none() {
+            self.content_cache = Some(Arc::new(DashMap::new()));
+        }
+    }
+
+    pub fn find_tests_at(
+        &self,
+        symbol: &str,
+        rel_file: &str,
+        limit: usize,
+        byte_offset: usize,
+    ) -> Result<ops::TestsResult, String> {
+        ops::find_tests_at(
+            &self.root,
+            &self.symbol_table,
+            symbol,
+            rel_file,
+            limit,
+            byte_offset,
+        )
     }
 
     pub fn list_variables(
@@ -178,8 +234,38 @@ impl ProjectIndex {
         ops::list_variables(&self.root, &self.symbol_table, function, rel_file)
     }
 
+    pub fn list_variables_at(
+        &self,
+        function: &str,
+        rel_file: &str,
+        byte_offset: usize,
+    ) -> Result<Vec<VariableInfo>, String> {
+        ops::list_variables_at(
+            &self.root,
+            &self.symbol_table,
+            function,
+            rel_file,
+            byte_offset,
+        )
+    }
+
     pub fn implementation(&self, symbol: &str, rel_file: &str) -> Result<String, String> {
         ops::get_implementation(&self.root, &self.symbol_table, symbol, rel_file)
+    }
+
+    pub fn implementation_at(
+        &self,
+        symbol: &str,
+        rel_file: &str,
+        byte_offset: usize,
+    ) -> Result<String, String> {
+        ops::get_implementation_at(
+            &self.root,
+            &self.symbol_table,
+            symbol,
+            rel_file,
+            byte_offset,
+        )
     }
 
     pub fn define_symbol(
@@ -191,6 +277,18 @@ impl ProjectIndex {
     ) -> Result<(), String> {
         self.symbol_table
             .set_definition(rel_file, symbol, definition, overwrite)
+    }
+
+    pub fn define_symbol_at(
+        &self,
+        symbol: &str,
+        rel_file: &str,
+        byte_offset: usize,
+        definition: &str,
+        overwrite: bool,
+    ) -> Result<(), String> {
+        self.symbol_table
+            .set_definition_at(rel_file, symbol, byte_offset, definition, overwrite)
     }
 
     pub fn define_file(
@@ -306,4 +404,59 @@ fn build_extra_ignores(
         .build()
         .map(Some)
         .map_err(|error| TreeSitterError::InvalidIgnorePattern(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+
+    fn write_source(root: &Path, rel_path: &str, source: &str) {
+        let abs = root.join(rel_path);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent).expect("create parent directory");
+        }
+        std::fs::write(abs, source).expect("write source");
+    }
+
+    #[cfg(feature = "rust")]
+    #[test]
+    fn implementation_at_disambiguates_duplicate_symbol_names() {
+        let dir = tempdir().expect("tempdir");
+        let source = r#"
+struct Alpha;
+impl Alpha {
+    fn duplicate(&self) -> i32 {
+        1
+    }
+}
+
+struct Beta;
+impl Beta {
+    fn duplicate(&self) -> i32 {
+        2
+    }
+}
+"#;
+        write_source(dir.path(), "src/lib.rs", source);
+
+        let index = ProjectIndex::new(dir.path().to_path_buf()).expect("index");
+        assert_eq!(
+            index.file_tree().all_paths(),
+            vec!["src/lib.rs".to_string()]
+        );
+        let second_duplicate = source
+            .match_indices("fn duplicate")
+            .nth(1)
+            .map(|(offset, _)| offset)
+            .expect("second duplicate definition");
+
+        let implementation = index
+            .implementation_at("duplicate", "src/lib.rs", second_duplicate)
+            .expect("resolve second implementation");
+
+        assert!(implementation.contains("2"));
+        assert!(!implementation.contains("1"));
+    }
 }

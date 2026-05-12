@@ -60,8 +60,8 @@ pub enum Command {
 
     /// Set active workspace.
     Select {
-        /// Workspace ID to select.
-        id: String,
+        /// Workspace selector: ID, exact name, or slugified name.
+        selector: String,
     },
 
     /// Remove workspace directory tree.
@@ -262,6 +262,27 @@ pub enum Command {
         workspace: Option<String>,
     },
 
+    /// Copy a paper markdown file into the workspace and register it by alias.
+    AddPaper {
+        /// Path to the extracted markdown/text file for the paper.
+        text_md_path: String,
+        /// Alias exposed as @papers/<alias>.
+        #[arg(long)]
+        alias: String,
+        /// Optional display title. Defaults to the first markdown heading or file stem.
+        #[arg(long)]
+        title: Option<String>,
+        /// Optional DOI metadata.
+        #[arg(long)]
+        doi: Option<String>,
+        /// Optional path to the original PDF to store alongside the markdown.
+        #[arg(long)]
+        pdf_path: Option<String>,
+        /// Workspace ID (default: resolved).
+        #[arg(long)]
+        workspace: Option<String>,
+    },
+
     /// Remove an entry by ID from a manifest collection.
     RemoveEntry {
         /// Collection name.
@@ -398,9 +419,9 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
             Ok(0)
         }
 
-        Command::Select { id } => {
-            commands::select::run(&id)?;
-            println!("selected: {id}");
+        Command::Select { selector } => {
+            let wid = commands::select::run(&selector)?;
+            println!("selected: {wid}");
             Ok(0)
         }
 
@@ -558,6 +579,27 @@ fn dispatch(cli: Cli) -> Result<i32, WorkspaceError> {
         } => {
             let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
             let manifest = commands::add_entry::run(&wid, &collection, &json)?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            Ok(0)
+        }
+
+        Command::AddPaper {
+            text_md_path,
+            alias,
+            title,
+            doi,
+            pdf_path,
+            workspace,
+        } => {
+            let wid = workspace_resolution::resolve_workspace(workspace.as_deref())?;
+            let manifest = commands::add_paper::run(
+                &wid,
+                std::path::Path::new(&text_md_path),
+                &alias,
+                title.as_deref(),
+                doi.as_deref(),
+                pdf_path.as_deref().map(std::path::Path::new),
+            )?;
             println!("{}", serde_json::to_string_pretty(&manifest)?);
             Ok(0)
         }
@@ -1037,6 +1079,14 @@ fn workspace_command_catalog() -> &'static [WorkspaceCommandCatalogEntry] {
             aliases: &["append-entry", "add-resource"],
             tags: &["workspace", "manifest", "collection", "entry"],
             examples: &["add a paper or dataset entry to the workspace"],
+        },
+        WorkspaceCommandCatalogEntry {
+            command: "add-paper",
+            description: "Copy a paper markdown file into the workspace and register it by alias.",
+            core_args: &["text_md_path", "alias"],
+            aliases: &["paper-add", "register-paper"],
+            tags: &["workspace", "papers", "register", "references"],
+            examples: &["add a paper markdown file to the workspace"],
         },
         WorkspaceCommandCatalogEntry {
             command: "remove-entry",

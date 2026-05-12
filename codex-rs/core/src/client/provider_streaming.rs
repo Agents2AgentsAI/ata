@@ -1,6 +1,8 @@
-use codex_api::common::Reasoning;
-use codex_api::error::ApiError;
+use codex_api::ApiError;
+use codex_api::Reasoning;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -10,11 +12,10 @@ use reqwest::StatusCode;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::error::CodexErr;
-use crate::error::Result;
 use crate::util::redact_error_body;
 
 /// Maps an [`ApiError`] to the corresponding [`CodexErr`] variant,
@@ -137,7 +138,10 @@ where
         }
     });
 
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        consumer_dropped: CancellationToken::new(),
+    }
 }
 
 pub(super) fn spawn_provider_sse_stream_from_response<State, ParseEvent, ParseTrailing>(
@@ -166,7 +170,10 @@ where
         )
         .await;
     });
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        consumer_dropped: CancellationToken::new(),
+    }
 }
 
 async fn stream_provider_response<State, ParseEvent, ParseTrailing>(
@@ -224,6 +231,7 @@ async fn stream_provider_response<State, ParseEvent, ParseTrailing>(
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
                         token_usage: None,
+                        end_turn: None,
                     }))
                     .await;
                 return;

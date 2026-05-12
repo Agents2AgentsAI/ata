@@ -26,7 +26,7 @@ fn collab_mode_with_instructions(instructions: Option<&str>) -> CollaborationMod
     CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model: "gpt-5.1".to_string(),
+            model: "gpt-5.4".to_string(),
             reasoning_effort: None,
             developer_instructions: instructions.map(str::to_string),
         },
@@ -47,11 +47,14 @@ async fn read_rollout_text(path: &Path) -> anyhow::Result<String> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(err) => Err(err.into()),
+    // A session that never received a UserInput may not flush a rollout
+    // file at all; treat that as an empty rollout rather than erroring so
+    // tests that assert "the rollout does NOT contain X" can still verify
+    // the absence.
+    if !path.exists() {
+        return Ok(String::new());
     }
+    Ok(std::fs::read_to_string(path)?)
 }
 
 fn rollout_developer_texts(text: &str) -> Vec<String> {
@@ -121,15 +124,14 @@ async fn override_turn_context_without_user_turn_does_not_record_permissions_upd
             approval_policy: Some(AskForApproval::Never),
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
 
@@ -166,15 +168,14 @@ async fn override_turn_context_without_user_turn_does_not_record_environment_upd
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: None,
             personality: None,
-            feature_flags: None,
         })
         .await?;
 
@@ -208,15 +209,14 @@ async fn override_turn_context_without_user_turn_does_not_record_collaboration_u
             approval_policy: None,
             approvals_reviewer: None,
             sandbox_policy: None,
+            permission_profile: None,
             windows_sandbox_level: None,
             model: None,
-            model_provider: None,
             effort: None,
             summary: None,
             service_tier: None,
             collaboration_mode: Some(collaboration_mode),
             personality: None,
-            feature_flags: None,
         })
         .await?;
 

@@ -4,23 +4,25 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use anyhow::bail;
 use clap::Args;
 use clap::CommandFactory;
 use clap::Parser;
 use clap::Subcommand;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::research::build_research_config;
 use codex_research_tools::ResearchToolkit;
 use codex_research_tools::config::DEFAULT_LOCAL_ZOTERO_BASE_URL;
 use codex_research_tools::config::ResearchConfig;
+use codex_research_tools::types::Paper;
+use codex_research_tools::types::PaperSearchParams;
+use codex_research_tools::types::SearchResult;
 use codex_research_tools::types::ZoteroAddItemsToCollectionParams;
 use codex_research_tools::types::ZoteroAnnotationsParams;
 use codex_research_tools::types::ZoteroCitationParams;
 use codex_research_tools::types::ZoteroCollection;
 use codex_research_tools::types::ZoteroCollectionItemsParams;
 use codex_research_tools::types::ZoteroCollectionsParams;
+use codex_research_tools::types::ZoteroCreateAttachmentImportUrlParams;
 use codex_research_tools::types::ZoteroCreateAttachmentLinkParams;
 use codex_research_tools::types::ZoteroCreateCollectionParams;
 use codex_research_tools::types::ZoteroCreateItemsParams;
@@ -71,6 +73,9 @@ pub enum ZoteroCommand {
 
     /// Resolve one paper from Zotero and enrich it with document metadata.
     ResolvePaper(ResolvePaperArgs),
+
+    /// Add a paper to a Zotero collection, attach its PDF, and link a source repo when available.
+    AddPaper(AddPaperArgs),
 
     /// Find repository URLs in Zotero items, collections, or linked records.
     FindRepos(FindReposArgs),
@@ -156,6 +161,33 @@ pub struct ResolvePaperArgs {
 
     #[arg(long, default_value_t = 5)]
     pub limit: u32,
+
+    #[command(flatten)]
+    pub output: JsonOutputArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct AddPaperArgs {
+    #[arg(long, conflicts_with_all = ["doi", "arxiv", "url"], required_unless_present_any = ["doi", "arxiv", "url"])]
+    pub query: Option<String>,
+
+    #[arg(long, conflicts_with_all = ["query", "arxiv", "url"], required_unless_present_any = ["query", "arxiv", "url"])]
+    pub doi: Option<String>,
+
+    #[arg(long, conflicts_with_all = ["query", "doi", "url"], required_unless_present_any = ["query", "doi", "url"])]
+    pub arxiv: Option<String>,
+
+    #[arg(long, conflicts_with_all = ["query", "doi", "arxiv"], required_unless_present_any = ["query", "doi", "arxiv"])]
+    pub url: Option<String>,
+
+    #[arg(long)]
+    pub collection: String,
+
+    #[arg(long, default_value = "Source Repos")]
+    pub repo_collection: String,
+
+    #[command(flatten)]
+    pub scope: LibraryScopeArgs,
 
     #[command(flatten)]
     pub output: JsonOutputArgs,
@@ -375,6 +407,9 @@ pub struct AttachmentCli {
 pub enum AttachmentCommand {
     /// Create a linked attachment under an existing item.
     CreateLink(AttachmentCreateLinkArgs),
+
+    /// Import a URL as a stored attachment under an existing item.
+    ImportUrl(AttachmentImportUrlArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -534,6 +569,30 @@ pub struct AttachmentCreateLinkArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AttachmentImportUrlArgs {
+    #[arg(long)]
+    pub parent_item_key: String,
+
+    #[arg(long)]
+    pub title: String,
+
+    #[arg(long)]
+    pub url: String,
+
+    #[arg(long)]
+    pub content_type: Option<String>,
+
+    #[arg(long)]
+    pub filename: Option<String>,
+
+    #[arg(long, num_args = 1..)]
+    pub tags: Vec<String>,
+
+    #[command(flatten)]
+    pub scope: LibraryScopeArgs,
+}
+
+#[derive(Debug, Args)]
 pub struct JsonPayloadCommand {
     #[command(flatten)]
     pub payload: JsonPayloadArgs,
@@ -591,6 +650,8 @@ struct ZoteroStatusResult {
     api_key_configured: bool,
     library_type: Option<String>,
     library_id: Option<String>,
+    default_write_library_type: Option<String>,
+    default_write_library_id: Option<String>,
     user_id: Option<String>,
     group_id: Option<String>,
     alternate_mode: Option<ZoteroMode>,
@@ -603,6 +664,7 @@ struct ZoteroCollectionMatch {
     key: String,
     name: String,
     parent_collection: Option<String>,
+    scope: Option<ZoteroScopeRef>,
     score: u32,
 }
 
@@ -613,6 +675,12 @@ struct ZoteroResolvedPaperResult {
     warnings: Vec<String>,
     candidates: Vec<ZoteroItem>,
     best_match: Option<ZoteroItemDetail>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ZoteroScopeRef {
+    library_type: String,
+    library_id: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -631,6 +699,46 @@ struct ZoteroFindReposResult {
     warnings: Vec<String>,
     matched_collections: Vec<ZoteroCollectionMatch>,
     repos: Vec<ZoteroRepoMatch>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ZoteroAddPaperAttachmentResult {
+    item_key: Option<String>,
+    status: String,
+    url: Option<String>,
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ZoteroAddPaperRepoResult {
+    item_key: String,
+    title: String,
+    url: String,
+    status: String,
+    collection_key: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ZoteroAddPaperResult {
+    effective_mode: ZoteroMode,
+    scope: ZoteroScopeRef,
+    collection: ZoteroCollectionMatch,
+    paper_key: String,
+    paper_title: String,
+    paper_created: bool,
+    pdf: ZoteroAddPaperAttachmentResult,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<ZoteroAddPaperAttachmentResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repo: Option<ZoteroAddPaperRepoResult>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedExternalPaper {
+    paper: Paper,
+    warnings: Vec<String>,
 }
 
 pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
@@ -677,6 +785,16 @@ pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
                 print_pretty_json(&result)?;
             } else {
                 print_resolved_paper_compact(&result);
+            }
+            Ok(())
+        }
+        ZoteroCommand::AddPaper(args) => {
+            let context = load_zotero_context(&config_overrides).await?;
+            let result = add_paper(&context.primary, &args).await?;
+            if args.output.json {
+                print_pretty_json(&result)?;
+            } else {
+                print_add_paper_compact(&result);
             }
             Ok(())
         }
@@ -851,10 +969,11 @@ pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
         },
         ZoteroCommand::Collections(args) => {
             let toolkit = load_toolkit(&config_overrides).await?;
+            let requested_scope = explicit_scope(&args.scope);
             let output = toolkit
                 .zotero_get_collections(ZoteroCollectionsParams {
-                    library_type: args.scope.library_type,
-                    library_id: args.scope.library_id,
+                    library_type: args.scope.library_type.clone(),
+                    library_id: args.scope.library_id.clone(),
                     limit: args.limit,
                     offset: args.offset,
                 })
@@ -863,11 +982,16 @@ pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
                 let matches = output
                     .collections
                     .into_iter()
-                    .map(|collection| ZoteroCollectionMatch {
-                        key: collection.key,
-                        name: collection.name,
-                        parent_collection: collection.parent_collection,
-                        score: 0,
+                    .map(|collection| {
+                        let scope =
+                            scope_from_collection(&collection).or_else(|| requested_scope.clone());
+                        ZoteroCollectionMatch {
+                            key: collection.key,
+                            name: collection.name,
+                            parent_collection: collection.parent_collection,
+                            scope,
+                            score: 0,
+                        }
                     })
                     .collect::<Vec<_>>();
                 print_collection_matches_compact(&matches, &[]);
@@ -979,25 +1103,47 @@ pub async fn run_zotero_command(cli: ZoteroCli) -> Result<()> {
                     }
                 ))
             }
+            AttachmentCommand::ImportUrl(args) => {
+                let toolkit = load_toolkit(&config_overrides).await?;
+                print_json!(toolkit.zotero_create_attachment_import_url(
+                    ZoteroCreateAttachmentImportUrlParams {
+                        parent_item_key: args.parent_item_key,
+                        title: args.title,
+                        url: args.url,
+                        content_type: args.content_type,
+                        filename: args.filename,
+                        tags: (!args.tags.is_empty()).then_some(args.tags),
+                        library_type: args.scope.library_type,
+                        library_id: args.scope.library_id,
+                    }
+                ))
+            }
         },
     }
 }
 
 async fn load_research_config(config_overrides: &CliConfigOverrides) -> Result<ResearchConfig> {
-    let cli_kv_overrides = config_overrides
+    let cli_overrides = config_overrides
         .parse_overrides()
-        .map_err(anyhow::Error::msg)?;
-    let config = Config::load_with_cli_overrides_and_harness_overrides(
-        cli_kv_overrides,
-        ConfigOverrides::default(),
-    )
-    .await?;
-    let cwd = std::env::current_dir().context("resolve current directory")?;
-    Ok(build_research_config(
-        config.research.as_ref(),
-        &config.codex_home,
-        &cwd,
-    ))
+        .map_err(|e| anyhow!("invalid -c override: {e}"))?;
+    let cwd = std::env::current_dir().context("failed to read current working directory")?;
+
+    match codex_core::config::Config::load_with_cli_overrides(cli_overrides).await {
+        Ok(config) => {
+            let toml: Option<codex_core::config::types::ResearchToolsToml> = config
+                .config_layer_stack
+                .effective_config()
+                .as_table()
+                .and_then(|t| t.get("research"))
+                .and_then(|v| v.clone().try_into().ok());
+            Ok(codex_core::research::build_research_config(
+                toml.as_ref(),
+                config.codex_home.as_path(),
+                &cwd,
+            ))
+        }
+        Err(_) => Ok(ResearchConfig::from_env()),
+    }
 }
 
 async fn load_toolkit(config_overrides: &CliConfigOverrides) -> Result<ResearchToolkit> {
@@ -1052,6 +1198,20 @@ fn effective_library_id(config: &ResearchConfig) -> Option<String> {
     }
 }
 
+fn default_write_scope(config: &ResearchConfig) -> (Option<String>, Option<String>) {
+    match config.zotero_library_type.as_deref() {
+        Some("group") => (Some("group".to_string()), config.zotero_group_id.clone()),
+        Some("user") => (Some("user".to_string()), config.zotero_user_id.clone()),
+        _ => {
+            if let Some(user_id) = config.zotero_user_id.clone() {
+                (Some("user".to_string()), Some(user_id))
+            } else {
+                (Some("group".to_string()), config.zotero_group_id.clone())
+            }
+        }
+    }
+}
+
 fn build_status_result(
     primary: &ZoteroRuntime,
     alternate: Option<&ZoteroRuntime>,
@@ -1079,6 +1239,8 @@ fn build_status_result(
         api_key_configured: primary.config.has_zotero_api_key(),
         library_type: primary.config.zotero_library_type.clone(),
         library_id: effective_library_id(&primary.config),
+        default_write_library_type: default_write_scope(&primary.config).0,
+        default_write_library_id: default_write_scope(&primary.config).1,
         user_id: primary.config.zotero_user_id.clone(),
         group_id: primary.config.zotero_group_id.clone(),
         alternate_mode: alternate.map(|runtime| runtime.mode),
@@ -1190,31 +1352,975 @@ async fn resolve_paper_once(
     })
 }
 
+async fn add_paper(runtime: &ZoteroRuntime, args: &AddPaperArgs) -> Result<ZoteroAddPaperResult> {
+    let (target_collection, target_scope) =
+        resolve_target_collection(runtime, &args.collection, &args.scope).await?;
+    let target_scope_args = scope_args(&target_scope);
+
+    let resolved_paper = resolve_external_paper(runtime, args).await?;
+    let mut warnings = resolved_paper.warnings;
+    let existing_paper =
+        find_existing_paper_in_scope(runtime, &target_scope_args, &resolved_paper.paper).await?;
+
+    let (paper_key, paper_title, paper_created) = if let Some(existing) = existing_paper.as_ref() {
+        runtime
+            .toolkit
+            .zotero_add_items_to_collection(ZoteroAddItemsToCollectionParams {
+                collection_key: target_collection.key.clone(),
+                item_keys: vec![existing.key.clone()],
+                library_type: Some(target_scope.library_type.clone()),
+                library_id: Some(target_scope.library_id.clone()),
+            })
+            .await?;
+        (existing.key.clone(), existing.title.clone(), false)
+    } else {
+        let created = runtime
+            .toolkit
+            .zotero_create_items(ZoteroCreateItemsParams {
+                items: vec![paper_to_zotero_item(&resolved_paper.paper)],
+                library_type: Some(target_scope.library_type.clone()),
+                library_id: Some(target_scope.library_id.clone()),
+            })
+            .await?;
+        let record = created
+            .records
+            .into_iter()
+            .next()
+            .context("zotero_create_items returned no paper record")?;
+        runtime
+            .toolkit
+            .zotero_add_items_to_collection(ZoteroAddItemsToCollectionParams {
+                collection_key: target_collection.key.clone(),
+                item_keys: vec![record.key.clone()],
+                library_type: Some(target_scope.library_type.clone()),
+                library_id: Some(target_scope.library_id.clone()),
+            })
+            .await?;
+        (
+            record.key,
+            record
+                .title
+                .unwrap_or_else(|| resolved_paper.paper.title.clone()),
+            true,
+        )
+    };
+
+    let current_paper =
+        fetch_item_detail(runtime, &target_scope_args, &paper_key, true, false).await?;
+    let pdf = ensure_pdf_attachment(
+        runtime,
+        &target_scope_args,
+        &current_paper,
+        &resolved_paper.paper,
+    )
+    .await;
+    let pdf = match pdf {
+        Ok(result) => result,
+        Err(err) => {
+            warnings.push(format!("PDF attachment failed: {err}"));
+            ZoteroAddPaperAttachmentResult {
+                item_key: None,
+                status: "missing".to_string(),
+                url: paper_preferred_pdf_url(&resolved_paper.paper),
+                warning: Some(err.to_string()),
+            }
+        }
+    };
+
+    // The parent item URL remains the paper landing page. Do not add that same
+    // URL as a child attachment, because Zotero may open the linked webpage
+    // attachment instead of the PDF when the parent item is activated.
+    let snapshot = None;
+
+    let repo = ensure_repo_link(
+        runtime,
+        &target_scope,
+        &target_scope_args,
+        RepoLinkRequest {
+            repo_collection_name: &args.repo_collection,
+            paper_key: &paper_key,
+            paper_title: &paper_title,
+            paper: &resolved_paper.paper,
+            warnings: &mut warnings,
+        },
+    )
+    .await?;
+
+    Ok(ZoteroAddPaperResult {
+        effective_mode: runtime.mode,
+        scope: target_scope,
+        collection: target_collection,
+        paper_key,
+        paper_title,
+        paper_created,
+        pdf,
+        snapshot,
+        repo,
+        warnings,
+    })
+}
+
+async fn resolve_target_collection(
+    runtime: &ZoteroRuntime,
+    collection_ref: &str,
+    scope: &LibraryScopeArgs,
+) -> Result<(ZoteroCollectionMatch, ZoteroScopeRef)> {
+    let collections = fetch_all_collections(runtime, scope, 300).await?;
+    let requested_scope = explicit_scope(scope);
+    let resolved = resolve_collection_reference(
+        collections.as_slice(),
+        collection_ref,
+        requested_scope.as_ref(),
+    );
+    match resolved.as_slice() {
+        [] => bail!("No Zotero collection matched `{collection_ref}`."),
+        [collection] => {
+            let scope = collection
+                .scope
+                .clone()
+                .or_else(|| requested_scope.clone())
+                .with_context(|| {
+                    format!(
+                        "missing scope metadata for Zotero collection `{}`",
+                        collection.name
+                    )
+                })?;
+            Ok((collection.clone(), scope))
+        }
+        matches => {
+            let rendered = matches
+                .iter()
+                .map(|collection| {
+                    let suffix = collection
+                        .scope
+                        .as_ref()
+                        .map(|scope| format!(" [{}]", scope_label(scope)))
+                        .unwrap_or_default();
+                    format!("{}{}", collection.key, suffix)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Collection reference `{collection_ref}` matched multiple Zotero collections: {rendered}. Pass an exact collection key or scope."
+            )
+        }
+    }
+}
+
+async fn resolve_external_paper(
+    runtime: &ZoteroRuntime,
+    args: &AddPaperArgs,
+) -> Result<ResolvedExternalPaper> {
+    if let Some(doi) = args.doi.as_deref() {
+        return resolve_paper_by_doi(runtime, doi).await;
+    }
+    if let Some(arxiv) = args.arxiv.as_deref() {
+        return resolve_paper_by_arxiv(runtime, arxiv).await;
+    }
+    if let Some(url) = args.url.as_deref() {
+        if let Some(doi) = extract_doi_like(url) {
+            return resolve_paper_by_doi(runtime, doi.as_str()).await;
+        }
+        if let Some(arxiv) = extract_arxiv_like(url) {
+            return resolve_paper_by_arxiv(runtime, arxiv.as_str()).await;
+        }
+        return resolve_paper_by_url(runtime, url).await;
+    }
+
+    let query = args.query.as_deref().context("missing add-paper query")?;
+    resolve_paper_by_query(runtime, query).await
+}
+
+async fn resolve_paper_by_doi(runtime: &ZoteroRuntime, doi: &str) -> Result<ResolvedExternalPaper> {
+    let normalized_doi =
+        extract_doi_like(doi).with_context(|| format!("invalid DOI `{doi}` for add-paper"))?;
+    let mut warnings = Vec::new();
+    let search = search_external_papers(runtime, &normalized_doi, Some("openalex"), 10).await?;
+    warnings.extend(search.warnings);
+    if let Some(paper) = find_exact_doi_match(search.papers.as_slice(), normalized_doi.as_str()) {
+        return Ok(ResolvedExternalPaper {
+            paper: paper.clone(),
+            warnings,
+        });
+    }
+
+    let paper = runtime
+        .toolkit
+        .paper_get_metadata(normalized_doi.as_str())
+        .await
+        .with_context(|| {
+            semantic_scholar_fallback_context("DOI", normalized_doi.as_str(), &warnings)
+        })?;
+
+    Ok(ResolvedExternalPaper { paper, warnings })
+}
+
+async fn resolve_paper_by_arxiv(
+    runtime: &ZoteroRuntime,
+    arxiv: &str,
+) -> Result<ResolvedExternalPaper> {
+    let normalized_arxiv = extract_arxiv_like(arxiv)
+        .with_context(|| format!("invalid arXiv ID `{arxiv}` for add-paper"))?;
+    let mut warnings = Vec::new();
+
+    let arxiv_search =
+        search_external_papers(runtime, &normalized_arxiv, Some("arxiv"), 10).await?;
+    warnings.extend(arxiv_search.warnings);
+    if let Some(paper) =
+        find_exact_arxiv_match(arxiv_search.papers.as_slice(), normalized_arxiv.as_str())
+    {
+        return Ok(ResolvedExternalPaper {
+            paper: paper.clone(),
+            warnings,
+        });
+    }
+
+    let openalex_search =
+        search_external_papers(runtime, &normalized_arxiv, Some("openalex"), 10).await?;
+    warnings.extend(openalex_search.warnings);
+    if let Some(paper) =
+        find_exact_arxiv_match(openalex_search.papers.as_slice(), normalized_arxiv.as_str())
+    {
+        return Ok(ResolvedExternalPaper {
+            paper: paper.clone(),
+            warnings,
+        });
+    }
+
+    let paper = runtime
+        .toolkit
+        .paper_get_metadata(normalized_arxiv.as_str())
+        .await
+        .with_context(|| {
+            semantic_scholar_fallback_context("arXiv ID", normalized_arxiv.as_str(), &warnings)
+        })?;
+
+    Ok(ResolvedExternalPaper { paper, warnings })
+}
+
+async fn resolve_paper_by_url(runtime: &ZoteroRuntime, url: &str) -> Result<ResolvedExternalPaper> {
+    let search = search_external_papers(runtime, url, None, 5).await?;
+    let paper = find_exact_url_match(search.papers.as_slice(), url)
+        .ok_or_else(|| exact_url_match_error(url, search.warnings.as_slice()))?;
+
+    Ok(ResolvedExternalPaper {
+        paper: paper.clone(),
+        warnings: search.warnings,
+    })
+}
+
+async fn resolve_paper_by_query(
+    runtime: &ZoteroRuntime,
+    query: &str,
+) -> Result<ResolvedExternalPaper> {
+    let search = search_external_papers(runtime, query, None, 5).await?;
+    let paper = choose_best_paper(query, search.papers.as_slice())
+        .ok_or_else(|| no_paper_match_error(query, search.warnings.as_slice()))?;
+
+    Ok(ResolvedExternalPaper {
+        paper: paper.clone(),
+        warnings: search.warnings,
+    })
+}
+
+async fn search_external_papers(
+    runtime: &ZoteroRuntime,
+    query: &str,
+    source: Option<&str>,
+    limit: u32,
+) -> Result<SearchResult> {
+    runtime
+        .toolkit
+        .paper_search(PaperSearchParams {
+            query: query.to_string(),
+            year_from: None,
+            year_to: None,
+            fields_of_study: None,
+            source: source.map(ToString::to_string),
+            sort_by: None,
+            offset: Some(0),
+            limit: Some(limit),
+            include_abstract: Some(true),
+            fields: None,
+            max_chars_per_item: None,
+        })
+        .await
+        .map_err(Into::into)
+}
+
+fn semantic_scholar_fallback_context(kind: &str, value: &str, warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return format!("Semantic Scholar fallback failed for {kind} `{value}`");
+    }
+
+    format!(
+        "Semantic Scholar fallback failed for {kind} `{value}` after prior warnings: {}",
+        warnings.join("; ")
+    )
+}
+
+fn no_paper_match_error(query: &str, warnings: &[String]) -> anyhow::Error {
+    if warnings.is_empty() {
+        anyhow!("no paper result matched `{query}`")
+    } else {
+        anyhow!(
+            "no paper result matched `{query}`; warnings: {}",
+            warnings.join("; ")
+        )
+    }
+}
+
+fn exact_url_match_error(url: &str, warnings: &[String]) -> anyhow::Error {
+    if warnings.is_empty() {
+        anyhow!("no paper result matched URL `{url}` exactly")
+    } else {
+        anyhow!(
+            "no paper result matched URL `{url}` exactly; warnings: {}",
+            warnings.join("; ")
+        )
+    }
+}
+
+fn find_exact_doi_match<'a>(papers: &'a [Paper], doi: &str) -> Option<&'a Paper> {
+    papers.iter().find(|paper| {
+        paper
+            .doi
+            .as_deref()
+            .is_some_and(|candidate| normalize_doi_like(candidate) == doi)
+    })
+}
+
+fn find_exact_arxiv_match<'a>(papers: &'a [Paper], arxiv_id: &str) -> Option<&'a Paper> {
+    papers.iter().find(|paper| {
+        paper
+            .arxiv_id
+            .as_deref()
+            .is_some_and(|candidate| normalize_arxiv_like(candidate) == arxiv_id)
+    })
+}
+
+fn find_exact_url_match<'a>(papers: &'a [Paper], url: &str) -> Option<&'a Paper> {
+    let expected = url.trim();
+    papers.iter().find(|paper| {
+        paper
+            .url
+            .as_deref()
+            .is_some_and(|candidate| candidate.trim() == expected)
+            || paper
+                .pdf_url
+                .as_deref()
+                .is_some_and(|candidate| candidate.trim() == expected)
+    })
+}
+
+fn choose_best_paper<'a>(query: &str, papers: &'a [Paper]) -> Option<&'a Paper> {
+    let normalized_query = normalize_title_key(query);
+    papers.iter().max_by_key(|paper| {
+        let normalized_title = normalize_title_key(&paper.title);
+        let mut score = 0_u32;
+        if normalized_title == normalized_query {
+            score += 500;
+        }
+        if normalized_title.contains(&normalized_query)
+            || normalized_query.contains(&normalized_title)
+        {
+            score += 200;
+        }
+        if paper.pdf_url.is_some() {
+            score += 50;
+        }
+        if paper.code_url.is_some() {
+            score += 25;
+        }
+        score
+    })
+}
+
+async fn find_existing_paper_in_scope(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    paper: &Paper,
+) -> Result<Option<ZoteroItemDetail>> {
+    let mut queries = Vec::new();
+    if let Some(doi) = paper.doi.as_deref() {
+        queries.push(doi.to_string());
+    }
+    if let Some(arxiv) = paper.arxiv_id.as_deref() {
+        queries.push(arxiv.to_string());
+    }
+    queries.push(paper.title.clone());
+
+    for query in queries {
+        let result = runtime
+            .toolkit
+            .zotero_search(ZoteroSearchParams {
+                query,
+                library_type: scope.library_type.clone(),
+                library_id: scope.library_id.clone(),
+                offset: None,
+                limit: Some(10),
+                item_type: None,
+                qmode: Some(ZoteroQuickSearchMode::TitleCreatorYear),
+                max_chars_per_item: None,
+            })
+            .await?;
+        for item in result.items {
+            let detail = fetch_item_detail(runtime, scope, &item.key, false, false).await?;
+            if paper_matches_item(paper, &detail) {
+                return Ok(Some(detail));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn paper_matches_item(paper: &Paper, item: &ZoteroItemDetail) -> bool {
+    if let (Some(left), Some(right)) = (paper.doi.as_deref(), item.doi.as_deref())
+        && normalize_doi_like(left) == normalize_doi_like(right)
+    {
+        return true;
+    }
+    if let Some(arxiv) = paper.arxiv_id.as_deref() {
+        let normalized_arxiv = normalize_arxiv_like(arxiv);
+        if item
+            .url
+            .as_deref()
+            .and_then(extract_arxiv_like)
+            .is_some_and(|candidate| candidate == normalized_arxiv)
+        {
+            return true;
+        }
+        if item
+            .extra
+            .as_deref()
+            .and_then(extract_arxiv_like)
+            .is_some_and(|candidate| candidate == normalized_arxiv)
+        {
+            return true;
+        }
+    }
+    normalize_title_key(&paper.title) == normalize_title_key(&item.title)
+}
+
+fn paper_to_zotero_item(paper: &Paper) -> Value {
+    let url = paper
+        .url
+        .clone()
+        .or_else(|| {
+            paper
+                .arxiv_id
+                .as_ref()
+                .map(|id| format!("https://arxiv.org/abs/{id}"))
+        })
+        .unwrap_or_default();
+    let item_type = if paper.arxiv_id.is_some() || url.contains("arxiv.org") {
+        "preprint"
+    } else {
+        "journalArticle"
+    };
+    let mut item = serde_json::json!({
+        "itemType": item_type,
+        "title": paper.title,
+        "creators": creators_from_authors(&paper.authors),
+        "abstractNote": paper.abstract_text.clone().unwrap_or_default(),
+        "url": url,
+    });
+    if let Some(year) = paper.year {
+        item["date"] = Value::String(year.to_string());
+    }
+    if let Some(doi) = paper.doi.as_ref() {
+        item["DOI"] = Value::String(doi.clone());
+    }
+    if item_type != "preprint"
+        && let Some(venue) = paper.venue.as_ref()
+    {
+        item["publicationTitle"] = Value::String(venue.clone());
+    }
+    if let Some(arxiv_id) = paper.arxiv_id.as_ref() {
+        item["extra"] = Value::String(format!("arXiv: {arxiv_id}"));
+    }
+    item
+}
+
+fn creators_from_authors(authors: &str) -> Value {
+    let parts = if authors.contains(" and ") {
+        authors
+            .split(" and ")
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        authors
+            .split(',')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+    };
+    Value::Array(
+        parts
+            .into_iter()
+            .map(|name| serde_json::json!({ "name": name, "creatorType": "author" }))
+            .collect(),
+    )
+}
+
+async fn ensure_pdf_attachment(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    item: &ZoteroItemDetail,
+    paper: &Paper,
+) -> Result<ZoteroAddPaperAttachmentResult> {
+    if let Some(existing) = item.attachments.as_ref().and_then(|attachments| {
+        attachments.iter().find(|attachment| {
+            attachment
+                .content_type
+                .as_deref()
+                .is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/pdf"))
+                && attachment
+                    .link_mode
+                    .as_deref()
+                    .is_some_and(|mode| mode.starts_with("imported"))
+        })
+    }) {
+        let (status, warning) = match promote_pdf_attachment(runtime, scope, existing).await {
+            Ok(true) => ("existing_promoted".to_string(), None),
+            Ok(false) => ("existing".to_string(), None),
+            Err(err) => (
+                "existing".to_string(),
+                Some(format!("PDF attachment promotion failed: {err}")),
+            ),
+        };
+        return Ok(ZoteroAddPaperAttachmentResult {
+            item_key: Some(existing.key.clone()),
+            status,
+            url: existing.url.clone(),
+            warning,
+        });
+    }
+
+    let Some(pdf_url) = paper_preferred_pdf_url(paper) else {
+        return Ok(ZoteroAddPaperAttachmentResult {
+            item_key: None,
+            status: "missing".to_string(),
+            url: None,
+            warning: Some("no PDF URL could be resolved".to_string()),
+        });
+    };
+
+    match runtime
+        .toolkit
+        .zotero_create_attachment_import_url(ZoteroCreateAttachmentImportUrlParams {
+            parent_item_key: item.key.clone(),
+            title: "PDF".to_string(),
+            url: pdf_url.clone(),
+            content_type: Some("application/pdf".to_string()),
+            filename: Some(pdf_filename_for_paper(paper)),
+            tags: None,
+            library_type: scope.library_type.clone(),
+            library_id: scope.library_id.clone(),
+        })
+        .await
+    {
+        Ok(result) => {
+            let record = result
+                .records
+                .into_iter()
+                .next()
+                .context("imported attachment creation returned no record")?;
+            Ok(ZoteroAddPaperAttachmentResult {
+                item_key: Some(record.key),
+                status: "imported".to_string(),
+                url: Some(pdf_url),
+                warning: None,
+            })
+        }
+        Err(import_err) => {
+            let linked = runtime
+                .toolkit
+                .zotero_create_attachment_link(ZoteroCreateAttachmentLinkParams {
+                    parent_item_key: item.key.clone(),
+                    title: "PDF".to_string(),
+                    url: pdf_url.clone(),
+                    content_type: Some("application/pdf".to_string()),
+                    collections: None,
+                    tags: None,
+                    library_type: scope.library_type.clone(),
+                    library_id: scope.library_id.clone(),
+                })
+                .await?;
+            let record = linked
+                .records
+                .into_iter()
+                .next()
+                .context("linked attachment creation returned no record")?;
+            Ok(ZoteroAddPaperAttachmentResult {
+                item_key: Some(record.key),
+                status: "linked_fallback".to_string(),
+                url: Some(pdf_url),
+                warning: Some(import_err.to_string()),
+            })
+        }
+    }
+}
+
+async fn promote_pdf_attachment(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    attachment: &codex_research_tools::types::ZoteroAttachment,
+) -> Result<bool> {
+    let Some(title) = attachment.title.as_deref() else {
+        return Ok(false);
+    };
+    if title != "Preprint PDF" {
+        return Ok(false);
+    }
+
+    runtime
+        .toolkit
+        .zotero_update_items(ZoteroUpdateItemsParams {
+            items: vec![codex_research_tools::types::ZoteroItemUpdatePayload {
+                item_key: attachment.key.clone(),
+                patch: serde_json::json!({
+                    "title": "PDF"
+                }),
+            }],
+            library_type: scope.library_type.clone(),
+            library_id: scope.library_id.clone(),
+        })
+        .await?;
+    Ok(true)
+}
+
+struct RepoLinkRequest<'a> {
+    repo_collection_name: &'a str,
+    paper_key: &'a str,
+    paper_title: &'a str,
+    paper: &'a Paper,
+    warnings: &'a mut Vec<String>,
+}
+
+async fn ensure_repo_link(
+    runtime: &ZoteroRuntime,
+    target_scope: &ZoteroScopeRef,
+    scope: &LibraryScopeArgs,
+    request: RepoLinkRequest<'_>,
+) -> Result<Option<ZoteroAddPaperRepoResult>> {
+    let Some(repo_url) = request
+        .paper
+        .code_url
+        .as_deref()
+        .and_then(normalize_repo_url)
+    else {
+        return Ok(None);
+    };
+    let repo_collection = runtime
+        .toolkit
+        .zotero_find_or_create_collection(ZoteroFindOrCreateCollectionParams {
+            name: request.repo_collection_name.to_string(),
+            parent_collection_key: None,
+            library_type: Some(target_scope.library_type.clone()),
+            library_id: Some(target_scope.library_id.clone()),
+        })
+        .await?;
+    let existing = find_existing_repo_in_scope(runtime, scope, repo_url.as_str()).await?;
+    let (repo_key, repo_title, status) = if let Some(existing) = existing {
+        (existing.key, existing.title, "linked_existing".to_string())
+    } else {
+        let created = runtime
+            .toolkit
+            .zotero_create_items(ZoteroCreateItemsParams {
+                items: vec![serde_json::json!({
+                    "itemType": "computerProgram",
+                    "title": repo_title_from_url(repo_url.as_str()),
+                    "abstractNote": format!(
+                        "Official code repository for {}.",
+                        request.paper_title
+                    ),
+                    "url": repo_url.clone(),
+                })],
+                library_type: Some(target_scope.library_type.clone()),
+                library_id: Some(target_scope.library_id.clone()),
+            })
+            .await?;
+        let record = created
+            .records
+            .into_iter()
+            .next()
+            .context("repo item creation returned no record")?;
+        (
+            record.key,
+            record
+                .title
+                .unwrap_or_else(|| repo_title_from_url(repo_url.as_str())),
+            "created_and_linked".to_string(),
+        )
+    };
+    runtime
+        .toolkit
+        .zotero_add_items_to_collection(ZoteroAddItemsToCollectionParams {
+            collection_key: repo_collection.collection.key.clone(),
+            item_keys: vec![repo_key.clone()],
+            library_type: Some(target_scope.library_type.clone()),
+            library_id: Some(target_scope.library_id.clone()),
+        })
+        .await?;
+    ensure_bidirectional_relation(runtime, scope, request.paper_key, &repo_key, target_scope)
+        .await?;
+    if !repo_url.contains("github.com") && !repo_url.contains("gitlab.com") {
+        request.warnings.push(format!(
+            "linked repository URL does not look like a standard Git host: {repo_url}"
+        ));
+    }
+    Ok(Some(ZoteroAddPaperRepoResult {
+        item_key: repo_key,
+        title: repo_title,
+        url: repo_url,
+        status,
+        collection_key: repo_collection.collection.key,
+    }))
+}
+
+async fn find_existing_repo_in_scope(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    repo_url: &str,
+) -> Result<Option<ZoteroItemDetail>> {
+    let query = repo_title_from_url(repo_url);
+    let result = runtime
+        .toolkit
+        .zotero_search(ZoteroSearchParams {
+            query,
+            library_type: scope.library_type.clone(),
+            library_id: scope.library_id.clone(),
+            offset: None,
+            limit: Some(10),
+            item_type: Some("computerProgram".to_string()),
+            qmode: Some(ZoteroQuickSearchMode::TitleCreatorYear),
+            max_chars_per_item: None,
+        })
+        .await?;
+    for item in result.items {
+        let detail = fetch_item_detail(runtime, scope, &item.key, false, false).await?;
+        if detail
+            .url
+            .as_deref()
+            .and_then(normalize_repo_url)
+            .as_deref()
+            == Some(repo_url)
+        {
+            return Ok(Some(detail));
+        }
+    }
+    Ok(None)
+}
+
+async fn ensure_bidirectional_relation(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    left_key: &str,
+    right_key: &str,
+    target_scope: &ZoteroScopeRef,
+) -> Result<()> {
+    ensure_relation(runtime, scope, left_key, right_key, target_scope).await?;
+    ensure_relation(runtime, scope, right_key, left_key, target_scope).await?;
+    Ok(())
+}
+
+async fn ensure_relation(
+    runtime: &ZoteroRuntime,
+    scope: &LibraryScopeArgs,
+    item_key: &str,
+    related_key: &str,
+    target_scope: &ZoteroScopeRef,
+) -> Result<()> {
+    let detail = fetch_item_detail(runtime, scope, item_key, false, false).await?;
+    let target_uri = raw_item_uri(target_scope, related_key);
+    if detail
+        .linked_items
+        .iter()
+        .any(|linked| linked.relation == "dc:relation" && linked.raw_uri == target_uri)
+    {
+        return Ok(());
+    }
+    let mut relations = detail
+        .linked_items
+        .iter()
+        .filter(|linked| linked.relation == "dc:relation")
+        .map(|linked| linked.raw_uri.clone())
+        .collect::<Vec<_>>();
+    relations.push(target_uri);
+    relations.sort();
+    relations.dedup();
+    runtime
+        .toolkit
+        .zotero_update_items(ZoteroUpdateItemsParams {
+            items: vec![codex_research_tools::types::ZoteroItemUpdatePayload {
+                item_key: item_key.to_string(),
+                patch: serde_json::json!({
+                    "relations": {
+                        "dc:relation": relations
+                    }
+                }),
+            }],
+            library_type: scope.library_type.clone(),
+            library_id: scope.library_id.clone(),
+        })
+        .await?;
+    Ok(())
+}
+
+fn paper_preferred_pdf_url(paper: &Paper) -> Option<String> {
+    paper
+        .pdf_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .filter(|url| looks_like_pdf_url(url))
+        .map(ToString::to_string)
+        .or_else(|| {
+            paper
+                .arxiv_id
+                .as_ref()
+                .map(|id| format!("https://arxiv.org/pdf/{id}.pdf"))
+        })
+}
+
+fn looks_like_pdf_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("arxiv.org/pdf/")
+        || lower.ends_with(".pdf")
+        || lower.contains("/pdf/")
+        || lower.contains("/pdf?")
+        || lower.contains("download=1")
+}
+
+fn pdf_filename_for_paper(paper: &Paper) -> String {
+    if let Some(arxiv_id) = paper.arxiv_id.as_deref() {
+        return format!("{arxiv_id}.pdf");
+    }
+
+    let stem = paper
+        .title
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .take(10)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if stem.is_empty() {
+        "paper.pdf".to_string()
+    } else {
+        format!("{stem}.pdf")
+    }
+}
+
+fn repo_title_from_url(repo_url: &str) -> String {
+    normalize_repo_url(repo_url)
+        .and_then(|normalized| {
+            normalized
+                .trim_start_matches("https://")
+                .split_once('/')
+                .map(|(_, repo)| repo.to_string())
+        })
+        .unwrap_or_else(|| repo_url.to_string())
+}
+
+fn normalize_title_key(value: &str) -> String {
+    value
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_doi_like(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .to_string()
+}
+
+fn extract_doi_like(value: &str) -> Option<String> {
+    let normalized = normalize_doi_like(value);
+    normalized.starts_with("10.").then_some(normalized)
+}
+
+fn normalize_arxiv_like(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("arxiv:")
+        .trim_start_matches("arXiv:")
+        .trim_start_matches("https://arxiv.org/abs/")
+        .trim_start_matches("http://arxiv.org/abs/")
+        .trim_start_matches("https://arxiv.org/pdf/")
+        .trim_start_matches("http://arxiv.org/pdf/")
+        .trim_end_matches(".pdf")
+        .to_string()
+}
+
+fn extract_arxiv_like(value: &str) -> Option<String> {
+    let normalized = normalize_arxiv_like(value);
+    let trimmed = normalized
+        .split('?')
+        .next()
+        .unwrap_or(normalized.as_str())
+        .to_string();
+    (!trimmed.is_empty()
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ['.', '-', 'v'].contains(&ch)))
+    .then_some(trimmed)
+}
+
 async fn find_repos_with_fallback(
     context: &ZoteroCliContext,
     args: &FindReposArgs,
 ) -> Result<ZoteroFindReposResult> {
-    let primary = find_repos_once(&context.primary, args).await?;
-    if !primary.repos.is_empty() || context.alternate.is_none() {
-        return Ok(primary);
+    match find_repos_once(&context.primary, args).await {
+        Ok(primary) if !primary.repos.is_empty() || context.alternate.is_none() => Ok(primary),
+        Ok(primary) => {
+            let Some(alternate_runtime) = context.alternate.as_ref() else {
+                return Ok(primary);
+            };
+            let mut alternate = find_repos_once(alternate_runtime, args).await?;
+            if alternate.repos.is_empty() {
+                return Ok(primary);
+            }
+            alternate.fallback_used = true;
+            alternate.warnings.insert(
+                0,
+                format!(
+                    "No repository URLs were found via {} mode, so the CLI retried via {} mode.",
+                    context.primary.mode, alternate_runtime.mode
+                ),
+            );
+            Ok(alternate)
+        }
+        Err(primary_error) => {
+            let Some(alternate_runtime) = context.alternate.as_ref() else {
+                return Err(primary_error);
+            };
+            let mut alternate = find_repos_once(alternate_runtime, args).await?;
+            alternate.fallback_used = true;
+            alternate.warnings.insert(
+                0,
+                format!(
+                    "{} mode failed with: {}. The CLI retried via {} mode.",
+                    context.primary.mode, primary_error, alternate_runtime.mode
+                ),
+            );
+            Ok(alternate)
+        }
     }
-
-    let Some(alternate_runtime) = context.alternate.as_ref() else {
-        return Ok(primary);
-    };
-    let mut alternate = find_repos_once(alternate_runtime, args).await?;
-    if alternate.repos.is_empty() {
-        return Ok(primary);
-    }
-    alternate.fallback_used = true;
-    alternate.warnings.insert(
-        0,
-        format!(
-            "No repository URLs were found via {} mode, so the CLI retried via {} mode.",
-            context.primary.mode, alternate_runtime.mode
-        ),
-    );
-    Ok(alternate)
 }
 
 async fn find_repos_once(
@@ -1232,7 +2338,11 @@ async fn find_repos_once(
 
     if let Some(collection_ref) = args.collection.as_deref() {
         let collections = fetch_all_collections(runtime, &args.scope, 300).await?;
-        let resolved = resolve_collection_reference(collections.as_slice(), collection_ref);
+        let resolved = resolve_collection_reference(
+            collections.as_slice(),
+            collection_ref,
+            explicit_scope(&args.scope).as_ref(),
+        );
         collections_cache = Some(collections);
         if resolved.is_empty() {
             warnings.push(format!("No Zotero collection matched `{collection_ref}`."));
@@ -1261,7 +2371,12 @@ async fn find_repos_once(
             Some(ref collections) => collections.clone(),
             None => fetch_all_collections(runtime, &args.scope, 300).await?,
         };
-        let collection_matches = score_matching_collections(collections.as_slice(), query, 3);
+        let collection_matches = score_matching_collections(
+            collections.as_slice(),
+            query,
+            explicit_scope(&args.scope).as_ref(),
+            3,
+        );
         matched_collections.extend(collection_matches.clone());
         for collection in collection_matches.iter().take(3) {
             let page = runtime
@@ -1640,6 +2755,71 @@ fn normalize_repo_url(raw_url: &str) -> Option<String> {
     None
 }
 
+fn scope_from_canonical_id(canonical_id: &str) -> Option<ZoteroScopeRef> {
+    let (prefix, rest) = canonical_id.split_once(':')?;
+    if prefix != "zotero" {
+        return None;
+    }
+    let mut parts = rest.split('/');
+    let scope_type = parts.next()?;
+    let library_id = parts.next()?;
+    let library_type = match scope_type {
+        "user" => "user",
+        "group" => "group",
+        _ => return None,
+    };
+    Some(ZoteroScopeRef {
+        library_type: library_type.to_string(),
+        library_id: library_id.to_string(),
+    })
+}
+
+fn scope_from_collection(collection: &ZoteroCollection) -> Option<ZoteroScopeRef> {
+    collection
+        .source_meta
+        .as_ref()
+        .and_then(|meta| meta.canonical_id.as_deref())
+        .and_then(scope_from_canonical_id)
+}
+
+fn scope_from_item(item: &ZoteroItem) -> Option<ZoteroScopeRef> {
+    item.source_meta
+        .as_ref()
+        .and_then(|meta| meta.canonical_id.as_deref())
+        .and_then(scope_from_canonical_id)
+}
+
+fn scope_label(scope: &ZoteroScopeRef) -> String {
+    format!("{}/{}", scope.library_type, scope.library_id)
+}
+
+fn raw_item_uri(scope: &ZoteroScopeRef, item_key: &str) -> String {
+    match scope.library_type.as_str() {
+        "group" => format!(
+            "http://zotero.org/groups/{}/items/{item_key}",
+            scope.library_id
+        ),
+        _ => format!(
+            "http://zotero.org/users/{}/items/{item_key}",
+            scope.library_id
+        ),
+    }
+}
+
+fn scope_args(scope: &ZoteroScopeRef) -> LibraryScopeArgs {
+    LibraryScopeArgs {
+        library_type: Some(scope.library_type.clone()),
+        library_id: Some(scope.library_id.clone()),
+    }
+}
+
+fn explicit_scope(scope: &LibraryScopeArgs) -> Option<ZoteroScopeRef> {
+    Some(ZoteroScopeRef {
+        library_type: scope.library_type.clone()?,
+        library_id: scope.library_id.clone()?,
+    })
+}
+
 async fn fetch_all_collections(
     runtime: &ZoteroRuntime,
     scope: &LibraryScopeArgs,
@@ -1712,6 +2892,7 @@ fn score_item_detail(item: &ZoteroItemDetail) -> u32 {
 fn score_matching_collections(
     collections: &[ZoteroCollection],
     query: &str,
+    requested_scope: Option<&ZoteroScopeRef>,
     limit: usize,
 ) -> Vec<ZoteroCollectionMatch> {
     let normalized_query = query.trim().to_ascii_lowercase();
@@ -1747,6 +2928,7 @@ fn score_matching_collections(
                 key: collection.key.clone(),
                 name: collection.name.clone(),
                 parent_collection: collection.parent_collection.clone(),
+                scope: scope_from_collection(collection).or_else(|| requested_scope.cloned()),
                 score,
             })
         })
@@ -1764,6 +2946,7 @@ fn score_matching_collections(
 fn resolve_collection_reference(
     collections: &[ZoteroCollection],
     collection_ref: &str,
+    requested_scope: Option<&ZoteroScopeRef>,
 ) -> Vec<ZoteroCollectionMatch> {
     if let Some(collection) = collections
         .iter()
@@ -1773,6 +2956,7 @@ fn resolve_collection_reference(
             key: collection.key.clone(),
             name: collection.name.clone(),
             parent_collection: collection.parent_collection.clone(),
+            scope: scope_from_collection(collection).or_else(|| requested_scope.cloned()),
             score: u32::MAX,
         }];
     }
@@ -1783,20 +2967,28 @@ fn resolve_collection_reference(
             key: collection.key.clone(),
             name: collection.name.clone(),
             parent_collection: collection.parent_collection.clone(),
+            scope: scope_from_collection(collection).or_else(|| requested_scope.cloned()),
             score: u32::MAX - 1,
         })
         .collect::<Vec<_>>();
     if !exact_name_matches.is_empty() {
         return exact_name_matches;
     }
-    score_matching_collections(collections, collection_ref, 5)
+    score_matching_collections(collections, collection_ref, requested_scope, 5)
 }
 
 fn dedup_collection_matches(matches: Vec<ZoteroCollectionMatch>) -> Vec<ZoteroCollectionMatch> {
     let mut seen = BTreeSet::new();
     matches
         .into_iter()
-        .filter(|collection| seen.insert(collection.key.clone()))
+        .filter(|collection| {
+            let scope_key = collection
+                .scope
+                .as_ref()
+                .map(scope_label)
+                .unwrap_or_default();
+            seen.insert(format!("{scope_key}:{}", collection.key))
+        })
         .collect()
 }
 
@@ -1862,6 +3054,17 @@ fn print_status_compact(status: &ZoteroStatusResult) {
                 |(library_type, library_id)| format!("{library_type}/{library_id}"),
             )
     );
+    println!(
+        "Default write scope: {}",
+        status
+            .default_write_library_type
+            .as_deref()
+            .zip(status.default_write_library_id.as_deref())
+            .map_or_else(
+                || "unconfigured".to_string(),
+                |(library_type, library_id)| format!("{library_type}/{library_id}"),
+            )
+    );
     if let Some(alternate_mode) = status.alternate_mode {
         println!("Fallback mode: {alternate_mode}");
     }
@@ -1875,7 +3078,12 @@ fn print_collection_matches_compact(collections: &[ZoteroCollectionMatch], warni
         println!("No matching collections.");
     } else {
         for collection in collections {
-            println!("[{}] {}", collection.key, collection.name);
+            let suffix = collection
+                .scope
+                .as_ref()
+                .map(|scope| format!(" [{}]", scope_label(scope)))
+                .unwrap_or_default();
+            println!("[{}] {}{}", collection.key, collection.name, suffix);
         }
     }
     for warning in warnings {
@@ -1892,6 +3100,9 @@ fn print_items_compact(items: &[ZoteroItem]) {
         let mut suffix = String::new();
         if let Some(year) = item.year.as_deref() {
             suffix.push_str(&format!(" ({year})"));
+        }
+        if let Some(scope) = scope_from_item(item).as_ref() {
+            suffix.push_str(&format!(" [{}]", scope_label(scope)));
         }
         println!(
             "[{}] [{}] {}{}",
@@ -2008,6 +3219,53 @@ fn print_repo_matches_compact(result: &ZoteroFindReposResult) {
         }
     }
     for warning in &result.warnings {
+        println!("Note: {warning}");
+    }
+}
+
+fn print_add_paper_compact(result: &ZoteroAddPaperResult) {
+    println!("Mode: {}", result.effective_mode);
+    println!("Scope: {}", scope_label(&result.scope));
+    let collection_scope = result
+        .collection
+        .scope
+        .as_ref()
+        .map(scope_label)
+        .unwrap_or_else(|| scope_label(&result.scope));
+    println!(
+        "Collection: [{}] {} [{}]",
+        result.collection.key, result.collection.name, collection_scope
+    );
+    println!(
+        "Paper: [{}] {} ({})",
+        result.paper_key,
+        result.paper_title,
+        if result.paper_created {
+            "created"
+        } else {
+            "reused"
+        }
+    );
+    println!("PDF: {}", result.pdf.status);
+    if let Some(url) = result.pdf.url.as_deref() {
+        println!("PDF URL: {url}");
+    }
+    if let Some(snapshot) = result.snapshot.as_ref() {
+        println!("Snapshot: {}", snapshot.status);
+    }
+    if let Some(repo) = result.repo.as_ref() {
+        println!("Repo: [{}] {} ({})", repo.item_key, repo.title, repo.status);
+        println!("Repo URL: {}", repo.url);
+    }
+    for warning in &result.warnings {
+        println!("Note: {warning}");
+    }
+    if let Some(warning) = result.pdf.warning.as_deref() {
+        println!("Note: {warning}");
+    }
+    if let Some(snapshot) = result.snapshot.as_ref()
+        && let Some(warning) = snapshot.warning.as_deref()
+    {
         println!("Note: {warning}");
     }
 }
@@ -2307,6 +3565,17 @@ fn zotero_command_catalog() -> &'static [ZoteroCommandCatalogEntry] {
             ],
         },
         ZoteroCommandCatalogEntry {
+            command: "add-paper",
+            description: "Add a paper to a Zotero collection, attach its PDF when possible, and link a source repo when available.",
+            core_args: &["query", "doi", "arxiv", "url", "collection"],
+            aliases: &["ingest-paper", "import-paper", "paper-add"],
+            tags: &["paper", "add", "import", "pdf", "repo", "collection"],
+            examples: &[
+                "add a paper to the r&d agents collection",
+                "import a paper and its pdf into zotero",
+            ],
+        },
+        ZoteroCommandCatalogEntry {
             command: "find-repos",
             description: "Find repository URLs in Zotero items, collections, or linked records.",
             core_args: &["query", "collection"],
@@ -2476,11 +3745,23 @@ fn zotero_command_catalog() -> &'static [ZoteroCommandCatalogEntry] {
             command: "attachment create-link",
             description: "Create a linked attachment, such as a PDF or repository URL, under an existing item.",
             core_args: &["parent_item_key", "title", "url"],
-            aliases: &["attach-link", "link-pdf", "add-pdf-link"],
+            aliases: &["attach-link", "attach-pdf-url", "link-pdf", "add-pdf-link"],
             tags: &["attachment", "pdf", "url", "repo", "link"],
             examples: &[
+                "attach pdf url to paper",
                 "attach a pdf url to an existing paper",
                 "add a github repo link under this item",
+            ],
+        },
+        ZoteroCommandCatalogEntry {
+            command: "attachment import-url",
+            description: "Import a URL as a stored attachment under an existing item so Zotero can open the file locally.",
+            core_args: &["parent_item_key", "title", "url"],
+            aliases: &["import-pdf", "store-pdf", "upload-attachment-url"],
+            tags: &["attachment", "pdf", "import", "stored", "viewer"],
+            examples: &[
+                "import a pdf url under this paper",
+                "store a paper pdf in zotero instead of linking it",
             ],
         },
     ];
@@ -2490,17 +3771,151 @@ fn zotero_command_catalog() -> &'static [ZoteroCommandCatalogEntry] {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use super::FindReposArgs;
     use super::ItemCommand;
+    use super::JsonOutputArgs;
+    use super::LibraryScopeArgs;
     use super::SearchArgs;
     use super::ZoteroCli;
     use super::ZoteroCommand;
     use super::ZoteroQuickSearchMode;
+    use super::paper_preferred_pdf_url;
     use super::parse_optional_enum;
     use super::render_command_manual;
     use super::render_search_results;
     use super::search_command_catalog;
     use clap::Parser;
+    use codex_research_tools::config::RateLimitOverrides;
+    use codex_research_tools::config::ResearchConfig;
+    use codex_research_tools::rate_limiter::ApiRateLimit;
+    use codex_research_tools::types::Paper;
     use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::matchers::path_regex;
+    use wiremock::matchers::query_param;
+
+    fn build_test_runtime(
+        base_url: String,
+        api_key: Option<&str>,
+        mode: super::ZoteroMode,
+    ) -> super::ZoteroRuntime {
+        build_test_runtime_with_research_sources(
+            base_url,
+            "http://localhost:23119/api".to_string(),
+            "http://localhost:23119".to_string(),
+            "http://localhost:23119".to_string(),
+            api_key,
+            mode,
+        )
+    }
+
+    fn build_test_runtime_with_research_sources(
+        base_url: String,
+        semantic_scholar_base_url: String,
+        arxiv_base_url: String,
+        openalex_base_url: String,
+        api_key: Option<&str>,
+        mode: super::ZoteroMode,
+    ) -> super::ZoteroRuntime {
+        let config = ResearchConfig {
+            zotero_api_key: api_key.map(ToString::to_string),
+            zotero_user_id: Some("123".to_string()),
+            zotero_group_id: None,
+            zotero_base_url: base_url,
+            semantic_scholar_base_url,
+            arxiv_base_url,
+            openalex_base_url,
+            rate_limit_overrides: permissive_rate_limit_overrides(),
+            ..ResearchConfig::default()
+        };
+        super::ZoteroRuntime {
+            toolkit: super::ResearchToolkit::from_config(config.clone()),
+            config,
+            mode,
+        }
+    }
+
+    fn permissive_rate_limit_overrides() -> RateLimitOverrides {
+        RateLimitOverrides {
+            semantic_scholar: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            arxiv: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            openalex: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            zotero: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            github: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            hackernews: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+            patents: Some(ApiRateLimit::new(100, Duration::from_millis(1), 20)),
+        }
+    }
+
+    fn add_paper_args(
+        query: Option<&str>,
+        doi: Option<&str>,
+        arxiv: Option<&str>,
+        url: Option<&str>,
+    ) -> super::AddPaperArgs {
+        super::AddPaperArgs {
+            query: query.map(ToString::to_string),
+            doi: doi.map(ToString::to_string),
+            arxiv: arxiv.map(ToString::to_string),
+            url: url.map(ToString::to_string),
+            collection: "R&D Agents".to_string(),
+            repo_collection: "Source Repos".to_string(),
+            scope: LibraryScopeArgs {
+                library_type: None,
+                library_id: None,
+            },
+            output: JsonOutputArgs { json: false },
+        }
+    }
+
+    fn test_paper_with_pdf(pdf_url: Option<&str>, arxiv_id: Option<&str>) -> Paper {
+        Paper {
+            title: "Test Paper".to_string(),
+            authors: "Test Author".to_string(),
+            year: Some(2026),
+            venue: None,
+            citation_count: None,
+            abstract_text: None,
+            doi: None,
+            arxiv_id: arxiv_id.map(ToString::to_string),
+            s2_paper_id: None,
+            openalex_id: None,
+            url: None,
+            pdf_url: pdf_url.map(ToString::to_string),
+            code_url: None,
+            source_meta: None,
+        }
+    }
+
+    #[test]
+    fn paper_preferred_pdf_url_ignores_blank_pdf_url() {
+        let paper = test_paper_with_pdf(Some("   "), Some("2603.05708v1"));
+        assert_eq!(
+            paper_preferred_pdf_url(&paper).as_deref(),
+            Some("https://arxiv.org/pdf/2603.05708v1.pdf")
+        );
+    }
+
+    #[test]
+    fn paper_preferred_pdf_url_rejects_doi_landing_url() {
+        let paper = test_paper_with_pdf(Some("https://doi.org/10.3390/drones9010033"), None);
+        assert_eq!(paper_preferred_pdf_url(&paper), None);
+    }
+
+    #[test]
+    fn paper_preferred_pdf_url_accepts_pdf_like_url() {
+        let paper = test_paper_with_pdf(Some("https://example.org/content/paper.pdf"), None);
+        assert_eq!(
+            paper_preferred_pdf_url(&paper).as_deref(),
+            Some("https://example.org/content/paper.pdf")
+        );
+    }
 
     #[test]
     fn search_commands_prefers_collection_creation_for_create_collection_queries() {
@@ -2527,6 +3942,12 @@ mod tests {
             result.first().map(|entry| entry.command),
             Some("find-repos")
         );
+    }
+
+    #[test]
+    fn search_commands_prefers_add_paper_for_ingestion_queries() {
+        let result = search_command_catalog("add a paper to zotero with its pdf", 3);
+        assert_eq!(result.first().map(|entry| entry.command), Some("add-paper"));
     }
 
     #[test]
@@ -2610,5 +4031,565 @@ mod tests {
         assert!(rendered.contains("1. item citation — Generate a citation for an item."));
         assert!(rendered.contains("Best match manual:"));
         assert_eq!(rendered.matches("Usage: ata zotero").count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn find_repos_falls_back_when_primary_mode_errors() {
+        let primary_server = MockServer::start().await;
+        let alternate_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/collections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&primary_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "agent"))
+            .and(query_param("qmode", "everything"))
+            .and(query_param("itemType", "webpage"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("primary search failed"))
+            .mount(&primary_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/users/123/collections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&alternate_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "agent"))
+            .and(query_param("qmode", "everything"))
+            .and(query_param("itemType", "webpage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "ITEM1",
+                    "data": {
+                        "itemType": "webpage",
+                        "title": "AgentNet",
+                        "url": "https://github.com/acme/agentnet"
+                    }
+                }
+            ])))
+            .mount(&alternate_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "agent"))
+            .and(query_param("qmode", "everything"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&alternate_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items"))
+            .and(query_param("q", "agent"))
+            .and(query_param("qmode", "everything"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&alternate_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "key": "ITEM1",
+                "data": {
+                    "itemType": "webpage",
+                    "title": "AgentNet",
+                    "url": "https://github.com/acme/agentnet"
+                }
+            })))
+            .mount(&alternate_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/users/123/items/ITEM1/children"))
+            .and(query_param("itemType", "attachment"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&alternate_server)
+            .await;
+
+        let context = super::ZoteroCliContext {
+            primary: build_test_runtime(
+                primary_server.uri(),
+                Some("test-key"),
+                super::ZoteroMode::Remote,
+            ),
+            alternate: Some(build_test_runtime(
+                alternate_server.uri(),
+                None,
+                super::ZoteroMode::Local,
+            )),
+        };
+        let args = FindReposArgs {
+            query: Some("agent".to_string()),
+            collection: None,
+            scope: LibraryScopeArgs {
+                library_type: None,
+                library_id: None,
+            },
+            limit: 10,
+            inspect_limit: 20,
+            output: JsonOutputArgs { json: false },
+        };
+
+        let result = super::find_repos_with_fallback(&context, &args)
+            .await
+            .expect("expected alternate zotero runtime to satisfy repo discovery");
+
+        assert_eq!(result.effective_mode, super::ZoteroMode::Local);
+        assert!(result.fallback_used);
+        assert_eq!(result.repos.len(), 1);
+        assert_eq!(result.repos[0].repo_url, "https://github.com/acme/agentnet");
+        assert!(result.warnings[0].contains("remote mode failed with"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_target_collection_uses_explicit_scope_when_collection_metadata_omits_it() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/groups/456/collections"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {
+                    "key": "COLL1",
+                    "data": {
+                        "name": "R&D Agents"
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let config = ResearchConfig {
+            zotero_api_key: Some("test-key".to_string()),
+            zotero_user_id: Some("123".to_string()),
+            zotero_group_id: Some("456".to_string()),
+            zotero_base_url: server.uri(),
+            ..ResearchConfig::default()
+        };
+        let runtime = super::ZoteroRuntime {
+            toolkit: super::ResearchToolkit::from_config(config.clone()),
+            config,
+            mode: super::ZoteroMode::Remote,
+        };
+
+        let (collection, scope) = super::resolve_target_collection(
+            &runtime,
+            "R&D Agents",
+            &LibraryScopeArgs {
+                library_type: Some("group".to_string()),
+                library_id: Some("456".to_string()),
+            },
+        )
+        .await
+        .expect("expected explicit scope to satisfy collection resolution");
+
+        assert_eq!(collection.key, "COLL1");
+        assert_eq!(scope.library_type, "group");
+        assert_eq!(scope.library_id, "456");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_uses_openalex_doi_match_without_semantic_fallback() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/graph/v1/paper/.*"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("unexpected fallback"))
+            .expect(0)
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 1},
+                "results": [{
+                    "id": "https://openalex.org/W123",
+                    "display_name": "Exact DOI Match",
+                    "publication_year": 2024,
+                    "doi": "https://doi.org/10.1000/exact",
+                    "ids": {
+                        "openalex": "https://openalex.org/W123",
+                        "doi": "https://doi.org/10.1000/exact"
+                    },
+                    "authorships": [{"author": {"display_name": "Alice"}}],
+                    "primary_location": {
+                        "landing_page_url": "https://example.org/exact",
+                        "pdf_url": "https://example.org/exact.pdf",
+                        "source": {"display_name": "ICLR"}
+                    },
+                    "best_oa_location": null
+                }]
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let resolved = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(None, Some("10.1000/exact"), None, None),
+        )
+        .await
+        .expect("expected DOI resolution from OpenAlex search");
+
+        assert_eq!(resolved.paper.title, "Exact DOI Match");
+        assert_eq!(resolved.paper.doi.as_deref(), Some("10.1000/exact"));
+        assert!(
+            resolved.warnings.is_empty(),
+            "warnings: {:?}",
+            resolved.warnings
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_doi_falls_back_to_semantic_metadata_without_references() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 0},
+                "results": []
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/graph/v1/paper/[^/]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "paperId": "s2-doi",
+                "title": "Fallback DOI Paper",
+                "abstract": "fallback abstract",
+                "year": 2021,
+                "venue": "ICML",
+                "url": "https://example.org/fallback",
+                "externalIds": { "DOI": "10.1000/fallback" },
+                "authors": [{"name": "Bob"}]
+            })))
+            .expect(1)
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/graph/v1/paper/.*/references$"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("references should not be fetched"),
+            )
+            .expect(0)
+            .mount(&semantic_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let resolved = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(None, Some("10.1000/fallback"), None, None),
+        )
+        .await
+        .expect("expected DOI resolution from semantic metadata fallback");
+
+        assert_eq!(resolved.paper.title, "Fallback DOI Paper");
+        assert_eq!(resolved.paper.doi.as_deref(), Some("10.1000/fallback"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_query_uses_search_results_and_preserves_semantic_warning() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/search"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom"></feed>"#,
+                "application/atom+xml",
+            ))
+            .mount(&arxiv_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 1},
+                "results": [{
+                    "id": "https://openalex.org/W987",
+                    "display_name": "Rate Limited Query Paper",
+                    "publication_year": 2025,
+                    "doi": "https://doi.org/10.1000/query",
+                    "ids": {
+                        "openalex": "https://openalex.org/W987",
+                        "doi": "https://doi.org/10.1000/query"
+                    },
+                    "authorships": [{"author": {"display_name": "Carol"}}],
+                    "primary_location": {
+                        "landing_page_url": "https://example.org/query",
+                        "pdf_url": "https://example.org/query.pdf",
+                        "source": {"display_name": "NeurIPS"}
+                    },
+                    "best_oa_location": null
+                }]
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/graph/v1/paper/.*"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("detail should not be fetched"),
+            )
+            .expect(0)
+            .mount(&semantic_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let resolved = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(Some("Rate Limited Query Paper"), None, None, None),
+        )
+        .await
+        .expect("expected query resolution from search results");
+
+        assert_eq!(resolved.paper.title, "Rate Limited Query Paper");
+        assert!(
+            resolved
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("semantic_scholar search failed")),
+            "warnings: {:?}",
+            resolved.warnings
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_prefers_exact_arxiv_match_before_fallback() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom">
+                  <entry>
+                    <id>http://arxiv.org/abs/2401.00001v2</id>
+                    <title>Exact arXiv Match</title>
+                    <summary>summary</summary>
+                    <published>2024-01-01T00:00:00Z</published>
+                    <author><name>Dana</name></author>
+                    <link title="pdf" href="http://arxiv.org/pdf/2401.00001v2"/>
+                  </entry>
+                </feed>"#,
+                "application/atom+xml",
+            ))
+            .mount(&arxiv_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("openalex should not be queried"),
+            )
+            .expect(0)
+            .mount(&openalex_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path_regex(r"/graph/v1/paper/.*"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("semantic fallback should not be used"),
+            )
+            .expect(0)
+            .mount(&semantic_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let resolved = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(None, None, Some("2401.00001v2"), None),
+        )
+        .await
+        .expect("expected exact arXiv resolution");
+
+        assert_eq!(resolved.paper.title, "Exact arXiv Match");
+        assert_eq!(resolved.paper.arxiv_id.as_deref(), Some("2401.00001v2"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_url_requires_exact_match() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "total": 1,
+                "next": null,
+                "data": [{
+                    "paperId": "s2-url",
+                    "title": "Different URL Paper",
+                    "year": 2024,
+                    "url": "https://example.org/different",
+                    "authors": [{"name": "Erin"}]
+                }]
+            })))
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom"></feed>"#,
+                "application/atom+xml",
+            ))
+            .mount(&arxiv_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 0},
+                "results": []
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let err = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(None, None, None, Some("https://example.org/requested")),
+        )
+        .await
+        .expect_err("expected unmatched URL to fail");
+
+        assert!(
+            err.to_string()
+                .contains("matched URL `https://example.org/requested` exactly")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resolve_external_paper_url_accepts_exact_pdf_url_match() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/search"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api/query"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+                <feed xmlns="http://www.w3.org/2005/Atom"></feed>"#,
+                "application/atom+xml",
+            ))
+            .mount(&arxiv_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/works"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "meta": {"count": 1},
+                "results": [{
+                    "id": "https://openalex.org/W777",
+                    "display_name": "Exact PDF URL Match",
+                    "publication_year": 2024,
+                    "ids": {
+                        "openalex": "https://openalex.org/W777"
+                    },
+                    "authorships": [{"author": {"display_name": "Frank"}}],
+                    "primary_location": {
+                        "landing_page_url": "https://example.org/paper",
+                        "pdf_url": "https://example.org/paper.pdf",
+                        "source": {"display_name": "CVPR"}
+                    },
+                    "best_oa_location": null
+                }]
+            })))
+            .mount(&openalex_server)
+            .await;
+
+        let runtime = build_test_runtime_with_research_sources(
+            "http://localhost:23119/api".to_string(),
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+            Some("test-key"),
+            super::ZoteroMode::Remote,
+        );
+
+        let resolved = super::resolve_external_paper(
+            &runtime,
+            &add_paper_args(None, None, None, Some("https://example.org/paper.pdf")),
+        )
+        .await
+        .expect("expected exact PDF URL match to resolve");
+
+        assert_eq!(resolved.paper.title, "Exact PDF URL Match");
+        assert!(
+            resolved
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("semantic_scholar search failed")),
+            "warnings: {:?}",
+            resolved.warnings
+        );
     }
 }

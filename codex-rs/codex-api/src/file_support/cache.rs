@@ -153,11 +153,34 @@ impl FileReferenceCache {
                 continue;
             };
 
-            if entry.provider != current_provider || expires_soon(entry.expires_at, now) {
+            if entry.needs_refresh
+                || entry.provider != current_provider
+                || expires_soon(entry.expires_at, now)
+            {
                 candidates.push(entry.clone());
             }
         }
         candidates
+    }
+
+    pub fn lookup_source_path(&self, path: &Path) -> Option<PathBuf> {
+        let requested_canonical = std::fs::canonicalize(path).ok();
+        self.entries.values().find_map(|uploaded| {
+            let source_path = &uploaded.source_path;
+            if source_path == path {
+                return Some(source_path.clone());
+            }
+
+            match (
+                &requested_canonical,
+                std::fs::canonicalize(source_path).ok(),
+            ) {
+                (Some(requested), Some(source_canonical)) if requested == &source_canonical => {
+                    Some(source_path.clone())
+                }
+                _ => None,
+            }
+        })
     }
 }
 
@@ -190,6 +213,7 @@ mod tests {
             provider: provider.to_string(),
             expires_at,
             source_path: PathBuf::from("report.pdf"),
+            needs_refresh: false,
         }
     }
 

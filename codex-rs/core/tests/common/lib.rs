@@ -2,32 +2,48 @@
 
 use anyhow::Context as _;
 use anyhow::ensure;
+use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
+use codex_config::CloudRequirementsLoader;
+use codex_config::ConfigRequirementsToml;
+use codex_config::LoaderOverrides;
+use codex_config::NetworkRequirementsToml;
 use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_utils_absolute_path::AbsolutePathBuf;
+pub use codex_utils_absolute_path::test_support::PathBufExt;
+pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 pub mod apps_test_server;
 pub mod context_snapshot;
+pub mod hooks;
 pub mod process;
 pub mod responses;
 pub mod streaming_sse;
 pub mod test_codex;
 pub mod test_codex_exec;
+pub mod tracing;
 pub mod zsh_fork;
+
+static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 
 #[ctor]
 fn enable_deterministic_unified_exec_process_ids_for_tests() {
-    codex_core::test_support::set_thread_manager_test_mode(true);
-    codex_core::test_support::set_deterministic_process_ids(true);
+    codex_core::test_support::set_thread_manager_test_mode(/*enabled*/ true);
+    codex_core::test_support::set_deterministic_process_ids(/*enabled*/ true);
+}
+
+#[ctor]
+fn configure_arg0_dispatch_for_test_binaries() {
+    let _ = TEST_ARG0_PATH_ENTRY.get_or_init(codex_arg0::arg0_dispatch);
 }
 
 #[ctor]
@@ -80,7 +96,7 @@ pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -
 }
 
 pub fn test_path_buf(unix_path: &str) -> PathBuf {
-    test_path_buf_with_windows(unix_path, None)
+    test_path_buf_with_windows(unix_path, /*windows_path*/ None)
 }
 
 pub fn test_absolute_path_with_windows(
@@ -92,7 +108,17 @@ pub fn test_absolute_path_with_windows(
 }
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
-    test_absolute_path_with_windows(unix_path, None)
+    test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
+}
+
+pub trait TempDirExt {
+    fn abs(&self) -> AbsolutePathBuf;
+}
+
+impl TempDirExt for TempDir {
+    fn abs(&self) -> AbsolutePathBuf {
+        self.path().abs()
+    }
 }
 
 pub fn test_tmp_path() -> AbsolutePathBuf {
@@ -141,22 +167,49 @@ pub fn fetch_dotslash_file(
 
 /// Returns a default `Config` whose on-disk state is confined to the provided
 /// temporary directory. Using a per-test directory keeps tests hermetic and
-/// avoids clobbering a developer's real `~/.ata`.
+/// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
+    load_default_config_for_test_with_cloud_requirements(
+        codex_home,
+        CloudRequirementsLoader::default(),
+    )
+    .await
+}
+
+/// Returns a default `Config` with test-provided cloud requirements applied
+/// during config construction.
+pub async fn load_default_config_for_test_with_cloud_requirements(
+    codex_home: &TempDir,
+    cloud_requirements: CloudRequirementsLoader,
+) -> Config {
     ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
+        .cloud_requirements(cloud_requirements)
         .build()
         .await
         .expect("defaults for test should always succeed")
+}
+
+pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
+    CloudRequirementsLoader::new(async {
+        Ok(Some(ConfigRequirementsToml {
+            network: Some(NetworkRequirementsToml {
+                enabled: Some(true),
+                allow_local_binding: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+    })
 }
 
 #[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
         codex_linux_sandbox_exe: Some(
-            codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
-                .expect("should find binary for codex-linux-sandbox"),
+            find_codex_linux_sandbox_exe().expect("should find binary for codex-linux-sandbox"),
         ),
         ..ConfigOverrides::default()
     }
@@ -165,6 +218,23 @@ fn default_test_overrides() -> ConfigOverrides {
 #[cfg(not(target_os = "linux"))]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides::default()
+}
+
+#[cfg(target_os = "linux")]
+pub fn find_codex_linux_sandbox_exe() -> Result<PathBuf, CargoBinError> {
+    if let Some(path) = TEST_ARG0_PATH_ENTRY
+        .get()
+        .and_then(Option::as_ref)
+        .and_then(|path_entry| path_entry.paths().codex_linux_sandbox_exe.clone())
+    {
+        return Ok(path);
+    }
+
+    if let Ok(path) = std::env::current_exe() {
+        return Ok(path);
+    }
+
+    codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
 }
 
 /// Builds an SSE stream body from a JSON fixture.
@@ -231,7 +301,7 @@ where
     F: Fn(&codex_protocol::protocol::EventMsg) -> Option<T>,
 {
     let ev = wait_for_event(codex, |ev| matcher(ev).is_some()).await;
-    matcher(&ev).unwrap()
+    matcher(&ev).expect("EventMsg should match matcher predicate")
 }
 
 pub async fn wait_for_event_with_timeout<F>(
@@ -245,8 +315,15 @@ where
     use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
+        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery).
+        // ATA registers ~8 extra tools (reading view, voice, document reader,
+        // js-repl, etc.), which on contended Linux CI runners pushes the
+        // initial-turn-complete past upstream's 10s ceiling. Bump the floor
+        // to 60s so heavily-contended runners (especially compact_resume_fork
+        // tests that drive multiple turns through the agent loop) still pass;
+        // happy-path tests don't notice because they return as soon as the
+        // predicate matches.
+        let ev = timeout(wait_time.max(Duration::from_secs(60)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
@@ -264,8 +341,35 @@ pub fn sandbox_network_env_var() -> &'static str {
     codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR
 }
 
+const REMOTE_ENV_ENV_VAR: &str = "CODEX_TEST_REMOTE_ENV";
+
+pub fn remote_env_env_var() -> &'static str {
+    REMOTE_ENV_ENV_VAR
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteEnvConfig {
+    pub container_name: String,
+}
+
+pub fn get_remote_test_env() -> Option<RemoteEnvConfig> {
+    if std::env::var_os(REMOTE_ENV_ENV_VAR).is_none() {
+        eprintln!("Skipping test because {REMOTE_ENV_ENV_VAR} is not set.");
+        return None;
+    }
+
+    let container_name = std::env::var(REMOTE_ENV_ENV_VAR)
+        .unwrap_or_else(|_| panic!("{REMOTE_ENV_ENV_VAR} must be set"));
+    assert!(
+        !container_name.trim().is_empty(),
+        "{REMOTE_ENV_ENV_VAR} must not be empty"
+    );
+
+    Some(RemoteEnvConfig { container_name })
+}
+
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, true)
+    codex_core::shell::default_user_shell().derive_exec_args(command, /*use_login_shell*/ true)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -274,7 +378,8 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell().derive_exec_args(command, false)
+    codex_core::shell::default_user_shell()
+        .derive_exec_args(command, /*use_login_shell*/ false)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {
@@ -284,35 +389,7 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
 }
 
 pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    match codex_utils_cargo_bin::cargo_bin("test_stdio_server") {
-        Ok(path) => Ok(path.to_string_lossy().to_string()),
-        Err(CargoBinError::NotFound { .. } | CargoBinError::ResolvedPathDoesNotExist { .. }) => {
-            ensure_test_stdio_server_built_once();
-            codex_utils_cargo_bin::cargo_bin("test_stdio_server")
-                .map(|path| path.to_string_lossy().to_string())
-        }
-        Err(err) => Err(err),
-    }
-}
-
-fn ensure_test_stdio_server_built_once() {
-    static BUILD_ONCE: OnceLock<()> = OnceLock::new();
-    let _ = BUILD_ONCE.get_or_init(|| {
-        let Ok(repo_root) = codex_utils_cargo_bin::repo_root() else {
-            return;
-        };
-
-        let _ = std::process::Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "codex-rmcp-client",
-                "--bin",
-                "test_stdio_server",
-            ])
-            .current_dir(repo_root.join("codex-rs"))
-            .status();
-    });
+    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
 }
 
 pub mod fs_wait {
@@ -365,7 +442,7 @@ pub mod fs_wait {
         let deadline = Instant::now() + timeout;
         loop {
             if path.exists() {
-                return Ok(path.clone());
+                return Ok(path);
             }
             let now = Instant::now();
             if now >= deadline {
@@ -375,7 +452,7 @@ pub mod fs_wait {
             match rx.recv_timeout(remaining) {
                 Ok(Ok(_event)) => {
                     if path.exists() {
-                        return Ok(path.clone());
+                        return Ok(path);
                     }
                 }
                 Ok(Err(err)) => return Err(err.into()),
@@ -505,11 +582,35 @@ macro_rules! skip_if_no_network {
 }
 
 #[macro_export]
+macro_rules! skip_if_remote {
+    ($reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
+            );
+            return;
+        }
+    }};
+    ($return_value:expr, $reason:expr $(,)?) => {{
+        if ::std::env::var_os($crate::remote_env_env_var()).is_some() {
+            eprintln!(
+                "Skipping test under {}: {}",
+                $crate::remote_env_env_var(),
+                $reason
+            );
+            return $return_value;
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! codex_linux_sandbox_exe_or_skip {
     () => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");
@@ -525,7 +626,7 @@ macro_rules! codex_linux_sandbox_exe_or_skip {
     ($return_value:expr $(,)?) => {{
         #[cfg(target_os = "linux")]
         {
-            match codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox") {
+            match $crate::find_codex_linux_sandbox_exe() {
                 Ok(path) => Some(path),
                 Err(err) => {
                     eprintln!("codex-linux-sandbox binary not available, skipping test: {err}");

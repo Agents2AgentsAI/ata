@@ -20,7 +20,6 @@ pub struct ProjectIndexConfig {
     pub ignore_extensions: HashSet<String>,
     pub disabled_languages: HashSet<Language>,
     pub annotation_store_path: Option<PathBuf>,
-    pub watch: bool,
     pub persist_annotations: bool,
 }
 
@@ -35,7 +34,6 @@ impl Default for ProjectIndexConfig {
                 .collect(),
             disabled_languages: HashSet::new(),
             annotation_store_path: None,
-            watch: true,
             persist_annotations: true,
         }
     }

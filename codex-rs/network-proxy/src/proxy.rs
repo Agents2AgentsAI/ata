@@ -2,6 +2,7 @@ use crate::config;
 use crate::http_proxy;
 use crate::network_policy::NetworkPolicyDecider;
 use crate::runtime::BlockedRequestObserver;
+use crate::runtime::ConfigState;
 use crate::runtime::unix_socket_permissions_supported;
 use crate::socks5;
 use crate::state::NetworkProxyState;
@@ -13,6 +14,7 @@ use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::RwLock;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
@@ -48,6 +50,43 @@ impl ReservedListeners {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.take()
+    }
+}
+
+struct ReservedListenerSet {
+    http_listener: StdTcpListener,
+    socks_listener: Option<StdTcpListener>,
+}
+
+impl ReservedListenerSet {
+    fn new(http_listener: StdTcpListener, socks_listener: Option<StdTcpListener>) -> Self {
+        Self {
+            http_listener,
+            socks_listener,
+        }
+    }
+
+    fn http_addr(&self) -> Result<SocketAddr> {
+        self.http_listener
+            .local_addr()
+            .context("failed to read reserved HTTP proxy address")
+    }
+
+    fn socks_addr(&self, default_addr: SocketAddr) -> Result<SocketAddr> {
+        self.socks_listener
+            .as_ref()
+            .map_or(Ok(default_addr), |listener| {
+                listener
+                    .local_addr()
+                    .context("failed to read reserved SOCKS5 proxy address")
+            })
+    }
+
+    fn into_reserved_listeners(self) -> Arc<ReservedListeners> {
+        Arc::new(ReservedListeners::new(
+            self.http_listener,
+            self.socks_listener,
+        ))
     }
 }
 
@@ -134,38 +173,41 @@ impl NetworkProxyBuilder {
             .set_blocked_request_observer(self.blocked_request_observer.clone())
             .await;
         let current_cfg = state.current_cfg().await?;
-        let (requested_http_addr, requested_socks_addr, reserved_listeners) =
-            if self.managed_by_codex {
-                let runtime = config::resolve_runtime(&current_cfg)?;
-                let (http_listener, socks_listener) =
-                    reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
-                        .context("reserve managed loopback proxy listeners")?;
-                let http_addr = http_listener
-                    .local_addr()
-                    .context("failed to read reserved HTTP proxy address")?;
-                let socks_addr = if let Some(socks_listener) = socks_listener.as_ref() {
-                    socks_listener
-                        .local_addr()
-                        .context("failed to read reserved SOCKS5 proxy address")?
-                } else {
-                    runtime.socks_addr
-                };
-                (
-                    http_addr,
-                    socks_addr,
-                    Some(Arc::new(ReservedListeners::new(
-                        http_listener,
-                        socks_listener,
-                    ))),
-                )
-            } else {
-                let runtime = config::resolve_runtime(&current_cfg)?;
-                (
-                    self.http_addr.unwrap_or(runtime.http_addr),
-                    self.socks_addr.unwrap_or(runtime.socks_addr),
-                    None,
-                )
-            };
+        let (requested_http_addr, requested_socks_addr, reserved_listeners) = if self
+            .managed_by_codex
+        {
+            let runtime = config::resolve_runtime(&current_cfg)?;
+            #[cfg(target_os = "windows")]
+            let (managed_http_addr, managed_socks_addr) = config::clamp_bind_addrs(
+                runtime.http_addr,
+                runtime.socks_addr,
+                &current_cfg.network,
+            );
+            #[cfg(target_os = "windows")]
+            let reserved = reserve_windows_managed_listeners(
+                managed_http_addr,
+                managed_socks_addr,
+                current_cfg.network.enable_socks5,
+            )
+            .context("reserve managed loopback proxy listeners")?;
+            #[cfg(not(target_os = "windows"))]
+            let reserved = reserve_loopback_ephemeral_listeners(current_cfg.network.enable_socks5)
+                .context("reserve managed loopback proxy listeners")?;
+            let http_addr = reserved.http_addr()?;
+            let socks_addr = reserved.socks_addr(runtime.socks_addr)?;
+            (
+                http_addr,
+                socks_addr,
+                Some(reserved.into_reserved_listeners()),
+            )
+        } else {
+            let runtime = config::resolve_runtime(&current_cfg)?;
+            (
+                self.http_addr.unwrap_or(runtime.http_addr),
+                self.socks_addr.unwrap_or(runtime.socks_addr),
+                None,
+            )
+        };
 
         // Reapply bind clamping for caller overrides so unix-socket proxying stays loopback-only.
         let (http_addr, socks_addr) = config::clamp_bind_addrs(
@@ -179,11 +221,9 @@ impl NetworkProxyBuilder {
             http_addr,
             socks_addr,
             socks_enabled: current_cfg.network.enable_socks5,
-            allow_local_binding: current_cfg.network.allow_local_binding,
-            allow_unix_sockets: current_cfg.network.allow_unix_sockets.clone(),
-            dangerously_allow_all_unix_sockets: current_cfg
-                .network
-                .dangerously_allow_all_unix_sockets,
+            runtime_settings: Arc::new(RwLock::new(NetworkProxyRuntimeSettings::from_config(
+                &current_cfg,
+            ))),
             reserved_listeners,
             policy_decider: self.policy_decider,
         })
@@ -192,7 +232,7 @@ impl NetworkProxyBuilder {
 
 fn reserve_loopback_ephemeral_listeners(
     reserve_socks_listener: bool,
-) -> Result<(StdTcpListener, Option<StdTcpListener>)> {
+) -> Result<ReservedListenerSet> {
     let http_listener =
         reserve_loopback_ephemeral_listener().context("reserve HTTP proxy listener")?;
     let socks_listener = if reserve_socks_listener {
@@ -200,12 +240,75 @@ fn reserve_loopback_ephemeral_listeners(
     } else {
         None
     };
-    Ok((http_listener, socks_listener))
+    Ok(ReservedListenerSet::new(http_listener, socks_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> Result<ReservedListenerSet> {
+    let http_addr = windows_managed_loopback_addr(http_addr);
+    let socks_addr = windows_managed_loopback_addr(socks_addr);
+
+    match try_reserve_windows_managed_listeners(http_addr, socks_addr, reserve_socks_listener) {
+        Ok(listeners) => Ok(listeners),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
+            warn!("managed Windows proxy ports are busy; falling back to ephemeral loopback ports");
+            reserve_loopback_ephemeral_listeners(reserve_socks_listener)
+                .context("reserve fallback loopback proxy listeners")
+        }
+        Err(err) => Err(err).context("reserve Windows managed proxy listeners"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn try_reserve_windows_managed_listeners(
+    http_addr: SocketAddr,
+    socks_addr: SocketAddr,
+    reserve_socks_listener: bool,
+) -> std::io::Result<ReservedListenerSet> {
+    let http_listener = StdTcpListener::bind(http_addr)?;
+    let socks_listener = if reserve_socks_listener {
+        Some(StdTcpListener::bind(socks_addr)?)
+    } else {
+        None
+    };
+    Ok(ReservedListenerSet::new(http_listener, socks_listener))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_managed_loopback_addr(addr: SocketAddr) -> SocketAddr {
+    if !addr.ip().is_loopback() {
+        warn!(
+            "managed Windows proxies must bind to loopback; clamping {addr} to 127.0.0.1:{}",
+            addr.port()
+        );
+    }
+    SocketAddr::from(([127, 0, 0, 1], addr.port()))
 }
 
 fn reserve_loopback_ephemeral_listener() -> Result<StdTcpListener> {
     StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
         .context("bind loopback ephemeral port")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NetworkProxyRuntimeSettings {
+    allow_local_binding: bool,
+    allow_unix_sockets: Arc<[String]>,
+    dangerously_allow_all_unix_sockets: bool,
+}
+
+impl NetworkProxyRuntimeSettings {
+    fn from_config(config: &config::NetworkProxyConfig) -> Self {
+        Self {
+            allow_local_binding: config.network.allow_local_binding,
+            allow_unix_sockets: config.network.allow_unix_sockets().into(),
+            dangerously_allow_all_unix_sockets: config.network.dangerously_allow_all_unix_sockets,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -214,9 +317,7 @@ pub struct NetworkProxy {
     http_addr: SocketAddr,
     socks_addr: SocketAddr,
     socks_enabled: bool,
-    allow_local_binding: bool,
-    allow_unix_sockets: Vec<String>,
-    dangerously_allow_all_unix_sockets: bool,
+    runtime_settings: Arc<RwLock<NetworkProxyRuntimeSettings>>,
     reserved_listeners: Option<Arc<ReservedListeners>>,
     policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
 }
@@ -236,7 +337,7 @@ impl PartialEq for NetworkProxy {
     fn eq(&self, other: &Self) -> bool {
         self.http_addr == other.http_addr
             && self.socks_addr == other.socks_addr
-            && self.allow_local_binding == other.allow_local_binding
+            && self.runtime_settings() == other.runtime_settings()
     }
 }
 
@@ -262,7 +363,50 @@ pub const PROXY_URL_ENV_KEYS: &[&str] = &[
 ];
 
 pub const ALL_PROXY_ENV_KEYS: &[&str] = &["ALL_PROXY", "all_proxy"];
+pub const PROXY_ACTIVE_ENV_KEY: &str = "CODEX_NETWORK_PROXY_ACTIVE";
 pub const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
+const ELECTRON_GET_USE_PROXY_ENV_KEY: &str = "ELECTRON_GET_USE_PROXY";
+#[cfg(any(target_os = "macos", test))]
+const GIT_SSH_COMMAND_ENV_KEY: &str = "GIT_SSH_COMMAND";
+pub const PROXY_ENV_KEYS: &[&str] = &[
+    PROXY_ACTIVE_ENV_KEY,
+    ALLOW_LOCAL_BINDING_ENV_KEY,
+    ELECTRON_GET_USE_PROXY_ENV_KEY,
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "YARN_HTTP_PROXY",
+    "YARN_HTTPS_PROXY",
+    "npm_config_http_proxy",
+    "npm_config_https_proxy",
+    "npm_config_proxy",
+    "NPM_CONFIG_HTTP_PROXY",
+    "NPM_CONFIG_HTTPS_PROXY",
+    "NPM_CONFIG_PROXY",
+    "BUNDLE_HTTP_PROXY",
+    "BUNDLE_HTTPS_PROXY",
+    "PIP_PROXY",
+    "DOCKER_HTTP_PROXY",
+    "DOCKER_HTTPS_PROXY",
+    "WS_PROXY",
+    "WSS_PROXY",
+    "ws_proxy",
+    "wss_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "npm_config_noproxy",
+    "NPM_CONFIG_NOPROXY",
+    "YARN_NO_PROXY",
+    "BUNDLE_NO_PROXY",
+    "ALL_PROXY",
+    "all_proxy",
+    "FTP_PROXY",
+    "ftp_proxy",
+];
+
+#[cfg(target_os = "macos")]
+pub const PROXY_GIT_SSH_COMMAND_ENV_KEY: &str = GIT_SSH_COMMAND_ENV_KEY;
 
 const FTP_PROXY_ENV_KEYS: &[&str] = &["FTP_PROXY", "ftp_proxy"];
 const WEBSOCKET_PROXY_ENV_KEYS: &[&str] = &["WS_PROXY", "WSS_PROXY", "ws_proxy", "wss_proxy"];
@@ -278,9 +422,18 @@ pub const NO_PROXY_ENV_KEYS: &[&str] = &[
 
 pub const DEFAULT_NO_PROXY_VALUE: &str = concat!(
     "localhost,127.0.0.1,::1,",
-    "*.local,.local,",
-    "169.254.0.0/16,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    "10.0.0.0/8,",
+    "172.16.0.0/12,",
+    "192.168.0.0/16"
 );
+
+#[cfg(target_os = "macos")]
+pub const CODEX_PROXY_GIT_SSH_COMMAND_MARKER: &str = "CODEX_PROXY_GIT_SSH_COMMAND=1 ";
+#[cfg(target_os = "macos")]
+const CODEX_PROXY_GIT_SSH_COMMAND_PREFIX: &str =
+    "CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x ";
+#[cfg(target_os = "macos")]
+const CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX: &str = " %h %p'";
 
 pub fn proxy_url_env_value<'a>(
     env: &'a HashMap<String, String>,
@@ -305,6 +458,17 @@ fn set_env_keys(env: &mut HashMap<String, String>, keys: &[&str], value: &str) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn codex_proxy_git_ssh_command(socks_addr: SocketAddr) -> String {
+    format!("{CODEX_PROXY_GIT_SSH_COMMAND_PREFIX}{socks_addr}{CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX}")
+}
+
+#[cfg(target_os = "macos")]
+fn is_codex_proxy_git_ssh_command(command: &str) -> bool {
+    command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_PREFIX)
+        && command.ends_with(CODEX_PROXY_GIT_SSH_COMMAND_SUFFIX)
+}
+
 fn apply_proxy_env_overrides(
     env: &mut HashMap<String, String>,
     http_addr: SocketAddr,
@@ -314,6 +478,7 @@ fn apply_proxy_env_overrides(
 ) {
     let http_proxy_url = format!("http://{http_addr}");
     let socks_proxy_url = format!("socks5h://{socks_addr}");
+    env.insert(PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string());
     env.insert(
         ALLOW_LOCAL_BINDING_ENV_KEY.to_string(),
         if allow_local_binding {
@@ -351,10 +516,15 @@ fn apply_proxy_env_overrides(
     // HTTP(S)_PROXY. Keep them aligned with the managed HTTP proxy endpoint.
     set_env_keys(env, WEBSOCKET_PROXY_ENV_KEYS, &http_proxy_url);
 
-    // Keep local/private targets direct so local IPC and metadata endpoints avoid the proxy.
+    // Keep loopback and IP-literal private targets direct so local IPC/LAN access avoids the proxy.
+    // Do not include hostname suffixes here: those can force clients to resolve internal names
+    // locally instead of letting the proxy resolve them.
     set_env_keys(env, NO_PROXY_ENV_KEYS, DEFAULT_NO_PROXY_VALUE);
 
-    env.insert("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string());
+    env.insert(
+        ELECTRON_GET_USE_PROXY_ENV_KEY.to_string(),
+        "true".to_string(),
+    );
 
     // Keep HTTP_PROXY/HTTPS_PROXY as HTTP endpoints. A lot of clients break if
     // those vars contain SOCKS URLs. We only switch ALL_PROXY here.
@@ -370,9 +540,17 @@ fn apply_proxy_env_overrides(
     #[cfg(target_os = "macos")]
     if socks_enabled {
         // Preserve existing SSH wrappers (for example: Secretive/Teleport setups)
-        // and only provide a SOCKS ProxyCommand fallback when one is not present.
-        env.entry("GIT_SSH_COMMAND".to_string())
-            .or_insert_with(|| format!("ssh -o ProxyCommand='nc -X 5 -x {socks_addr} %h %p'"));
+        // but refresh a previously injected Codex fallback so it cannot point
+        // at a stale proxy port after the proxy is restarted.
+        match env.get(GIT_SSH_COMMAND_ENV_KEY) {
+            Some(command) if !is_codex_proxy_git_ssh_command(command) => {}
+            _ => {
+                env.insert(
+                    GIT_SSH_COMMAND_ENV_KEY.to_string(),
+                    codex_proxy_git_ssh_command(socks_addr),
+                );
+            }
+        }
     }
 }
 
@@ -402,18 +580,19 @@ impl NetworkProxy {
     }
 
     pub fn allow_local_binding(&self) -> bool {
-        self.allow_local_binding
+        self.runtime_settings().allow_local_binding
     }
 
-    pub fn allow_unix_sockets(&self) -> &[String] {
-        &self.allow_unix_sockets
+    pub fn allow_unix_sockets(&self) -> Arc<[String]> {
+        self.runtime_settings().allow_unix_sockets
     }
 
     pub fn dangerously_allow_all_unix_sockets(&self) -> bool {
-        self.dangerously_allow_all_unix_sockets
+        self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
+        let allow_local_binding = self.allow_local_binding();
         // Enforce proxying for child processes. We intentionally override existing values so
         // command-level environment cannot bypass the managed proxy endpoint.
         apply_proxy_env_overrides(
@@ -421,8 +600,48 @@ impl NetworkProxy {
             self.http_addr,
             self.socks_addr,
             self.socks_enabled,
-            self.allow_local_binding,
+            allow_local_binding,
         );
+    }
+
+    pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
+        let current_cfg = self.state.current_cfg().await?;
+        anyhow::ensure!(
+            new_state.config.network.enabled == current_cfg.network.enabled,
+            "cannot update network.enabled on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.proxy_url == current_cfg.network.proxy_url,
+            "cannot update network.proxy_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.socks_url == current_cfg.network.socks_url,
+            "cannot update network.socks_url on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5 == current_cfg.network.enable_socks5,
+            "cannot update network.enable_socks5 on a running proxy"
+        );
+        anyhow::ensure!(
+            new_state.config.network.enable_socks5_udp == current_cfg.network.enable_socks5_udp,
+            "cannot update network.enable_socks5_udp on a running proxy"
+        );
+
+        let settings = NetworkProxyRuntimeSettings::from_config(&new_state.config);
+        self.state.replace_config_state(new_state).await?;
+        let mut guard = self
+            .runtime_settings
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = settings;
+        Ok(())
+    }
+
+    fn runtime_settings(&self) -> NetworkProxyRuntimeSettings {
+        self.runtime_settings
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub async fn run(&self) -> Result<NetworkProxyHandle> {
@@ -570,10 +789,19 @@ mod tests {
     use std::net::Ipv4Addr;
 
     #[tokio::test]
-    async fn managed_proxy_builder_uses_loopback_ephemeral_ports() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
+    async fn managed_proxy_builder_uses_loopback_ports() {
+        let http_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let http_addr = http_listener.local_addr().unwrap();
+        let socks_listener = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let socks_addr = socks_listener.local_addr().unwrap();
+        drop(http_listener);
+        drop(socks_listener);
+
+        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
+            proxy_url: format!("http://{http_addr}"),
+            socks_url: format!("http://{socks_addr}"),
+            ..NetworkProxySettings::default()
+        }));
         let proxy = match NetworkProxy::builder().state(state).build().await {
             Ok(proxy) => proxy,
             Err(err) => {
@@ -589,8 +817,16 @@ mod tests {
 
         assert!(proxy.http_addr.ip().is_loopback());
         assert!(proxy.socks_addr.ip().is_loopback());
-        assert_ne!(proxy.http_addr.port(), 0);
-        assert_ne!(proxy.socks_addr.port(), 0);
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(proxy.http_addr, http_addr);
+            assert_eq!(proxy.socks_addr, socks_addr);
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_ne!(proxy.http_addr.port(), 0);
+            assert_ne!(proxy.socks_addr.port(), 0);
+        }
     }
 
     #[tokio::test]
@@ -603,7 +839,7 @@ mod tests {
         let state = Arc::new(network_proxy_state_for_policy(settings));
         let proxy = NetworkProxy::builder()
             .state(state)
-            .managed_by_codex(false)
+            .managed_by_codex(/*managed_by_codex*/ false)
             .build()
             .await
             .unwrap();
@@ -622,6 +858,7 @@ mod tests {
     async fn managed_proxy_builder_does_not_reserve_socks_listener_when_disabled() {
         let settings = NetworkProxySettings {
             enable_socks5: false,
+            proxy_url: "http://127.0.0.1:43128".to_string(),
             socks_url: "http://127.0.0.1:43129".to_string(),
             ..NetworkProxySettings::default()
         };
@@ -640,6 +877,7 @@ mod tests {
         };
 
         assert!(proxy.http_addr.ip().is_loopback());
+        assert_ne!(proxy.http_addr.port(), 0);
         assert_eq!(
             proxy.socks_addr,
             "127.0.0.1:43129".parse::<SocketAddr>().unwrap()
@@ -651,6 +889,47 @@ mod tests {
                 .expect("managed builder should reserve listeners")
                 .take_socks()
                 .is_none()
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_managed_loopback_addr_clamps_non_loopback_inputs() {
+        assert_eq!(
+            windows_managed_loopback_addr("0.0.0.0:3128".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:3128".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            windows_managed_loopback_addr("[::]:8081".parse::<SocketAddr>().unwrap()),
+            "127.0.0.1:8081".parse::<SocketAddr>().unwrap()
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reserve_windows_managed_listeners_falls_back_when_http_port_is_busy() {
+        let occupied = StdTcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
+        let busy_port = occupied.local_addr().unwrap().port();
+
+        let reserved = reserve_windows_managed_listeners(
+            SocketAddr::from(([127, 0, 0, 1], busy_port)),
+            SocketAddr::from(([127, 0, 0, 1], 48081)),
+            /*reserve_socks_listener*/ false,
+        )
+        .unwrap();
+
+        assert!(reserved.socks_listener.is_none());
+        assert!(
+            reserved
+                .http_listener
+                .local_addr()
+                .unwrap()
+                .ip()
+                .is_loopback()
+        );
+        assert_ne!(
+            reserved.http_listener.local_addr().unwrap().port(),
+            busy_port
         );
     }
 
@@ -694,8 +973,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -726,15 +1005,48 @@ mod tests {
             env.get("NO_PROXY"),
             Some(&DEFAULT_NO_PROXY_VALUE.to_string())
         );
+        let no_proxy = env.get("NO_PROXY").expect("NO_PROXY should be set");
+        assert!(no_proxy.contains("10.0.0.0/8"));
+        assert!(no_proxy.contains("172.16.0.0/12"));
+        assert!(no_proxy.contains("192.168.0.0/16"));
+        assert!(!no_proxy.contains("169.254.0.0/16"));
+        assert_eq!(env.get(PROXY_ACTIVE_ENV_KEY), Some(&"1".to_string()));
         assert_eq!(env.get(ALLOW_LOCAL_BINDING_ENV_KEY), Some(&"0".to_string()));
-        assert_eq!(env.get("ELECTRON_GET_USE_PROXY"), Some(&"true".to_string()));
+        assert_eq!(
+            env.get(ELECTRON_GET_USE_PROXY_ENV_KEY),
+            Some(&"true".to_string())
+        );
         #[cfg(target_os = "macos")]
         assert_eq!(
-            env.get("GIT_SSH_COMMAND"),
-            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
+            Some(
+                &"CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                    .to_string()
+            )
         );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
+        assert_eq!(env.get(GIT_SSH_COMMAND_ENV_KEY), None);
+    }
+
+    #[test]
+    fn apply_proxy_env_overrides_sets_only_expected_env_keys() {
+        let mut env = HashMap::new();
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+        );
+
+        for key in env.keys() {
+            let is_managed_git_ssh_key =
+                cfg!(target_os = "macos") && key == GIT_SSH_COMMAND_ENV_KEY;
+            assert!(
+                PROXY_ENV_KEYS.contains(&key.as_str()) || is_managed_git_ssh_key,
+                "proxy env writer set unexpected key: {key}"
+            );
+        }
     }
 
     #[test]
@@ -744,8 +1056,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            false,
-            true,
+            /*socks_enabled*/ false,
+            /*allow_local_binding*/ true,
         );
 
         assert_eq!(
@@ -762,8 +1074,8 @@ mod tests {
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
@@ -788,11 +1100,14 @@ mod tests {
         );
         #[cfg(target_os = "macos")]
         assert_eq!(
-            env.get("GIT_SSH_COMMAND"),
-            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
+            Some(
+                &"CODEX_PROXY_GIT_SSH_COMMAND=1 ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'"
+                    .to_string()
+            )
         );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(env.get("GIT_SSH_COMMAND"), None);
+        assert_eq!(env.get(GIT_SSH_COMMAND_ENV_KEY), None);
     }
 
     #[cfg(target_os = "macos")]
@@ -800,20 +1115,68 @@ mod tests {
     fn apply_proxy_env_overrides_preserves_existing_git_ssh_command() {
         let mut env = HashMap::new();
         env.insert(
-            "GIT_SSH_COMMAND".to_string(),
+            GIT_SSH_COMMAND_ENV_KEY.to_string(),
             "ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string(),
         );
         apply_proxy_env_overrides(
             &mut env,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081),
-            true,
-            false,
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
         );
 
         assert_eq!(
-            env.get("GIT_SSH_COMMAND"),
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
             Some(&"ssh -o ProxyCommand='tsh proxy ssh --cluster=dev %r@%h:%p'".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_proxy_env_overrides_preserves_unmarked_git_ssh_command_with_proxy_shape() {
+        let mut env = HashMap::new();
+        env.insert(
+            GIT_SSH_COMMAND_ENV_KEY.to_string(),
+            "ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string(),
+        );
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+        );
+
+        assert_eq!(
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
+            Some(&"ssh -o ProxyCommand='nc -X 5 -x 127.0.0.1:8081 %h %p'".to_string())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apply_proxy_env_overrides_refreshes_previous_codex_proxy_git_ssh_command() {
+        let mut env = HashMap::new();
+        env.insert(
+            GIT_SSH_COMMAND_ENV_KEY.to_string(),
+            codex_proxy_git_ssh_command(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8081)),
+        );
+
+        apply_proxy_env_overrides(
+            &mut env,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 43128),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 48081),
+            /*socks_enabled*/ true,
+            /*allow_local_binding*/ false,
+        );
+
+        assert_eq!(
+            env.get(GIT_SSH_COMMAND_ENV_KEY),
+            Some(&codex_proxy_git_ssh_command(SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+                48081,
+            )))
         );
     }
 }

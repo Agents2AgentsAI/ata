@@ -39,10 +39,7 @@ pub fn peek(
     line_count: usize,
 ) -> Result<PeekResult, TreeSitterError> {
     if line_count == 0 {
-        return Err(TreeSitterError::InvalidRange {
-            start: start_line,
-            end: start_line,
-        });
+        return Err(TreeSitterError::InvalidLimit);
     }
 
     if file_tree.get(file).is_none() {

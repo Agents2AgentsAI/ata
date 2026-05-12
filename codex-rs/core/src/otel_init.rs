@@ -1,13 +1,13 @@
 use crate::config::Config;
-use crate::config::types::OtelExporterKind as Kind;
-use crate::config::types::OtelHttpProtocol as Protocol;
-use crate::default_client::originator;
-use crate::features::Feature;
+use codex_config::types::OtelExporterKind as Kind;
+use codex_config::types::OtelHttpProtocol as Protocol;
+use codex_features::Feature;
+use codex_login::default_client::originator;
+use codex_otel::OtelExporter;
+use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::config::OtelTlsConfig as OtelTlsSettings;
+use codex_otel::OtelSettings;
+use codex_otel::OtelTlsConfig as OtelTlsSettings;
 use std::error::Error;
 
 /// Build an OpenTelemetry provider from the app Config.
@@ -17,6 +17,7 @@ pub fn build_provider(
     config: &Config,
     service_version: &str,
     service_name_override: Option<&str>,
+    default_analytics_enabled: bool,
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
     let to_otel_exporter = |kind: &Kind| match kind {
         Kind::None => OtelExporter::None,
@@ -66,7 +67,10 @@ pub fn build_provider(
 
     let exporter = to_otel_exporter(&config.otel.exporter);
     let trace_exporter = to_otel_exporter(&config.otel.trace_exporter);
-    let metrics_exporter = if config.analytics_enabled == Some(true) {
+    let metrics_exporter = if config
+        .analytics_enabled
+        .unwrap_or(default_analytics_enabled)
+    {
         to_otel_exporter(&config.otel.metrics_exporter)
     } else {
         OtelExporter::None
@@ -79,12 +83,14 @@ pub fn build_provider(
     OtelProvider::from(&OtelSettings {
         service_name: service_name.to_string(),
         service_version: service_version.to_string(),
-        codex_home: config.codex_home.clone(),
+        codex_home: config.codex_home.to_path_buf(),
         environment: config.otel.environment.to_string(),
         exporter,
         trace_exporter,
         metrics_exporter,
         runtime_metrics,
+        span_attributes: config.otel.span_attributes.clone(),
+        tracestate: config.otel.tracestate.clone(),
     })
 }
 

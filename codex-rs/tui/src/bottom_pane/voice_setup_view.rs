@@ -12,7 +12,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 
-use codex_core::config::types::VoiceVerbosity;
+use crate::legacy_core::config::types::TtsBackend;
+use crate::legacy_core::config::types::VoiceVerbosity;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -98,6 +99,7 @@ impl VoiceSetupView {
         api_key: Option<String>,
         language_code: Option<String>,
         speed: Option<f64>,
+        tts_backend: TtsBackend,
         app_event_tx: AppEventSender,
     ) -> Self {
         // Use key from config/caller, falling back to env var.
@@ -131,6 +133,18 @@ impl VoiceSetupView {
             VoiceVerbosity::Concise => 1,
         };
 
+        let backend_options: Vec<(String, String)> = vec![
+            (
+                "elevenlabs".to_string(),
+                "ElevenLabs (cloud, needs API key)".to_string(),
+            ),
+            ("say".to_string(), "macOS say (local, no key)".to_string()),
+        ];
+        let backend_idx = match tts_backend {
+            TtsBackend::Elevenlabs => 0,
+            TtsBackend::Say => 1,
+        };
+
         let items = vec![
             VoiceSetupItem {
                 name: "Auto-start".to_string(),
@@ -159,6 +173,14 @@ impl VoiceSetupView {
                 kind: VoiceSetupItemKind::Selection {
                     current_idx: verbosity_idx,
                     options: verbosity_options,
+                },
+            },
+            VoiceSetupItem {
+                name: "TTS backend".to_string(),
+                description: "Voice synthesizer (say loses karaoke timing)".to_string(),
+                kind: VoiceSetupItemKind::Selection {
+                    current_idx: backend_idx,
+                    options: backend_options,
                 },
             },
             VoiceSetupItem {
@@ -535,6 +557,24 @@ impl VoiceSetupView {
     }
 
     /// Extract the current verbosity selection.
+    fn current_tts_backend(&self) -> TtsBackend {
+        for item in &self.items {
+            if let VoiceSetupItemKind::Selection {
+                current_idx,
+                options,
+            } = &item.kind
+                && item.name == "TTS backend"
+            {
+                let current_value = options.get(*current_idx).map(|(v, _)| v.as_str());
+                return match current_value {
+                    Some("say") => TtsBackend::Say,
+                    _ => TtsBackend::Elevenlabs,
+                };
+            }
+        }
+        TtsBackend::default()
+    }
+
     fn current_verbosity(&self) -> VoiceVerbosity {
         for item in &self.items {
             if let VoiceSetupItemKind::Selection {
@@ -710,6 +750,7 @@ impl BottomPaneView for VoiceSetupView {
         let language_code = self.current_language_code();
         let speed = self.current_speed();
         let verbosity = self.current_verbosity();
+        let tts_backend = self.current_tts_backend();
 
         self.app_event_tx.send(AppEvent::UpdateVoiceSettings {
             startup_enabled: startup_enabled.unwrap_or(false),
@@ -719,6 +760,7 @@ impl BottomPaneView for VoiceSetupView {
             language_code: Some(language_code),
             speed: Some(speed),
             verbosity,
+            tts_backend,
         });
         self.complete = true;
         CancellationEvent::Handled
@@ -853,6 +895,7 @@ mod tests {
             Some("sk-test".to_string()),
             Some("en".to_string()),
             Some(1.1),
+            TtsBackend::Elevenlabs,
             app_event_tx,
         );
 
@@ -870,6 +913,7 @@ mod tests {
                 language_code,
                 speed,
                 verbosity,
+                tts_backend,
             } if startup_enabled
                 && !tts_enabled
                 && stt_enabled
@@ -877,6 +921,7 @@ mod tests {
                 && language_code == Some(Some("en".to_string()))
                 && speed == Some(1.1)
                 && verbosity == VoiceVerbosity::Concise
+                && tts_backend == TtsBackend::Elevenlabs
         );
     }
 }

@@ -4,15 +4,17 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use async_trait::async_trait;
+use codex_tools::AdditionalProperties;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_treesitter::FileMark;
 use codex_treesitter::GrepScope;
 use codex_treesitter::SymbolKind;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::client_common::tools::ResponsesApiTool;
-use crate::client_common::tools::ToolSpec;
 use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
 use crate::tools::context::FunctionToolOutput;
@@ -26,7 +28,6 @@ use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use crate::tools::spec::JsonSchema;
 
 const CODE_INTEL_TOOL_DESCRIPTION: &str = include_str!("tool_code_intel.txt");
 const DEFAULT_CHUNK_SIZE: usize = 5000;
@@ -107,9 +108,20 @@ enum ResponseFormat {
     Json,
 }
 
-#[async_trait]
 impl ToolHandler for CodeIntelToolHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("code_intel")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_code_intel_tool())
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        true
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -936,113 +948,91 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
         "operation".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Operation name: symbolSearch, symbols, callers, tests, variables, implementation, structure, peek, grep, chunkIndices, defineSymbol, redefineSymbol, defineFile, redefineFile, markFile, saveAnnotations, loadAnnotations, addRoot, removeRoot, listRoots"
                     .to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "symbol".to_string(),
-        JsonSchema::String {
-            description: Some("Symbol/function name for symbol-scoped operations.".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Symbol/function name for symbol-scoped operations.".to_string(),
+        )),
     );
     properties.insert(
         "file".to_string(),
-        JsonSchema::String {
-            description: Some("Absolute file path for file-scoped operations.".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Absolute file path for file-scoped operations.".to_string(),
+        )),
     );
     properties.insert(
         "query".to_string(),
-        JsonSchema::String {
-            description: Some("Symbol search query for symbolSearch.".to_string()),
-        },
+        JsonSchema::string(Some("Symbol search query for symbolSearch.".to_string())),
     );
     properties.insert(
         "kind".to_string(),
-        JsonSchema::String {
-            description: Some("Optional symbol kind filter for symbols operation.".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Optional symbol kind filter for symbols operation.".to_string(),
+        )),
     );
     properties.insert(
         "pattern".to_string(),
-        JsonSchema::String {
-            description: Some("Regex pattern for grep.".to_string()),
-        },
+        JsonSchema::string(Some("Regex pattern for grep.".to_string())),
     );
     properties.insert(
         "definition".to_string(),
-        JsonSchema::String {
-            description: Some("Definition text for define/redefine operations.".to_string()),
-        },
+        JsonSchema::string(Some(
+            "Definition text for define/redefine operations.".to_string(),
+        )),
     );
     properties.insert(
         "mark".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Mark for markFile. Built-ins: test, docs, config, generated, entryPoint. Custom values are allowed.".to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "line".to_string(),
-        JsonSchema::Number {
-            description: Some("1-based start line for peek.".to_string()),
-        },
+        JsonSchema::number(Some("1-based start line for peek.".to_string())),
     );
     properties.insert(
         "limit".to_string(),
-        JsonSchema::Number {
-            description: Some("Result count limit (default 10, max 50).".to_string()),
-        },
+        JsonSchema::number(Some("Result count limit (default 10, max 50).".to_string())),
     );
     properties.insert(
         "depth".to_string(),
-        JsonSchema::Number {
-            description: Some("Depth for structure tree (default 3).".to_string()),
-        },
+        JsonSchema::number(Some("Depth for structure tree (default 3).".to_string())),
     );
     properties.insert(
         "chunk_size".to_string(),
-        JsonSchema::Number {
-            description: Some("Chunk size in bytes for chunkIndices (default 5000).".to_string()),
-        },
+        JsonSchema::number(Some(
+            "Chunk size in bytes for chunkIndices (default 5000).".to_string(),
+        )),
     );
     properties.insert(
         "overlap".to_string(),
-        JsonSchema::Number {
-            description: Some("Chunk overlap in bytes for chunkIndices (default 200).".to_string()),
-        },
+        JsonSchema::number(Some(
+            "Chunk overlap in bytes for chunkIndices (default 200).".to_string(),
+        )),
     );
     properties.insert(
         "scope".to_string(),
-        JsonSchema::String {
-            description: Some("Grep scope: all or code.".to_string()),
-        },
+        JsonSchema::string(Some("Grep scope: all or code.".to_string())),
     );
     properties.insert(
         "root".to_string(),
-        JsonSchema::String {
-            description: Some(
+        JsonSchema::string(Some(
                 "Optional root name for query scoping. Required by removeRoot; used by addRoot as the new root name."
                     .to_string(),
-            ),
-        },
+        )),
     );
     properties.insert(
         "path".to_string(),
-        JsonSchema::String {
-            description: Some("Absolute or cwd-relative directory path for addRoot.".to_string()),
-        },
+        JsonSchema::string(Some("Absolute directory path for addRoot.".to_string())),
     );
     properties.insert(
         "response_format".to_string(),
-        JsonSchema::String {
-            description: Some("Output format: text (default) or json.".to_string()),
-        },
+        JsonSchema::string(Some("Output format: text (default) or json.".to_string())),
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -1050,11 +1040,11 @@ pub(crate) fn create_code_intel_tool() -> ToolSpec {
         description: CODE_INTEL_TOOL_DESCRIPTION.to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::Object {
+        parameters: JsonSchema::object(
             properties,
-            required: Some(vec!["operation".to_string()]),
-            additional_properties: Some(false.into()),
-        },
+            Some(vec!["operation".to_string()]),
+            Some(AdditionalProperties::Boolean(false)),
+        ),
         output_schema: None,
     })
 }

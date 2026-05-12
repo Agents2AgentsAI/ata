@@ -661,7 +661,7 @@ mod tests {
     async fn dual_ttls_expire_negative_entries_earlier_than_positive_entries() -> Result<()> {
         let cache = ResponseCache::new(8);
         let key = CacheKey {
-            tool_name: "repo_get_health",
+            tool_name: "paper_search",
             params_hash: 501,
         };
 

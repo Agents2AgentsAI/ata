@@ -1,6 +1,8 @@
 use pretty_assertions::assert_eq;
+use wiremock::Match;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -25,6 +27,7 @@ use crate::types::ZoteroCitationGenerator;
 use crate::types::ZoteroCitationParams;
 use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
+use crate::types::ZoteroCreateAttachmentImportUrlParams;
 use crate::types::ZoteroCreateAttachmentLinkParams;
 use crate::types::ZoteroCreateCollectionParams;
 use crate::types::ZoteroFindOrCreateCollectionParams;
@@ -48,6 +51,15 @@ use crate::types::ZoteroSortDirection;
 use crate::types::ZoteroTagSearchParams;
 use crate::types::ZoteroTagsParams;
 use crate::types::ZoteroUpdateItemsParams;
+
+#[derive(Debug)]
+struct MissingQueryParam(&'static str);
+
+impl Match for MissingQueryParam {
+    fn matches(&self, request: &Request) -> bool {
+        !request.url.query_pairs().any(|(key, _)| key == self.0)
+    }
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn zotero_search_and_get_item_use_user_scope() {
@@ -180,6 +192,63 @@ async fn zotero_search_supports_explicit_qmode() {
 
     assert_eq!(result.items.len(), 1);
     assert_eq!(result.items[0].key, "ITEM_QMODE");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_search_with_api_key_does_not_force_relevance_sort() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/42/items"))
+        .and(query_param("q", "robots"))
+        .and(query_param("sort", "relevance"))
+        .respond_with(
+            ResponseTemplate::new(400).set_body_string("Invalid 'sort' value 'relevance'"),
+        )
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/42/items"))
+        .and(query_param("q", "robots"))
+        .and(MissingQueryParam("sort"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "key": "ITEM_REMOTE",
+                "data": {
+                    "itemType": "journalArticle",
+                    "title": "Remote Search Item",
+                    "creators": []
+                }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit_with_config(ResearchConfig {
+        zotero_api_key: Some("test-key".to_string()),
+        zotero_user_id: Some("42".to_string()),
+        zotero_group_id: None,
+        zotero_base_url: server.uri(),
+        ..ResearchConfig::default()
+    });
+
+    let result = toolkit
+        .zotero_search(ZoteroSearchParams {
+            query: "robots".to_string(),
+            library_type: None,
+            library_id: None,
+            offset: Some(0),
+            limit: Some(10),
+            item_type: None,
+            qmode: None,
+            max_chars_per_item: None,
+        })
+        .await
+        .expect("api-key zotero search should succeed without implicit relevance sort");
+
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].key, "ITEM_REMOTE");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1727,6 +1796,47 @@ async fn zotero_collections_support_group_scope_override() {
         items.items[0].linked_items[0].canonical_id,
         Some("zotero:group/999/PAPER2".to_string())
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_get_collection_items_uses_larger_default_limit() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/groups/999/collections/COL1/items"))
+        .and(query_param("format", "json"))
+        .and(query_param("start", "0"))
+        .and(query_param("limit", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {
+                "key": "ITEM1",
+                "data": {
+                    "itemType": "journalArticle",
+                    "title": "Group Item",
+                    "creators": []
+                }
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+
+    let items = toolkit
+        .zotero_get_collection_items(ZoteroCollectionItemsParams {
+            collection_key: "COL1".to_string(),
+            library_type: Some("group".to_string()),
+            library_id: Some("999".to_string()),
+            offset: None,
+            limit: None,
+            item_type: None,
+            max_chars_per_item: None,
+        })
+        .await
+        .expect("zotero_get_collection_items should succeed");
+
+    assert_eq!(items.items.len(), 1);
+    assert_eq!(items.items[0].key, "ITEM1");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3625,6 +3735,171 @@ async fn zotero_create_attachment_link_creates_linked_url_attachment() {
     assert_eq!(result.records[0].key, "ATT1");
     assert_eq!(result.records[0].parent_item, Some("ITEM1".to_string()));
     assert_eq!(result.records[0].item_type, Some("attachment".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_create_attachment_link_infers_group_scope_from_parent_item() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/users/123/items/PARENT1"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/groups/456/items/PARENT1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "key": "PARENT1",
+            "data": {
+                "itemType": "preprint",
+                "title": "Parent Paper",
+                "creators": []
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/groups/456/items"))
+        .and(|request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("request body should be json");
+            body == serde_json::json!([
+                {
+                    "itemType": "attachment",
+                    "parentItem": "PARENT1",
+                    "linkMode": "linked_url",
+                    "title": "Paper PDF",
+                    "url": "https://example.com/paper.pdf",
+                    "contentType": "application/pdf",
+                    "collections": [],
+                    "tags": []
+                }
+            ])
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "successful": {
+                "0": {
+                    "key": "ATT2",
+                    "version": 7
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_create_attachment_link(ZoteroCreateAttachmentLinkParams {
+            parent_item_key: "PARENT1".to_string(),
+            title: "Paper PDF".to_string(),
+            url: "https://example.com/paper.pdf".to_string(),
+            content_type: Some("application/pdf".to_string()),
+            collections: None,
+            tags: None,
+            library_type: None,
+            library_id: None,
+        })
+        .await
+        .expect("scope inference should succeed");
+
+    assert_eq!(result.records[0].key, "ATT2");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn zotero_create_attachment_import_url_uploads_imported_attachment() {
+    let server = MockServer::start().await;
+    let pdf_url = format!("{}/paper.pdf", server.uri());
+    let upload_url = format!("{}/upload", server.uri());
+    let expected_pdf_url = pdf_url.clone();
+
+    Mock::given(method("GET"))
+        .and(path("/paper.pdf"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-test".to_vec()))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/users/123/items"))
+        .and(move |request: &wiremock::Request| {
+            let body: serde_json::Value = request.body_json().expect("request body should be json");
+            body == serde_json::json!([
+                {
+                    "itemType": "attachment",
+                    "parentItem": "ITEM1",
+                    "linkMode": "imported_url",
+                    "title": "Preprint PDF",
+                    "url": expected_pdf_url,
+                    "contentType": "application/pdf",
+                    "filename": "paper.pdf",
+                    "tags": []
+                }
+            ])
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "successful": {
+                "0": {
+                    "key": "ATT3",
+                    "version": 8
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/users/123/items/ATT3/file"))
+        .and(|request: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&request.body);
+            request
+                .headers
+                .get("if-none-match")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == "*")
+                && body.contains("md5=")
+                && body.contains("filename=paper.pdf")
+        })
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "url": upload_url,
+            "contentType": "multipart/form-data; boundary=BOUNDARY",
+            "prefix": "--BOUNDARY\r\n\r\n",
+            "suffix": "\r\n--BOUNDARY--\r\n",
+            "uploadKey": "UPLOAD1"
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/upload"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/users/123/items/ATT3/file"))
+        .and(|request: &wiremock::Request| request.body == b"upload=UPLOAD1")
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
+
+    let toolkit = build_test_toolkit(server.uri());
+    let result = toolkit
+        .zotero_create_attachment_import_url(ZoteroCreateAttachmentImportUrlParams {
+            parent_item_key: "ITEM1".to_string(),
+            title: "Preprint PDF".to_string(),
+            url: pdf_url,
+            content_type: Some("application/pdf".to_string()),
+            filename: Some("paper.pdf".to_string()),
+            tags: None,
+            library_type: Some("user".to_string()),
+            library_id: Some("123".to_string()),
+        })
+        .await
+        .expect("attachment import should succeed");
+
+    assert_eq!(result.records.len(), 1);
+    assert_eq!(result.records[0].key, "ATT3");
+    assert_eq!(result.records[0].parent_item, Some("ITEM1".to_string()));
 }
 
 #[tokio::test(flavor = "multi_thread")]

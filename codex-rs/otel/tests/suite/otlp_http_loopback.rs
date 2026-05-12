@@ -1,21 +1,28 @@
+use codex_otel::MetricsClient;
+use codex_otel::MetricsConfig;
+use codex_otel::OtelExporter;
+use codex_otel::OtelHttpProtocol;
 use codex_otel::OtelProvider;
-use codex_otel::config::OtelExporter;
-use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSettings;
-use codex_otel::metrics::MetricsClient;
-use codex_otel::metrics::MetricsConfig;
-use codex_otel::metrics::Result;
+use codex_otel::OtelSettings;
+use codex_otel::Result;
+use codex_otel::current_span_w3c_trace_context;
+use codex_otel::set_parent_from_w3c_trace_context;
+use codex_protocol::protocol::W3cTraceContext;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::io::Write as _;
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use tracing_subscriber::layer::SubscriberExt;
+
+static TRACE_CONTEXT_CONFIG_LOCK: Mutex<()> = Mutex::new(());
 
 struct CapturedRequest {
     path: String,
@@ -138,28 +145,10 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
 
-    // Create the metrics client BEFORE spawning the server thread.
-    // MetricsClient::new() can be slow (OTEL SDK init, os_info discovery,
-    // etc.) and that time was eating into the server's accept deadline,
-    // causing flaky failures under load. The listener is already bound so
-    // the TCP connection made during export will queue in the kernel
-    // backlog until the server thread accepts it.
-    let metrics = MetricsClient::new(MetricsConfig::otlp(
-        "test",
-        "codex-cli",
-        env!("CARGO_PKG_VERSION"),
-        OtelExporter::OtlpHttp {
-            endpoint: format!("http://{addr}/v1/metrics"),
-            headers: HashMap::new(),
-            protocol: OtelHttpProtocol::Json,
-            tls: None,
-        },
-    ))?;
-
     let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
     let server = thread::spawn(move || {
         let mut captured = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(3);
 
         while Instant::now() < deadline {
             match listener.accept() {
@@ -167,15 +156,11 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
                     let result = read_http_request(&mut stream);
                     let _ = write_http_response(&mut stream, "202 Accepted");
                     if let Ok((path, headers, body)) = result {
-                        let done = path == "/v1/metrics";
                         captured.push(CapturedRequest {
                             path,
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
-                        if done {
-                            break;
-                        }
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -188,7 +173,19 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
         let _ = tx.send(captured);
     });
 
-    metrics.counter("codex.turns", 1, &[("source", "test")])?;
+    let metrics = MetricsClient::new(MetricsConfig::otlp(
+        "test",
+        "codex-cli",
+        env!("CARGO_PKG_VERSION"),
+        OtelExporter::OtlpHttp {
+            endpoint: format!("http://{addr}/v1/metrics"),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        },
+    ))?;
+
+    metrics.counter("codex.turns", /*inc*/ 1, &[("source", "test")])?;
     metrics.shutdown()?;
 
     server.join().expect("server join");
@@ -228,8 +225,40 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
 }
 
 #[test]
+fn otel_provider_rejects_header_unsafe_configured_tracestate() {
+    let result = OtelProvider::from(&OtelSettings {
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: PathBuf::from("."),
+        exporter: OtelExporter::None,
+        trace_exporter: OtelExporter::OtlpHttp {
+            endpoint: "http://127.0.0.1:1/v1/traces".to_string(),
+            headers: HashMap::new(),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        },
+        metrics_exporter: OtelExporter::None,
+        runtime_metrics: false,
+        span_attributes: BTreeMap::new(),
+        tracestate: BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([("alpha".to_string(), "one\ntwo".to_string())]),
+        )]),
+    });
+
+    let Err(err) = result else {
+        panic!("expected header-unsafe configured tracestate to be rejected");
+    };
+    assert!(err.to_string().contains("configured tracestate value"));
+}
+
+#[test]
 fn otlp_http_exporter_sends_traces_to_collector()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let _trace_context_config_guard = TRACE_CONTEXT_CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
@@ -276,12 +305,23 @@ fn otlp_http_exporter_sends_traces_to_collector()
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
+        span_attributes: BTreeMap::from([(
+            "test.configured_attribute".to_string(),
+            "configured-value".to_string(),
+        )]),
+        tracestate: BTreeMap::from([(
+            "example".to_string(),
+            BTreeMap::from([
+                ("alpha".to_string(), "one".to_string()),
+                ("beta".to_string(), "two".to_string()),
+            ]),
+        )]),
     })?
     .expect("otel provider");
     let tracing_layer = otel.tracing_layer().expect("tracing layer");
     let subscriber = tracing_subscriber::registry().with(tracing_layer);
 
-    tracing::subscriber::with_default(subscriber, || {
+    let propagated_trace = tracing::subscriber::with_default(subscriber, || {
         let span = tracing::info_span!(
             "trace-loopback",
             otel.name = "trace-loopback",
@@ -289,10 +329,27 @@ fn otlp_http_exporter_sends_traces_to_collector()
             rpc.system = "jsonrpc",
             rpc.method = "trace-loopback",
         );
+        assert!(set_parent_from_w3c_trace_context(
+            &span,
+            &W3cTraceContext {
+                traceparent: Some(
+                    "00-00000000000000000000000000000001-0000000000000002-01".to_string(),
+                ),
+                tracestate: Some("example=alpha:zero;keep:yes,other=value".to_string()),
+            },
+        ));
         let _guard = span.enter();
+        let propagated_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
         tracing::info!("trace loopback event");
+        propagated_trace
     });
     otel.shutdown();
+
+    assert_eq!(
+        propagated_trace.tracestate.as_deref(),
+        Some("example=alpha:one;keep:yes;beta:two,other=value")
+    );
 
     server.join().expect("server join");
     let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
@@ -331,6 +388,11 @@ fn otlp_http_exporter_sends_traces_to_collector()
         "expected service name not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
+    assert!(
+        body.contains("test.configured_attribute") && body.contains("configured-value"),
+        "expected configured span attribute not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
 
     Ok(())
 }
@@ -338,6 +400,9 @@ fn otlp_http_exporter_sends_traces_to_collector()
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let _trace_context_config_guard = TRACE_CONTEXT_CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
@@ -384,6 +449,8 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
+        span_attributes: BTreeMap::new(),
+        tracestate: BTreeMap::new(),
     })?
     .expect("otel provider");
     let tracing_layer = otel.tracing_layer().expect("tracing layer");
@@ -446,6 +513,9 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
 #[test]
 fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let _trace_context_config_guard = TRACE_CONTEXT_CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("local_addr");
     listener.set_nonblocking(true).expect("set_nonblocking");
@@ -500,6 +570,8 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                 },
                 metrics_exporter: OtelExporter::None,
                 runtime_metrics: false,
+                span_attributes: BTreeMap::new(),
+                tracestate: BTreeMap::new(),
             })
             .map_err(|err| err.to_string())?
             .expect("otel provider");

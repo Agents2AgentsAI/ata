@@ -37,6 +37,12 @@ GLOB_PATTERNS = [
     "core/templates/**/*.xml",
     "apply-patch/*.md",
     "core/gpt*.md",
+    # v0.129.0+ paths: agent-facing templates that moved out of core/templates.
+    "core/src/context/prompts/**/*.md",
+    "core/src/guardian/*.md",
+    "collaboration-mode-templates/templates/*.md",
+    "memories/write/templates/**/*.md",
+    "memories/read/templates/**/*.md",
 ]
 
 ROOT_LEVEL_FILES = [
@@ -45,6 +51,8 @@ ROOT_LEVEL_FILES = [
     "core/review_prompt.md",
     "core/hierarchical_agents_message.md",
     "tui/prompt_for_init_command.md",
+    # v0.129.0+ moved the personality base prompt into the models-manager crate.
+    "models-manager/prompt.md",
 ]
 
 # Substrings that indicate a test-only include — skip these
@@ -200,8 +208,11 @@ def check_agent_facing_coverage(codex_root: str, registry_entries: list[dict]) -
     registry_patterns: set[str] = {entry.get("pattern", "") for entry in registry_entries}
 
     annotation_re = re.compile(r"//\s*@agent-facing")
-    # Matches const/fn name on a non-comment, non-blank line
-    ident_re = re.compile(r"\b(?:fn|const|static|pub)\b.*?([A-Za-z_][A-Za-z0-9_]*)\s*[=<(]")
+    # Matches const/fn/static name on a non-comment, non-blank line. Anchored
+    # on the item keyword (`fn`/`const`/`static`) and captures the very next
+    # identifier; this avoids the previous regex picking up a type token like
+    # `LazyLock` or `str` from `: LazyLock<...> = ...` / `: &str = ...`.
+    ident_re = re.compile(r"\b(?:fn|const|static)\b\s+([A-Za-z_][A-Za-z0-9_]*)")
 
     # Collect annotations: (rs_file_relpath, line_number, matched_name_or_None)
     annotated_lines: list[tuple[str, int, str]] = []
@@ -229,11 +240,19 @@ def check_agent_facing_coverage(codex_root: str, registry_entries: list[dict]) -
             continue
 
         for lineno, _ in annotations:
-            # Find the next non-comment, non-empty line after the annotation
+            # Find the next non-comment, non-empty, non-attribute line after
+            # the annotation. `#[allow(dead_code)]` style attribute lines
+            # frequently sit between the // @agent-facing comment and the
+            # actual item, so skip them too instead of treating them as the
+            # target.
             found_name = ""
             for i in range(lineno, min(lineno + 10, len(all_lines))):
                 candidate = all_lines[i].strip()
-                if not candidate or candidate.startswith("//"):
+                if (
+                    not candidate
+                    or candidate.startswith("//")
+                    or candidate.startswith("#[")
+                ):
                     continue
                 m = ident_re.search(candidate)
                 if m:

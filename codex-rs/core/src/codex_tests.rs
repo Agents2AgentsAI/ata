@@ -165,9 +165,14 @@ fn test_tool_runtime(session: Arc<Session>, turn_context: Arc<TurnContext>) -> T
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
             mcp_tools: None,
-            app_tools: None,
+            deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            research_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     ));
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
@@ -1012,7 +1017,9 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         timezone: turn_context.timezone.clone(),
         approval_policy: turn_context.approval_policy.value(),
         sandbox_policy: turn_context.sandbox_policy.get().clone(),
+        permission_profile: None,
         network: None,
+        file_system_sandbox_policy: None,
         model: previous_model.to_string(),
         personality: turn_context.personality,
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
@@ -1023,6 +1030,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         developer_instructions: None,
         final_output_json_schema: None,
         truncation_policy: Some(turn_context.truncation_policy.into()),
+        code_intel_roots: Vec::new(),
     };
     let turn_id = previous_context_item
         .turn_id
@@ -2467,7 +2475,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         js_repl,
         document_cache: crate::tools::handlers::DocumentCache::with_display_mode(Default::default()),
-        next_internal_sub_id: AtomicU64::new(0),
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+            next_internal_sub_id: AtomicU64::new(0),
     };
 
     (session, turn_context)
@@ -3270,7 +3279,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         services,
         js_repl,
         document_cache: crate::tools::handlers::DocumentCache::with_display_mode(Default::default()),
-        next_internal_sub_id: AtomicU64::new(0),
+        document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+            next_internal_sub_id: AtomicU64::new(0),
     });
 
     (session, turn_context, rx_event)
@@ -4390,19 +4400,18 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
             .list_all_tools()
             .await
     };
-    let app_tools = Some(tools.clone());
     let router = ToolRouter::from_config(
         &turn_context.tools_config,
         crate::tools::router::ToolRouterParams {
-            mcp_tools: Some(
-                tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            app_tools,
+            mcp_tools: Some(tools),
+            deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            research_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
     let item = ResponseItem::CustomToolCall {

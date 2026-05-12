@@ -2,6 +2,14 @@
 //!
 //! Anthropic uses standard SSE with specific event types for content blocks.
 //! This module handles the interleaved streaming of text and tool calls.
+//!
+//! `#![allow(dead_code)]` applies module-wide because the wire-envelope
+//! structs (`AnthropicMessage`, `ContentBlock::ToolUse::input`,
+//! `MessageDelta`, etc.) deserialize from the Anthropic Messages API
+//! response shape; not every field is read at runtime, but each is
+//! load-bearing documentation of the protocol contract and may be
+//! consumed by future code paths (telemetry, error recovery, etc.).
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -141,7 +149,6 @@ impl AnthropicStreamState {
             id: Some(id),
             role: "assistant".to_string(),
             content: vec![],
-            end_turn: None,
             phase: None,
         }));
     }
@@ -228,7 +235,12 @@ pub struct ContentBlockDeltaPayload {
     pub delta: Option<ContentDelta>,
 }
 
+// Variant names mirror the Anthropic SSE `type` field
+// (text_delta, input_json_delta, thinking_delta, signature_delta) which is
+// what `from_value` matches on; renaming them to placate clippy would
+// silently break deserialization of upstream events.
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum ContentDelta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
@@ -501,7 +513,6 @@ pub fn parse_anthropic_event(
                     call_id: id,
                     name,
                     arguments,
-                    thought_signature: None,
                     namespace: None,
                 }));
             }
@@ -572,7 +583,6 @@ pub fn parse_anthropic_event(
                     content: vec![ContentItem::OutputText {
                         text: std::mem::take(&mut state.text_content),
                     }],
-                    end_turn: Some(true),
                     phase: None,
                 }));
             }
@@ -595,6 +605,7 @@ pub fn parse_anthropic_event(
             events.push(ResponseEvent::Completed {
                 response_id: state.response_id.clone(),
                 token_usage: Some(token_usage),
+                end_turn: Some(true),
             });
         }
 

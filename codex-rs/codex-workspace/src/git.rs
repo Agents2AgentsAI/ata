@@ -3,6 +3,8 @@ use crate::types::GitState;
 use crate::types::SubmodulePolicy;
 use std::path::Path;
 use std::process::Command;
+use std::process::Output;
+use std::process::Stdio;
 
 /// Build git clone arguments from a clone policy.
 pub fn build_clone_args(policy: &DefaultClonePolicy, full: bool) -> Vec<String> {
@@ -33,12 +35,23 @@ pub fn is_valid_commit_sha(sha: &str) -> bool {
     sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdin(Stdio::null());
+    cmd
+}
+
+pub fn run_git_capture(repo_dir: Option<&Path>, args: &[&str]) -> Result<Output, std::io::Error> {
+    let mut cmd = git_command();
+    if let Some(repo_dir) = repo_dir {
+        cmd.arg("-C").arg(repo_dir);
+    }
+    cmd.args(args).output()
+}
+
 fn git_output(repo_dir: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(args)
-        .output()
+    run_git_capture(Some(repo_dir), args)
         .ok()
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -74,22 +87,18 @@ pub fn clone_repo<S: AsRef<std::ffi::OsStr>>(
     dest: &Path,
     extra_args: &[String],
 ) -> Result<i32, std::io::Error> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("clone");
     cmd.args(extra_args);
     cmd.arg(source);
     cmd.arg(dest);
-    let status = cmd.status()?;
-    Ok(status.code().unwrap_or(1))
+    let output = cmd.output()?;
+    Ok(output.status.code().unwrap_or(1))
 }
 
 /// Run `git lfs pull` in a directory.
 pub fn lfs_pull(repo_dir: &Path) {
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["lfs", "pull"])
-        .output();
+    let _ = run_git_capture(Some(repo_dir), &["lfs", "pull"]);
 }
 
 pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
@@ -100,16 +109,12 @@ pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
     }
 
     let status = if mirror_path.is_dir() {
-        Command::new("git")
-            .arg("-C")
-            .arg(mirror_path)
-            .args(["remote", "update", "--prune"])
-            .status()
+        run_git_capture(Some(mirror_path), &["remote", "update", "--prune"])
+            .map(|output| output.status)
     } else {
-        Command::new("git")
-            .args(["clone", "--mirror", url])
-            .arg(mirror_path)
-            .status()
+        let mut cmd = git_command();
+        cmd.args(["clone", "--mirror", url]).arg(mirror_path);
+        cmd.output().map(|output| output.status)
     };
 
     status.map(|value| value.success()).unwrap_or(false)
@@ -117,27 +122,31 @@ pub fn prepare_reference_mirror(url: &str, mirror_path: &Path) -> bool {
 
 /// Add a git worktree.
 pub fn worktree_add(repo_dir: &Path, dest: &Path, rev: &str) -> Result<bool, std::io::Error> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["worktree", "add"])
-        .arg(dest)
-        .arg(rev)
-        .output()?;
+    let output = {
+        let mut cmd = git_command();
+        cmd.arg("-C")
+            .arg(repo_dir)
+            .args(["worktree", "add"])
+            .arg(dest)
+            .arg(rev)
+            .output()?
+    };
     Ok(output.status.success())
 }
 
 /// Remove a git worktree from the worktree itself.
 pub fn worktree_remove(worktree_path: &Path) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(worktree_path)
-        .args(["worktree", "remove"])
-        .arg(worktree_path)
-        .arg("--force")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    {
+        let mut cmd = git_command();
+        cmd.arg("-C")
+            .arg(worktree_path)
+            .args(["worktree", "remove"])
+            .arg(worktree_path)
+            .arg("--force")
+            .output()
+    }
+    .map(|o| o.status.success())
+    .unwrap_or(false)
 }
 
 /// Resolve a git ref (branch/tag) to a commit SHA in a local checkout.
@@ -150,17 +159,9 @@ pub fn fetch_and_checkout(repo_dir: &Path, sha: &str) -> Result<bool, std::io::E
     // Fetch is opportunistic here: it may fail even when the target object is
     // already available locally, and checkout success is the authoritative
     // signal for whether the requested SHA can be used.
-    let _ = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["fetch", "origin", sha, "--depth", "1"])
-        .output();
+    let _ = run_git_capture(Some(repo_dir), &["fetch", "origin", sha, "--depth", "1"]);
     // Checkout
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_dir)
-        .args(["checkout", sha])
-        .output()?;
+    let output = run_git_capture(Some(repo_dir), &["checkout", sha])?;
     Ok(output.status.success())
 }
 

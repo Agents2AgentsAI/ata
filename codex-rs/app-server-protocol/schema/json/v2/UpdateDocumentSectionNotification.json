@@ -1,0 +1,62 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "UpdateDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `update_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the updated section should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "event": {
+      "$ref": "#/definitions/UpdateDocumentSectionEvent"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "threadId"
+  ],
+  "title": "UpdateDocumentSectionNotification",
+  "type": "object"
+}

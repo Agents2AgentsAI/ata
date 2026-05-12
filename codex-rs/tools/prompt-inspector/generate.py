@@ -119,6 +119,12 @@ GLOB_PATTERNS = [
     "core/templates/**/*.xml",
     "apply-patch/*.md",
     "core/gpt*.md",
+    # v0.129.0+ paths: agent-facing templates that moved out of core/templates.
+    "core/src/context/prompts/**/*.md",
+    "core/src/guardian/*.md",
+    "collaboration-mode-templates/templates/*.md",
+    "memories/write/templates/**/*.md",
+    "memories/read/templates/**/*.md",
 ]
 
 ROOT_LEVEL_FILES = [
@@ -127,6 +133,8 @@ ROOT_LEVEL_FILES = [
     "core/review_prompt.md",
     "core/hierarchical_agents_message.md",
     "tui/prompt_for_init_command.md",
+    # v0.129.0+ moved the personality base prompt into the models-manager crate.
+    "models-manager/prompt.md",
 ]
 
 

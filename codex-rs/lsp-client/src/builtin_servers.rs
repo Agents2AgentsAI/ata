@@ -334,8 +334,12 @@ fn jdtls() -> (&'static str, LspServerConfig) {
         cfg(
             &[".java"],
             &["jdtls"],
-            &["pom.xml", "build.gradle", "build.gradle.kts", ".project"],
-        ),
+            &["pom.xml", "build.gradle", "build.gradle.kts"],
+        )
+        .with_install_skip_preflight(InstallMethod::Brew {
+            formula: Some("jdtls".into()),
+        })
+        .with_post_root_hook(PostRootHook::JdtlsDataDir),
     )
 }
 
@@ -483,6 +487,23 @@ mod tests {
         assert_eq!(
             config.command_candidates,
             vec![vec!["xcrun".to_string(), "sourcekit-lsp".to_string()]]
+        );
+    }
+
+    #[test]
+    fn jdtls_uses_brew_install() {
+        let (_, config) = jdtls();
+        let Some(install) = config.install else {
+            panic!("jdtls should have an install method");
+        };
+        assert!(matches!(config.post_root_hook, PostRootHook::JdtlsDataDir));
+        assert!(
+            install.skip_preflight,
+            "jdtls should skip preflight version check"
+        );
+        assert_eq!(
+            install.method.install_command("jdtls"),
+            vec!["brew", "install", "jdtls"]
         );
     }
 }

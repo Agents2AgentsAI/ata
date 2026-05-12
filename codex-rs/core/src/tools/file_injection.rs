@@ -1,9 +1,9 @@
-use crate::ModelProviderInfo;
-use crate::codex::FileInputPreparationError;
-use crate::codex::Session;
-use crate::codex::file_capabilities_for_provider;
-use crate::codex::resolve_and_prepare_file_inputs;
 use crate::config::Config;
+use crate::session::file_attachments::FileInputPreparationError;
+use crate::session::file_attachments::file_capabilities_for_provider;
+use crate::session::file_attachments::resolve_and_prepare_file_inputs;
+use crate::session::session::Session;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::user_input::UserInput;
@@ -86,7 +86,7 @@ pub(crate) async fn resolve_and_prepare_local_files_for_injection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::make_session_and_context;
+    use crate::session::tests::make_session_and_context;
     use pretty_assertions::assert_eq;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -101,7 +101,7 @@ mod tests {
         let prepared = resolve_and_prepare_local_files_for_injection(
             FileInjectionContext {
                 session: session.as_ref(),
-                provider: &turn_context.provider,
+                provider: turn_context.provider.info(),
                 config: turn_context.config.as_ref(),
                 http_client: session.file_upload_http_client(),
             },
@@ -112,11 +112,37 @@ mod tests {
 
         assert_eq!(prepared.attachment_count, 1);
         assert_eq!(prepared.warnings, Vec::<String>::new());
-        assert!(
-            prepared
-                .content_items
-                .iter()
-                .any(|item| matches!(item, ContentItem::InputFile { .. }))
-        );
+        // `content_items` reflects the immediate `ResponseInputItem::from(inputs)` projection.
+        // For a `LocalFile`, that projection should emit a wrapped sequence:
+        //   InputText (open tag) + InputFile (inline base64) + InputText (close tag).
+        assert_eq!(prepared.content_items.len(), 3);
+        match &prepared.content_items[0] {
+            ContentItem::InputText { text } => {
+                assert!(
+                    text.starts_with("<file_start"),
+                    "expected file_start open tag, got {text:?}"
+                );
+            }
+            other => panic!("expected open InputText, got {other:?}"),
+        }
+        match &prepared.content_items[1] {
+            ContentItem::InputFile {
+                file_data,
+                file_id,
+                mime_type,
+                ..
+            } => {
+                assert!(file_data.is_some(), "expected inline base64 file_data");
+                assert!(file_id.is_none(), "expected no file_id for inline file");
+                assert_eq!(mime_type.as_deref(), Some("application/pdf"));
+            }
+            other => panic!("expected InputFile, got {other:?}"),
+        }
+        match &prepared.content_items[2] {
+            ContentItem::InputText { text } => {
+                assert_eq!(text, "<file_end></file_end>");
+            }
+            other => panic!("expected close InputText, got {other:?}"),
+        }
     }
 }

@@ -45,22 +45,35 @@
         },
         {
           "properties": {
-            "email": {
-              "type": "string"
-            },
             "type": {
               "enum": [
-                "gemini"
+                "amazonBedrock"
               ],
-              "title": "GeminiAccountType",
+              "title": "AmazonBedrockAccountType",
               "type": "string"
             }
           },
           "required": [
-            "email",
             "type"
           ],
-          "title": "GeminiAccount",
+          "title": "AmazonBedrockAccount",
+          "type": "object"
+        },
+        {
+          "description": "Authenticated via the GitHub Copilot device-code OAuth flow.",
+          "properties": {
+            "type": {
+              "enum": [
+                "copilot"
+              ],
+              "title": "CopilotAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CopilotAccount",
           "type": "object"
         }
       ]
@@ -71,8 +84,11 @@
         "go",
         "plus",
         "pro",
+        "prolite",
         "team",
+        "self_serve_business_usage_based",
         "business",
+        "enterprise_cbp_usage_based",
         "enterprise",
         "edu",
         "unknown"
@@ -91,15 +107,11 @@
         }
       ]
     },
-    "requiresGeminiAuth": {
-      "type": "boolean"
-    },
     "requiresOpenaiAuth": {
       "type": "boolean"
     }
   },
   "required": [
-    "requiresGeminiAuth",
     "requiresOpenaiAuth"
   ],
   "title": "GetAccountResponse",

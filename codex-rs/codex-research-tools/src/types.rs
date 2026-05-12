@@ -504,102 +504,6 @@ pub struct ZoteroCreateCollectionResult {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoHealth {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub license: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_commit_date: Option<String>,
-    pub stars: u32,
-    pub open_issues: u32,
-    pub releases_count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ci_passing: Option<bool>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoSummary {
-    pub url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_sha: Option<String>,
-    pub directory_tree: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub readme_snippet: Option<String>,
-    pub key_files: Vec<String>,
-    pub total_files: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ModelDefinition {
-    pub file_path: String,
-    pub class_name: String,
-    pub line_number: usize,
-    pub context: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoRequirements {
-    pub repo_url: String,
-    pub dependencies: Vec<String>,
-    pub source_files: Vec<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoEntrypoint {
-    pub file_path: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cli_args_summary: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub config_file: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoIoShape {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub input_shapes: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_shapes: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dtype: Option<String>,
-    pub source_file: String,
-    pub source_line: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RepoExportPath {
-    pub file_path: String,
-    pub target_format: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub framework_version: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ConfigParam {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct ConfigSchema {
-    pub config_file: String,
-    pub format: String,
-    pub key_params: Vec<ConfigParam>,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct RequirementsDiff {
-    pub repo_url: String,
-    pub conflicts: Vec<String>,
-    pub missing_locally: Vec<String>,
-    pub compatible: Vec<String>,
-    pub repo_total_deps: usize,
-    pub local_total_deps: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct PaperRecommendationParams {
     pub positive_paper_ids: Vec<String>,
     pub negative_paper_ids: Option<Vec<String>>,
@@ -867,6 +771,18 @@ pub struct ZoteroCreateAttachmentLinkParams {
     pub url: String,
     pub content_type: Option<String>,
     pub collections: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub library_type: Option<String>,
+    pub library_id: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ZoteroCreateAttachmentImportUrlParams {
+    pub parent_item_key: String,
+    pub title: String,
+    pub url: String,
+    pub content_type: Option<String>,
+    pub filename: Option<String>,
     pub tags: Option<Vec<String>>,
     pub library_type: Option<String>,
     pub library_id: Option<String>,

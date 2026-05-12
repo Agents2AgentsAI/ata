@@ -6,85 +6,44 @@ For advanced configuration instructions, see [this documentation](https://github
 
 For a full configuration reference, see [this documentation](https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md).
 
-## Connecting to MCP servers
+## Commit attribution
 
-Ata can connect to MCP servers configured in `~/.ata/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can add a [git trailer](https://git-scm.com/docs/git-interpret-trailers) to
+generated commit messages so commits make Codex's involvement explicit. This
+behavior is gated by the `codex_git_commit` feature flag; the top-level
+`commit_attribution` setting is only used when that feature is enabled.
 
-- https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md
+Add the following to `~/.codex/config.toml`:
 
-## Apps (Connectors)
+```toml
+commit_attribution = "Codex <noreply@openai.com>"
 
-Use `$` in the composer to insert a ChatGPT connector; the popover lists accessible
-apps. The `/apps` command lists available and installed apps. Connected apps appear first
-and are labeled as connected; others are marked as can be installed.
+[features]
+codex_git_commit = true
+```
 
-## Notify
+When enabled, Codex appends a `Co-authored-by:` trailer using the configured
+attribution value. If `commit_attribution` is omitted, Codex uses
+`Codex <noreply@openai.com>`. Set `commit_attribution = ""` to disable the
+trailer while leaving the feature flag enabled.
 
-Ata can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
+## OpenTelemetry Trace Metadata
 
-- https://github.com/Agents2AgentsAI/ata/blob/main/docs/config.md
+Codex can add static OpenTelemetry span attributes to exported trace spans and
+static W3C tracestate fields to propagated trace context:
 
-When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
+```toml
+[otel.span_attributes]
+"example.trace_attr" = "enabled"
 
-## JSON Schema
+[otel.tracestate.example]
+alpha = "one"
+beta = "two"
+```
 
-The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.
-
-## SQLite State DB
-
-Codex stores the SQLite-backed state DB under `sqlite_home` (config key) or the
-`CODEX_SQLITE_HOME` environment variable. When unset, WorkspaceWrite sandbox
-sessions default to a temp directory; other modes default to `CODEX_HOME`.
-
-## Custom CA Certificates
-
-Codex can trust a custom root CA bundle for outbound HTTPS and secure websocket
-connections when enterprise proxies or gateways intercept TLS. This applies to
-login flows and to Codex's other external connections, including Codex
-components that build reqwest clients or secure websocket clients through the
-shared `codex-client` CA-loading path and remote MCP connections that use it.
-
-Set `CODEX_CA_CERTIFICATE` to the path of a PEM file containing one or more
-certificate blocks to use a Codex-specific CA bundle. If
-`CODEX_CA_CERTIFICATE` is unset, Codex falls back to `SSL_CERT_FILE`. If
-neither variable is set, Codex uses the system root certificates.
-
-`CODEX_CA_CERTIFICATE` takes precedence over `SSL_CERT_FILE`. Empty values are
-treated as unset.
-
-The PEM file may contain multiple certificates. Codex also tolerates OpenSSL
-`TRUSTED CERTIFICATE` labels and ignores well-formed `X509 CRL` sections in the
-same bundle. If the file is empty, unreadable, or malformed, the affected Codex
-HTTP or secure websocket connection reports a user-facing error that points
-back to these environment variables.
-
-## Notices
-
-Ata stores "do not show again" flags for some UI prompts under the `[notice]` table.
-
-## Plan mode defaults
-
-`plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
-effort override. When unset, Plan mode uses the built-in Plan preset default
-(currently `medium`). When explicitly set (including `none`), it overrides the
-Plan preset. The string value `none` means "no reasoning" (an explicit Plan
-override), not "inherit the global default". There is currently no separate
-config value for "follow the global default in Plan mode".
-
-## Plan mode defaults
-
-`plan_mode_reasoning_effort` lets you set a Plan-mode-specific default reasoning
-effort override. When unset, Plan mode uses the built-in Plan preset default
-(currently `medium`). When explicitly set (including `none`), it overrides the
-Plan preset. The string value `none` means "no reasoning" (an explicit Plan
-override), not "inherit the global default". There is currently no separate
-config value for "follow the global default in Plan mode".
-
-## Realtime start instructions
-
-`experimental_realtime_start_instructions` lets you replace the built-in
-developer message Codex inserts when realtime becomes active. It only affects
-the realtime start message in prompt history and does not change websocket
-backend prompt settings or the realtime end/inactive message.
-
-Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).
+Nested `otel.tracestate` tables are encoded as semicolon-separated `key:value`
+fields inside the named tracestate member. If propagated trace context already
+has the named member, Codex upserts configured fields and preserves other fields
+in that member. This config shape does not support setting opaque tracestate
+member values. Invalid trace metadata entries are ignored during config load and
+reported as startup warnings.

@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
+use dashmap::DashMap;
 use rayon::prelude::*;
 use serde::Serialize;
 use tree_sitter::StreamingIterator;
@@ -34,29 +36,59 @@ fn source_slice(source: &str, byte_range: (usize, usize)) -> Option<&str> {
     source.get(start..end)
 }
 
+fn load_file_cached(
+    root: &Path,
+    rel_file: &str,
+    cache: Option<&Arc<DashMap<String, Arc<String>>>>,
+) -> std::io::Result<Arc<String>> {
+    if let Some(cache) = cache {
+        if let Some(existing) = cache.get(rel_file) {
+            return Ok(Arc::clone(existing.value()));
+        }
+        let content = Arc::new(std::fs::read_to_string(root.join(rel_file))?);
+        cache.insert(rel_file.to_string(), Arc::clone(&content));
+        return Ok(content);
+    }
+    Ok(Arc::new(std::fs::read_to_string(root.join(rel_file))?))
+}
+
 pub fn get_implementation(
     root: &Path,
     symbol_table: &SymbolTable,
     symbol_name: &str,
     file: &str,
 ) -> Result<String, String> {
-    let symbol = symbol_table
-        .get(file, symbol_name)
-        .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
+    get_implementation_resolved(root, resolve_symbol(symbol_table, symbol_name, file, None)?)
+}
 
-    let source = std::fs::read_to_string(root.join(&symbol.file))
-        .map_err(|error| format!("failed to read '{}': {error}", symbol.file))?;
+pub fn get_implementation_at(
+    root: &Path,
+    symbol_table: &SymbolTable,
+    symbol_name: &str,
+    file: &str,
+    byte_offset: usize,
+) -> Result<String, String> {
+    get_implementation_resolved(
+        root,
+        resolve_symbol(symbol_table, symbol_name, file, Some(byte_offset))?,
+    )
+}
+
+fn get_implementation_resolved(root: &Path, symbol: Symbol) -> Result<String, String> {
+    let file = symbol.file.clone();
+    let source = std::fs::read_to_string(root.join(&file))
+        .map_err(|error| format!("failed to read '{file}': {error}"))?;
 
     let implementation = source_slice(&source, symbol.byte_range).ok_or_else(|| {
         format!(
             "invalid byte range {}..{} for '{}' in '{}'",
-            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, file
         )
     })?;
     Ok(implementation.to_string())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallerInfo {
     pub file: String,
     pub line: usize,
@@ -65,11 +97,38 @@ pub struct CallerInfo {
     pub qualifier: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallersResult {
     pub callers: Vec<CallerInfo>,
     pub total_callers: usize,
     pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CallersIndex {
+    by_name: HashMap<String, Vec<CallerInfo>>,
+}
+
+impl CallersIndex {
+    pub fn callers_for(
+        &self,
+        symbol_name: &str,
+        _definition_file: &str,
+        limit: usize,
+    ) -> CallersResult {
+        let mut callers = self.by_name.get(symbol_name).cloned().unwrap_or_default();
+        callers.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+        let total_callers = callers.len();
+        let truncated = total_callers > limit;
+        if truncated {
+            callers.truncate(limit);
+        }
+        CallersResult {
+            callers,
+            total_callers,
+            truncated,
+        }
+    }
 }
 
 pub fn find_callers(
@@ -80,30 +139,32 @@ pub fn find_callers(
     file: &str,
     limit: usize,
 ) -> Result<CallersResult, String> {
-    let _ = symbol_table.get(file, symbol_name).ok_or_else(|| {
-        let available = symbol_table.symbols_in_file(file);
-        if available.is_empty() {
-            format!("file '{file}' has no indexed symbols")
-        } else {
-            let names: Vec<String> = available
-                .iter()
-                .map(|s| match &s.parent {
-                    Some(parent) => format!("{}.{}", parent, s.name),
-                    None => s.name.clone(),
-                })
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .take(20)
-                .collect();
-            format!(
-                "symbol '{}' not found in '{}'. Available symbols: {}",
-                symbol_name,
-                file,
-                names.join(", ")
-            )
-        }
-    })?;
+    let _ = resolve_symbol(symbol_table, symbol_name, file, None)?;
 
+    find_callers_resolved(root, file_tree, symbol_name, file, limit)
+}
+
+pub fn find_callers_at(
+    root: &Path,
+    file_tree: &FileTree,
+    symbol_table: &SymbolTable,
+    symbol_name: &str,
+    file: &str,
+    limit: usize,
+    byte_offset: usize,
+) -> Result<CallersResult, String> {
+    let _ = resolve_symbol(symbol_table, symbol_name, file, Some(byte_offset))?;
+
+    find_callers_resolved(root, file_tree, symbol_name, file, limit)
+}
+
+fn find_callers_resolved(
+    root: &Path,
+    file_tree: &FileTree,
+    symbol_name: &str,
+    file: &str,
+    limit: usize,
+) -> Result<CallersResult, String> {
     let mut callers: Vec<CallerInfo> = file_tree
         .all_paths_with_language()
         .into_par_iter()
@@ -135,6 +196,39 @@ pub fn find_callers(
         total_callers,
         truncated,
     })
+}
+
+pub fn build_callers_index(root: &Path, file_tree: &FileTree) -> CallersIndex {
+    let entries = file_tree
+        .all_paths_with_language()
+        .into_par_iter()
+        .flat_map_iter(|(rel_path, language)| {
+            // Skip non-code files to avoid false positives from non-tree-sitter paths.
+            if !language.has_tree_sitter_support() {
+                return Vec::new();
+            }
+            let source = match std::fs::read_to_string(root.join(&rel_path)) {
+                Ok(source) => source,
+                Err(_) => return Vec::new(),
+            };
+            collect_callers_by_callee_ast(&source, &rel_path, language)
+        })
+        .collect::<Vec<_>>();
+
+    let mut by_name = HashMap::<String, Vec<CallerInfo>>::new();
+    for (callee, caller) in entries {
+        by_name.entry(callee).or_default().push(caller);
+    }
+    for callers in by_name.values_mut() {
+        callers.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+        callers.dedup_by(|left, right| {
+            left.file == right.file
+                && left.line == right.line
+                && left.text == right.text
+                && left.qualifier == right.qualifier
+        });
+    }
+    CallersIndex { by_name }
 }
 
 fn find_callers_ast(
@@ -202,6 +296,122 @@ fn find_callers_ast(
     ) else {
         return find_callers_regex(source, rel_path, language, symbol_name, definition_file);
     };
+    callers
+}
+
+fn collect_callers_by_callee_ast(
+    source: &str,
+    rel_path: &str,
+    language: Language,
+) -> Vec<(String, CallerInfo)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let Some(callers) = with_parsed_query(
+        source,
+        language,
+        QueryKind::Callers,
+        |tree, query, capture_names| {
+            let callee_index = capture_names.iter().position(|name| name == "callee");
+            let qualifier_index = capture_names.iter().position(|name| name == "qualifier");
+            let mut callers = Vec::new();
+            let mut cursor = tree_sitter::QueryCursor::new();
+            let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
+
+            while let Some(match_) = matches.next() {
+                for capture in match_.captures {
+                    if Some(capture.index as usize) != callee_index {
+                        continue;
+                    }
+                    let callee = capture
+                        .node
+                        .utf8_text(source.as_bytes())
+                        .unwrap_or("")
+                        .trim();
+                    if callee.is_empty() {
+                        continue;
+                    }
+                    let qualifier_text = qualifier_index.and_then(|qi| {
+                        match_
+                            .captures
+                            .iter()
+                            .find(|c| c.index as usize == qi)
+                            .and_then(|c| c.node.utf8_text(source.as_bytes()).ok())
+                            .map(ToString::to_string)
+                    });
+                    let line = capture.node.start_position().row + 1;
+                    let line_text = lines
+                        .get(line.saturating_sub(1))
+                        .copied()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    if is_definition_line(&line_text, callee, language) {
+                        continue;
+                    }
+                    callers.push((
+                        callee.to_string(),
+                        CallerInfo {
+                            file: rel_path.to_string(),
+                            line,
+                            text: line_text,
+                            qualifier: qualifier_text,
+                        },
+                    ));
+                }
+            }
+            callers
+        },
+    ) else {
+        return collect_callers_by_callee_regex(source, rel_path, language);
+    };
+    callers
+}
+
+fn collect_callers_by_callee_regex(
+    source: &str,
+    rel_path: &str,
+    language: Language,
+) -> Vec<(String, CallerInfo)> {
+    let pattern = match regex::Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*[!(]") {
+        Ok(pattern) => pattern,
+        Err(_) => return Vec::new(),
+    };
+    let excluded_ranges = crate::content::compute_non_code_ranges(source, language);
+    let lines: Vec<&str> = source.lines().collect();
+    let line_offsets = crate::content::line_offsets(source, &lines);
+    let mut callers = Vec::new();
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        for captures in pattern.captures_iter(line) {
+            let Some(callee_match) = captures.get(1) else {
+                continue;
+            };
+            if !excluded_ranges.is_empty()
+                && let Some(found) = captures.get(0)
+            {
+                let byte_offset = line_offsets[line_idx] + found.start();
+                if crate::content::is_in_excluded_range(byte_offset, &excluded_ranges) {
+                    continue;
+                }
+            }
+            let callee = callee_match.as_str();
+            if is_definition_line(line, callee, language) {
+                continue;
+            }
+            callers.push((
+                callee.to_string(),
+                CallerInfo {
+                    file: rel_path.to_string(),
+                    line: line_idx + 1,
+                    text: line.trim().to_string(),
+                    qualifier: None,
+                },
+            ));
+        }
+    }
+
     callers
 }
 
@@ -378,18 +588,57 @@ pub fn find_tests(
     symbol_name: &str,
     file: &str,
     limit: usize,
+    content_cache: Option<&Arc<DashMap<String, Arc<String>>>>,
 ) -> Result<TestsResult, String> {
-    let _ = symbol_table
-        .get(file, symbol_name)
-        .ok_or_else(|| format!("symbol '{symbol_name}' not found in '{file}'"))?;
+    find_tests_resolved(
+        root,
+        symbol_table,
+        symbol_name,
+        file,
+        limit,
+        None,
+        content_cache,
+    )
+}
+
+pub fn find_tests_at(
+    root: &Path,
+    symbol_table: &SymbolTable,
+    symbol_name: &str,
+    file: &str,
+    limit: usize,
+    byte_offset: usize,
+) -> Result<TestsResult, String> {
+    find_tests_resolved(
+        root,
+        symbol_table,
+        symbol_name,
+        file,
+        limit,
+        Some(byte_offset),
+        None,
+    )
+}
+
+fn find_tests_resolved(
+    root: &Path,
+    symbol_table: &SymbolTable,
+    symbol_name: &str,
+    file: &str,
+    limit: usize,
+    byte_offset: Option<usize>,
+    content_cache: Option<&Arc<DashMap<String, Arc<String>>>>,
+) -> Result<TestsResult, String> {
+    let _ = resolve_symbol(symbol_table, symbol_name, file, byte_offset)?;
 
     let all_test_symbols = symbol_table.test_symbols();
     let total_test_symbols = all_test_symbols.len();
+    let cache = content_cache.cloned();
     let mut tests: Vec<TestInfo> = all_test_symbols
         .into_par_iter()
         .filter_map(|symbol| {
-            let source = std::fs::read_to_string(root.join(&symbol.file)).ok()?;
-            let body = source_slice(&source, symbol.byte_range)?;
+            let source = load_file_cached(root, &symbol.file, cache.as_ref()).ok()?;
+            let body = source_slice(source.as_str(), symbol.byte_range)?;
             if !body.contains(symbol_name) {
                 return None;
             }
@@ -430,23 +679,42 @@ pub fn list_variables(
     function_name: &str,
     file: &str,
 ) -> Result<Vec<VariableInfo>, String> {
-    let symbol = symbol_table
-        .get(file, function_name)
-        .ok_or_else(|| format!("symbol '{function_name}' not found in '{file}'"))?;
+    list_variables_resolved(
+        root,
+        resolve_symbol(symbol_table, function_name, file, None)?,
+    )
+}
 
-    let source = std::fs::read_to_string(root.join(&symbol.file))
-        .map_err(|error| format!("failed to read '{}': {error}", symbol.file))?;
+pub fn list_variables_at(
+    root: &Path,
+    symbol_table: &SymbolTable,
+    function_name: &str,
+    file: &str,
+    byte_offset: usize,
+) -> Result<Vec<VariableInfo>, String> {
+    list_variables_resolved(
+        root,
+        resolve_symbol(symbol_table, function_name, file, Some(byte_offset))?,
+    )
+}
+
+fn list_variables_resolved(root: &Path, symbol: Symbol) -> Result<Vec<VariableInfo>, String> {
+    let function_name = symbol.name.clone();
+    let file = symbol.file.clone();
+
+    let source = std::fs::read_to_string(root.join(&file))
+        .map_err(|error| format!("failed to read '{file}': {error}"))?;
 
     let (start, end) = bounded_range(symbol.byte_range, source.len()).ok_or_else(|| {
         format!(
             "invalid byte range {}..{} for '{}' in '{}'",
-            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, file
         )
     })?;
     let body = source_slice(&source, symbol.byte_range).ok_or_else(|| {
         format!(
             "invalid UTF-8 slice {}..{} for '{}' in '{}'",
-            symbol.byte_range.0, symbol.byte_range.1, symbol.name, symbol.file
+            symbol.byte_range.0, symbol.byte_range.1, symbol.name, file
         )
     })?;
 
@@ -456,11 +724,76 @@ pub fn list_variables(
             symbol.language,
             start,
             end,
-            function_name,
+            &function_name,
         ));
     }
 
-    Ok(list_variables_regex(body, symbol.language, function_name))
+    Ok(list_variables_regex(body, symbol.language, &function_name))
+}
+
+fn resolve_symbol(
+    symbol_table: &SymbolTable,
+    symbol_name: &str,
+    file: &str,
+    byte_offset: Option<usize>,
+) -> Result<Symbol, String> {
+    match byte_offset {
+        Some(byte_offset) => symbol_table
+            .get_at(file, symbol_name, byte_offset)
+            .ok_or_else(|| {
+                format!("symbol '{symbol_name}' not found at byte offset {byte_offset} in '{file}'")
+            }),
+        None => {
+            let matches = symbol_table.matching_symbols_in_file(file, symbol_name);
+            match matches.len() {
+                0 => Err(symbol_not_found_message(symbol_table, symbol_name, file)),
+                1 => {
+                    if let Some(symbol) = matches.into_iter().next() {
+                        Ok(symbol)
+                    } else {
+                        Err(symbol_not_found_message(symbol_table, symbol_name, file))
+                    }
+                }
+                _ => Err(ambiguous_symbol_message(symbol_name, file, &matches)),
+            }
+        }
+    }
+}
+
+fn symbol_not_found_message(symbol_table: &SymbolTable, symbol_name: &str, file: &str) -> String {
+    let available = symbol_table.symbols_in_file(file);
+    if available.is_empty() {
+        format!("file '{file}' has no indexed symbols")
+    } else {
+        let names: Vec<String> = available
+            .iter()
+            .map(|symbol| match &symbol.parent {
+                Some(parent) => format!("{parent}.{}", symbol.name),
+                None => symbol.name.clone(),
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .take(20)
+            .collect();
+        format!(
+            "symbol '{symbol_name}' not found in '{file}'. Available symbols: {}",
+            names.join(", ")
+        )
+    }
+}
+
+fn ambiguous_symbol_message(symbol_name: &str, file: &str, matches: &[Symbol]) -> String {
+    let rendered_matches = matches
+        .iter()
+        .map(|symbol| match &symbol.parent {
+            Some(parent) => format!("{parent}.{}:{}", symbol.name, symbol.line_range.0),
+            None => format!("{}:{}", symbol.name, symbol.line_range.0),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "symbol '{symbol_name}' is ambiguous in '{file}'. Provide `line` to disambiguate. Matches: {rendered_matches}"
+    )
 }
 
 fn list_variables_ast(
@@ -569,4 +902,89 @@ pub fn list_symbols(
         symbols.truncate(limit);
     }
     symbols
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProjectIndex;
+    use crate::ProjectIndexConfig;
+    use crate::file_entry::Language;
+
+    fn make_symbol(
+        name: &str,
+        parent: Option<&str>,
+        byte_range: (usize, usize),
+        line: usize,
+    ) -> Symbol {
+        Symbol {
+            name: name.to_string(),
+            name_lower: name.to_lowercase(),
+            kind: SymbolKind::Method,
+            file: "src/lib.rs".to_string(),
+            byte_range,
+            line_range: (line, line),
+            language: Language::Rust,
+            signature: name.to_string(),
+            definition: None,
+            parent: parent.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn callers_index_matches_find_callers_for_symbol() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let repo_root = temp.path();
+        std::fs::create_dir_all(repo_root.join("src")).expect("mkdir");
+        std::fs::write(
+            repo_root.join("src/main.rs"),
+            "fn helper() {}\nfn run() { helper(); }\nfn main() { helper(); }\n",
+        )
+        .expect("write source");
+
+        let index = ProjectIndex::new_with_config(
+            repo_root.to_path_buf(),
+            ProjectIndexConfig {
+                persist_annotations: false,
+                ..ProjectIndexConfig::default()
+            },
+        )
+        .expect("project index");
+
+        let direct = index
+            .find_callers("helper", "src/main.rs", 64)
+            .expect("direct callers");
+        let indexed = index
+            .build_callers_index()
+            .callers_for("helper", "src/main.rs", 64);
+
+        assert_eq!(direct.total_callers, indexed.total_callers);
+        assert_eq!(direct.truncated, indexed.truncated);
+        assert_eq!(direct.callers, indexed.callers);
+    }
+
+    #[test]
+    fn implementation_requires_line_when_symbol_name_is_ambiguous() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let root = tempdir.path();
+        let file_path = root.join("src/lib.rs");
+        std::fs::create_dir_all(file_path.parent().expect("parent")).expect("create parent");
+        std::fs::write(
+            &file_path,
+            "impl A { fn duplicate() {} }\nimpl B { fn duplicate() {} }\n",
+        )
+        .expect("write source");
+
+        let table = SymbolTable::new();
+        table.insert(make_symbol("duplicate", Some("A"), (9, 25), 1));
+        table.insert(make_symbol("duplicate", Some("B"), (37, 53), 2));
+
+        let err = get_implementation(root, &table, "duplicate", "src/lib.rs")
+            .expect_err("ambiguous symbol should require a line");
+
+        assert_eq!(
+            err,
+            "symbol 'duplicate' is ambiguous in 'src/lib.rs'. Provide `line` to disambiguate. Matches: A.duplicate:1, B.duplicate:2"
+        );
+    }
 }

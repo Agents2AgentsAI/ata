@@ -30,6 +30,9 @@ pub enum TreeSitterError {
     #[error("invalid line range: start {start} > end {end}")]
     InvalidRange { start: usize, end: usize },
 
+    #[error("invalid limit: line_count must be greater than 0")]
+    InvalidLimit,
+
     #[error("invalid ignore pattern: {0}")]
     InvalidIgnorePattern(String),
 

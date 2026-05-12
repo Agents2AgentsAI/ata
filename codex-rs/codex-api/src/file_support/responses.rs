@@ -144,7 +144,6 @@ mod tests {
                 mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
-            end_turn: None,
             phase: None,
         }];
 
@@ -161,7 +160,6 @@ mod tests {
                     mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
-                end_turn: None,
                 phase: None,
             }
         );
@@ -178,7 +176,6 @@ mod tests {
                 mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
-            end_turn: None,
             phase: None,
         }];
 
@@ -195,7 +192,6 @@ mod tests {
                     mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
-                end_turn: None,
                 phase: None,
             }
         );
@@ -212,7 +208,6 @@ mod tests {
                 mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
-            end_turn: None,
             phase: None,
         }];
 
@@ -234,7 +229,6 @@ mod tests {
                 mime_type: Some("application/pdf".to_string()),
                 filename: Some("report.pdf".to_string()),
             }],
-            end_turn: None,
             phase: None,
         }];
 
@@ -251,7 +245,6 @@ mod tests {
                     mime_type: Some("application/pdf".to_string()),
                     filename: Some("report.pdf".to_string()),
                 }],
-                end_turn: None,
                 phase: None,
             }
         );
@@ -266,7 +259,6 @@ mod tests {
                     mime_type: None,
                     filename: Some("report.pdf".to_string()),
                 }],
-                end_turn: None,
                 phase: None,
             }
         );

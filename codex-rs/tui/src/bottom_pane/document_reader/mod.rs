@@ -15,14 +15,11 @@ use crate::bottom_pane::bottom_pane_view::BottomPaneView;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::render::renderable::Renderable;
-use codex_protocol::protocol::Op;
-use codex_protocol::user_input::UserInput;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
@@ -40,20 +37,20 @@ pub(crate) const DOCUMENT_READER_VIEW_ID: &str = "doc_reader";
 /// Iterator that yields `(byte_offset, word)` for each whitespace-delimited
 /// word in a string.  Used to map TTS word indices to character positions
 /// within rendered lines.
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 struct WordOffsets<'a> {
     text: &'a str,
     pos: usize,
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 impl<'a> WordOffsets<'a> {
     fn new(text: &'a str) -> Self {
         Self { text, pos: 0 }
     }
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 impl<'a> Iterator for WordOffsets<'a> {
     type Item = (usize, &'a str);
     fn next(&mut self) -> Option<Self::Item> {
@@ -73,7 +70,7 @@ impl<'a> Iterator for WordOffsets<'a> {
 /// Returns `true` when `word` is a rendering-only decorator that does not
 /// correspond to any word in the TTS stream and should be skipped during
 /// karaoke word counting.
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 fn is_karaoke_skip_word(word: &str) -> bool {
     // Speaker emoji, fold border, check mark, horizontal rule.
     if word == "\u{1F50A}"
@@ -114,7 +111,7 @@ fn is_karaoke_skip_word(word: &str) -> bool {
     false
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(not(target_os = "linux"))]
 fn append_reading_view_karaoke_debug_log(message: &str) {
     let Some(path) = codex_home().map(|home| home.join("logs/reading-view-karaoke.log")) else {
         return;
@@ -1044,13 +1041,8 @@ impl DocumentReaderView {
              announce this action to the user — just do it silently or skip.",
             self.title,
         );
-        self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: feedback,
-                text_elements: vec![],
-            }],
-            final_output_json_schema: None,
-        }));
+        self.app_event_tx
+            .send(AppEvent::SubmitUserText { text: feedback });
 
         // Save fold state so it can be restored if the same document is
         // re-opened in this session.
@@ -1107,11 +1099,11 @@ impl DocumentReaderView {
             .map(|s| s.content.as_str())
             .unwrap_or("");
 
-        let selection_guidance = codex_core::reading_view_selection_follow_up_guidance(
-            codex_core::ReadingViewDisplayMode::Tui,
+        let selection_guidance = crate::legacy_core::reading_view_selection_follow_up_guidance(
+            crate::legacy_core::ReadingViewDisplayMode::Tui,
         );
-        let section_guidance = codex_core::reading_view_section_follow_up_guidance(
-            codex_core::ReadingViewDisplayMode::Tui,
+        let section_guidance = crate::legacy_core::reading_view_section_follow_up_guidance(
+            crate::legacy_core::ReadingViewDisplayMode::Tui,
         );
 
         // Extract a few rendered lines around the cursor and the word under
@@ -1224,13 +1216,8 @@ impl DocumentReaderView {
             heading = heading,
         );
 
-        self.app_event_tx.send(AppEvent::CodexOp(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: context,
-                text_elements: vec![],
-            }],
-            final_output_json_schema: None,
-        }));
+        self.app_event_tx
+            .send(AppEvent::SubmitUserText { text: context });
         self.pending_sections
             .insert(self.current_section, (text, Instant::now()));
         self.textarea = TextArea::new();
@@ -2714,7 +2701,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn voice_context(&self) -> Option<super::bottom_pane_view::ReadingViewVoiceContext> {
         let section = self.sections.get(self.current_section)?;
         let heading = section.heading.clone();
@@ -2735,32 +2722,22 @@ impl BottomPaneView for DocumentReaderView {
         })
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_status(&mut self, status: Option<String>) {
         self.voice_status = status;
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_tts_flash_msg(&mut self, msg: Option<String>) {
         self.tts_flash_msg = msg;
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_tts_paused(&mut self, paused: bool) {
         self.voice_tts_paused = paused;
     }
 
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
-    fn voice_tts_paused(&self) -> bool {
-        self.voice_tts_paused
-    }
-
-    #[cfg(all(test, not(target_os = "linux"), feature = "voice-input"))]
-    fn voice_status(&self) -> Option<String> {
-        self.voice_status.clone()
-    }
-
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_pending_voice_question(&mut self, section: usize, question: String) {
         self.pending_sections
             .insert(section, (question, Instant::now()));
@@ -2771,7 +2748,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_karaoke_lines(&mut self, lines: Option<Vec<Line<'static>>>, append: bool) {
         // Re-enable auto-scroll when new karaoke lines arrive (TTS starts).
         if lines.is_some() && self.voice_karaoke_lines.is_none() {
@@ -2802,7 +2779,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn set_voice_reading_progress(
         &mut self,
         word_idx: Option<usize>,
@@ -2900,7 +2877,7 @@ impl BottomPaneView for DocumentReaderView {
         }
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     fn is_composer_focused(&self) -> bool {
         self.focus == ReaderFocus::Composer
     }
@@ -3032,12 +3009,23 @@ impl Renderable for DocumentReaderView {
         // Clear the reading view area and any inset gap row above (the
         // chatwidget adds a 1-row top inset to the bottom pane; when the
         // reading view fills the terminal that gap can show residual content).
+        // Write an explicit space + default style to every cell — ratatui's
+        // Clear widget calls `cell.reset()` which leaves the symbol as default,
+        // and the subsequent diff renderer treats default-vs-default cells as
+        // unchanged. That skips writes to cells holding stale tmux content
+        // from before the resize, producing the character-interleaving bug.
         let clear_area = if area.y > 0 {
             Rect::new(area.x, area.y - 1, area.width, area.height + 1)
         } else {
             area
         };
-        Clear.render(clear_area, buf);
+        for y in clear_area.top()..clear_area.bottom() {
+            for x in clear_area.left()..clear_area.right() {
+                let cell = &mut buf[(x, y)];
+                cell.reset();
+                cell.set_symbol(" ");
+            }
+        }
 
         let w = area.width;
         let section_count = self.sections.len();
@@ -3578,7 +3566,10 @@ impl Renderable for DocumentReaderView {
                     let inner_w = w.saturating_sub(4);
                     let display = format!("\u{25B8} {question}");
                     let composer_lines: Vec<Line<'static>> = if self.animations_enabled {
-                        let shimmer = crate::shimmer::shimmer_spans(&display);
+                        let shimmer = crate::motion::shimmer_text(
+                            &display,
+                            crate::motion::MotionMode::Animated,
+                        );
                         vec![Line::from(shimmer)]
                     } else {
                         textwrap::wrap(&display, inner_w.max(1) as usize)
@@ -3859,6 +3850,12 @@ fn parse_sections(_title: &str, content: &str) -> Vec<DocumentSection> {
     let mut current_content = String::new();
 
     for line in content.lines() {
+        // Hidden machine-readable section metadata emitted by the server
+        // (foldable flag, agent summary). Strip before rendering.
+        let trimmed = line.trim();
+        if trimmed.starts_with("<!-- CODEX_SECTION_META ") && trimmed.ends_with(" -->") {
+            continue;
+        }
         if let Some(heading_text) = line.strip_prefix("## ") {
             // Flush the previous section.
             sections.push(DocumentSection {
@@ -3936,7 +3933,6 @@ mod tests {
     use crate::app_event_sender::AppEventSender;
     use crate::history_cell::DocumentCell;
     use crate::render::renderable::Renderable;
-    use codex_protocol::protocol::Op;
     use crossterm::event::KeyModifiers;
     use pretty_assertions::assert_eq;
     use ratatui::buffer::Buffer;
@@ -4414,11 +4410,7 @@ mod tests {
         // Verify the Op was emitted with section context.
         let mut found_op = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::UserInput { items, .. }) = ev {
-                let text = match &items[0] {
-                    UserInput::Text { text, .. } => text.clone(),
-                    _ => String::new(),
-                };
+            if let AppEvent::SubmitUserText { text } = ev {
                 assert!(
                     text.contains("Results"),
                     "context should include section heading: {text}"
@@ -4630,9 +4622,7 @@ mod tests {
         // Drain the UserInput event.
         let mut got_input = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::UserInput { items, .. }) = ev
-                && let UserInput::Text { text, .. } = &items[0]
-            {
+            if let AppEvent::SubmitUserText { text } = ev {
                 assert!(text.contains("more"));
                 got_input = true;
             }
@@ -5032,7 +5022,7 @@ mod tests {
     // Voice reading progress tests
     // -----------------------------------------------------------------------
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     mod voice_progress_tests {
         use super::super::DocumentReaderView;
         use super::AppEvent;
@@ -5622,11 +5612,7 @@ mod tests {
         // Verify a CodexOp(UserInput) was sent.
         let mut found_op = false;
         while let Ok(ev) = rx.try_recv() {
-            if let AppEvent::CodexOp(Op::UserInput { items, .. }) = ev {
-                let text = match &items[0] {
-                    UserInput::Text { text, .. } => text.clone(),
-                    _ => String::new(),
-                };
+            if let AppEvent::SubmitUserText { text } = ev {
                 assert!(
                     text.contains("test"),
                     "submitted text should contain 'test': {text}"
@@ -5997,7 +5983,7 @@ mod tests {
     // Voice progress render verification
     // -----------------------------------------------------------------------
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     mod voice_progress_render_tests {
         use super::AppEvent;
         use super::AppEventSender;
@@ -6299,7 +6285,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn karaoke_auto_scroll_resets_on_new_highlight() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

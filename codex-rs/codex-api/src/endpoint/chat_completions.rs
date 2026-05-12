@@ -6,7 +6,7 @@
 //! `sse::chat_completions::spawn_chat_completions_stream` so the rest of
 //! Ata can consume them transparently.
 
-use crate::auth::AuthProvider;
+use crate::auth::SharedAuthProvider;
 use crate::common::ResponseStream;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
@@ -22,13 +22,13 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
-pub struct ChatCompletionsClient<T: HttpTransport, A: AuthProvider> {
-    session: EndpointSession<T, A>,
+pub struct ChatCompletionsClient<T: HttpTransport> {
+    session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
 }
 
-impl<T: HttpTransport, A: AuthProvider> ChatCompletionsClient<T, A> {
-    pub fn new(transport: T, provider: Provider, auth: A) -> Self {
+impl<T: HttpTransport> ChatCompletionsClient<T> {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,

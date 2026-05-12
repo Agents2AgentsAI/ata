@@ -1,23 +1,27 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::codex::make_session_and_context;
+use crate::session::tests::make_session_and_context;
 use crate::tools::context::ToolPayload;
-use crate::turn_diff_tracker::TurnDiffTracker;
-use codex_protocol::models::ResponseInputItem;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ResponseItem;
+use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
+use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::ToolCall;
-use super::ToolCallSource;
 use super::ToolRouter;
 use super::ToolRouterParams;
 
 #[tokio::test]
-async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
-    let (session, mut turn) = make_session_and_context().await;
-    turn.tools_config.js_repl_tools_only = true;
-
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "test builds a router from session-owned MCP manager state"
+)]
+async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
     let mcp_tools = session
         .services
         .mcp_connection_manager
@@ -25,102 +29,41 @@ async fn js_repl_tools_only_blocks_direct_tool_calls() -> anyhow::Result<()> {
         .await
         .list_all_tools()
         .await;
-    let app_tools = Some(mcp_tools.clone());
     let router = ToolRouter::from_config(
         &turn.tools_config,
         ToolRouterParams {
-            mcp_tools: Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            app_tools,
+            deferred_mcp_tools: None,
+            mcp_tools: Some(mcp_tools),
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
             discoverable_tools: None,
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            research_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 
-    let call = ToolCall {
-        tool_name: "shell".to_string(),
-        tool_namespace: None,
-        call_id: "call-1".to_string(),
+    let parallel_tool_name = ["shell", "local_shell", "exec_command", "shell_command"]
+        .into_iter()
+        .find(|name| {
+            router.tool_supports_parallel(&ToolCall {
+                tool_name: ToolName::plain(*name),
+                call_id: "call-parallel-tool".to_string(),
+                payload: ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            })
+        })
+        .expect("test session should expose a parallel shell-like tool");
+
+    assert!(!router.tool_supports_parallel(&ToolCall {
+        tool_name: ToolName::namespaced("mcp__server__", parallel_tool_name),
+        call_id: "call-namespaced-tool".to_string(),
         payload: ToolPayload::Function {
             arguments: "{}".to_string(),
         },
-    };
-    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let response = router
-        .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::Direct)
-        .await?;
-
-    match response {
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            let content = output.text_content().unwrap_or_default();
-            assert!(
-                content.contains("direct tool calls are disabled"),
-                "unexpected tool call message: {content}",
-            );
-        }
-        other => panic!("expected function call output, got {other:?}"),
-    }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn js_repl_tools_only_allows_js_repl_source_calls() -> anyhow::Result<()> {
-    let (session, mut turn) = make_session_and_context().await;
-    turn.tools_config.js_repl_tools_only = true;
-
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-    let mcp_tools = session
-        .services
-        .mcp_connection_manager
-        .read()
-        .await
-        .list_all_tools()
-        .await;
-    let app_tools = Some(mcp_tools.clone());
-    let router = ToolRouter::from_config(
-        &turn.tools_config,
-        ToolRouterParams {
-            mcp_tools: Some(
-                mcp_tools
-                    .into_iter()
-                    .map(|(name, tool)| (name, tool.tool))
-                    .collect(),
-            ),
-            app_tools,
-            discoverable_tools: None,
-            dynamic_tools: turn.dynamic_tools.as_slice(),
-        },
-    );
-
-    let call = ToolCall {
-        tool_name: "shell".to_string(),
-        tool_namespace: None,
-        call_id: "call-2".to_string(),
-        payload: ToolPayload::Function {
-            arguments: "{}".to_string(),
-        },
-    };
-    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let response = router
-        .dispatch_tool_call(session, turn, tracker, call, ToolCallSource::JsRepl)
-        .await?;
-
-    match response {
-        ResponseInputItem::FunctionCallOutput { output, .. } => {
-            let content = output.text_content().unwrap_or_default();
-            assert!(
-                !content.contains("direct tool calls are disabled"),
-                "js_repl source should bypass direct-call policy gate"
-            );
-        }
-        other => panic!("expected function call output, got {other:?}"),
-    }
+    }));
 
     Ok(())
 }
@@ -139,16 +82,14 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
             namespace: Some("mcp__codex_apps__calendar".to_string()),
             arguments: "{}".to_string(),
             call_id: "call-namespace".to_string(),
-            thought_signature: None,
         },
     )
     .await?
     .expect("function_call should produce a tool call");
 
-    assert_eq!(call.tool_name, tool_name);
     assert_eq!(
-        call.tool_namespace,
-        Some("mcp__codex_apps__calendar".to_string())
+        call.tool_name,
+        ToolName::namespaced("mcp__codex_apps__calendar", tool_name)
     );
     assert_eq!(call.call_id, "call-namespace");
     match call.payload {
@@ -159,4 +100,133 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+#[tokio::test]
+async fn mcp_parallel_support_uses_exact_payload_server() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::from(["echo".to_string()]),
+            discoverable_tools: None,
+            dynamic_tools: turn.dynamic_tools.as_slice(),
+            research_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
+        },
+    );
+
+    let deferred_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__echo__", "query_with_delay"),
+        call_id: "call-deferred".to_string(),
+        payload: ToolPayload::Mcp {
+            server: "echo".to_string(),
+            tool: "query_with_delay".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    };
+    assert!(router.tool_supports_parallel(&deferred_call));
+
+    let different_server_call = ToolCall {
+        tool_name: ToolName::namespaced("mcp__hello_echo__", "query_with_delay"),
+        call_id: "call-other-server".to_string(),
+        payload: ToolPayload::Mcp {
+            server: "hello_echo".to_string(),
+            tool: "query_with_delay".to_string(),
+            raw_arguments: "{}".to_string(),
+        },
+    };
+    assert!(!router.tool_supports_parallel(&different_server_call));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_visible_specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let hidden_tool = "hidden_dynamic_tool";
+    let visible_tool = "visible_dynamic_tool";
+    let dynamic_tools = vec![
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: hidden_tool.to_string(),
+            description: "Hidden until discovered.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            defer_loading: true,
+        },
+        DynamicToolSpec {
+            namespace: Some("codex_app".to_string()),
+            name: visible_tool.to_string(),
+            description: "Visible immediately.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            }),
+            defer_loading: false,
+        },
+    ];
+
+    let router = ToolRouter::from_config(
+        &turn.tools_config,
+        ToolRouterParams {
+            deferred_mcp_tools: None,
+            mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: &dynamic_tools,
+            research_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
+        },
+    );
+
+    assert!(
+        router
+            .find_spec(&ToolName::namespaced("codex_app", hidden_tool))
+            .is_some()
+    );
+    assert_eq!(
+        namespace_function_names(&router.specs(), "codex_app"),
+        vec![hidden_tool.to_string(), visible_tool.to_string()]
+    );
+    assert_eq!(
+        namespace_function_names(&router.model_visible_specs(), "codex_app"),
+        vec![visible_tool.to_string()]
+    );
+
+    Ok(())
+}
+
+fn namespace_function_names(specs: &[ToolSpec], namespace_name: &str) -> Vec<String> {
+    specs
+        .iter()
+        .find_map(|spec| match spec {
+            ToolSpec::Namespace(namespace) if namespace.name == namespace_name => Some(
+                namespace
+                    .tools
+                    .iter()
+                    .map(|tool| match tool {
+                        ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
+                    })
+                    .collect(),
+            ),
+            ToolSpec::Function(_)
+            | ToolSpec::Freeform(_)
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::LocalShell {}
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Namespace(_) => None,
+        })
+        .unwrap_or_default()
 }

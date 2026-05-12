@@ -1,10 +1,14 @@
 use std::io::Cursor;
 use std::io::Write;
 use std::io::{self};
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
+use crate::auth::storage::AuthDotJson;
+use crate::auth::storage::ProviderOauthCredential;
+use crate::auth::storage::create_auth_storage;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use crate::server::LoginServer;
@@ -12,23 +16,49 @@ use crate::server::ShutdownHandle;
 use base64::Engine;
 use chrono::Duration;
 use chrono::Utc;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::auth::DEFAULT_GEMINI_OAUTH_CLIENT_ID;
-use codex_core::auth::DEFAULT_GEMINI_OAUTH_CLIENT_SECRET;
-use codex_core::auth::DEFAULT_GEMINI_OAUTH_TOKEN_URL;
-use codex_core::auth::GEMINI_OAUTH_CLIENT_ID_ENV_VAR;
-use codex_core::auth::GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR;
-use codex_core::auth::GEMINI_OAUTH_TOKEN_URL_ENV_VAR;
-use codex_core::auth::PROVIDER_GEMINI;
-use codex_core::auth::ProviderOauthCredential;
-use codex_core::auth::env_string_or_default;
-use codex_core::auth::login_with_provider_oauth;
+use codex_config::types::AuthCredentialsStoreMode;
 use rand::RngCore;
 use tiny_http::Header;
 use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
+
+// === ATA: Gemini OAuth constants. Inlined here (mirroring values that
+// historically lived in `codex_core::auth::gemini_oauth`) so this module
+// compiles inside `codex-login`, which cannot depend on `codex-core`
+// (that would be a dependency cycle). When you tune these defaults, update
+// both copies — the `codex-core` copy is what the refresh-loop uses. ===
+const GEMINI_OAUTH_CLIENT_ID_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_ID";
+const GEMINI_OAUTH_CLIENT_SECRET_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_CLIENT_SECRET";
+const GEMINI_OAUTH_TOKEN_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_TOKEN_URL";
+const DEFAULT_GEMINI_OAUTH_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const DEFAULT_GEMINI_OAUTH_CLIENT_SECRET: &str = "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";
+const DEFAULT_GEMINI_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const PROVIDER_GEMINI: &str = "gemini";
+
+fn env_string_or_default(env_var: &str, default_value: &str) -> String {
+    std::env::var(env_var)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_value.to_string())
+}
+
+fn login_with_provider_oauth(
+    codex_home: &Path,
+    provider_id: &str,
+    credential: ProviderOauthCredential,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let mut auth_dot_json = storage
+        .load()?
+        .map(AuthDotJson::migrate_if_needed)
+        .unwrap_or_default();
+    auth_dot_json.set_provider_oauth_credential(provider_id, credential);
+    storage.save(&auth_dot_json)
+}
 
 const GEMINI_OAUTH_AUTHORIZE_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_AUTHORIZE_URL";
 const GEMINI_OAUTH_USERINFO_URL_ENV_VAR: &str = "CODEX_GEMINI_OAUTH_USERINFO_URL";
@@ -193,12 +223,12 @@ pub fn run_gemini_login_server(opts: GeminiServerOptions) -> io::Result<LoginSer
         })
     };
 
-    Ok(LoginServer {
+    Ok(LoginServer::from_parts(
         auth_url,
         actual_port,
         server_handle,
-        shutdown_handle: ShutdownHandle { shutdown_notify },
-    })
+        ShutdownHandle::from_notify(shutdown_notify),
+    ))
 }
 
 enum HandledRequest {

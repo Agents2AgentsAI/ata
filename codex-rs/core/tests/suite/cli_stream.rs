@@ -1,12 +1,11 @@
 use assert_cmd::Command as AssertCommand;
-use codex_core::auth::CODEX_API_KEY_ENV_VAR;
-use codex_protocol::openai_models::ModelsResponse;
+use codex_git_utils::collect_git_info;
+use codex_login::CODEX_API_KEY_ENV_VAR;
 use codex_protocol::protocol::GitInfo;
 use codex_utils_cargo_bin::find_resource;
 use core_test_support::fs_wait;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
-use core_test_support::test_codex::cached_ata_bin;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -28,10 +27,6 @@ async fn responses_mode_stream_cli() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
-    // `ata exec` refreshes `/v1/models` to seed its model list.
-    // Provide a hermetic stub so the CLI doesn't block/hang when using a mock provider.
-    let _models_mock =
-        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let repo_root = repo_root();
     let sse = responses::sse(vec![
         responses::ev_response_created("resp-1"),
@@ -42,18 +37,14 @@ async fn responses_mode_stream_cli() {
 
     let home = TempDir::new().unwrap();
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    // Allow extra slack when running under parallel test load on developer machines.
-    cmd.timeout(Duration::from_secs(60));
+    cmd.timeout(Duration::from_secs(30));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
-        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
-        .arg("-c")
-        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -62,9 +53,6 @@ async fn responses_mode_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        // Keep skill discovery hermetic; otherwise `$HOME/.agents/skills` can add
-        // unpredictable latency on developer machines.
-        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -101,41 +89,6 @@ async fn responses_mode_stream_cli() {
     // assert!(page.items[0].created_at.is_some(), "missing created_at");
 }
 
-/// Ensures `OPENAI_BASE_URL` still works as a deprecated fallback.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_mode_stream_cli_supports_openai_base_url_env_fallback() {
-    skip_if_no_network!();
-
-    let server = MockServer::start().await;
-    let repo_root = repo_root();
-    let sse = responses::sse(vec![
-        responses::ev_response_created("resp-1"),
-        responses::ev_assistant_message("msg-1", "hi"),
-        responses::ev_completed("resp-1"),
-    ]);
-    let resp_mock = responses::mount_sse_once(&server, sse).await;
-
-    let home = TempDir::new().unwrap();
-    let bin = cached_ata_bin().unwrap();
-    let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
-    cmd.arg("exec")
-        .arg("--skip-git-repo-check")
-        .arg("-C")
-        .arg(&repo_root)
-        .arg("hello?");
-    cmd.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
-
-    let output = cmd.output().unwrap();
-    assert!(output.status.success());
-
-    let request = resp_mock.single_request();
-    assert_eq!(request.path(), "/v1/responses");
-}
-
 /// Ensures `openai_base_url` config override routes built-in openai provider requests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
@@ -151,7 +104,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let home = TempDir::new().unwrap();
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.timeout(Duration::from_secs(30));
     cmd.arg("exec")
@@ -162,7 +115,6 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -182,9 +134,6 @@ async fn exec_cli_applies_model_instructions_file() {
     // Start mock server which will capture the request and return a minimal
     // SSE stream for a single turn.
     let server = MockServer::start().await;
-    // `ata exec` refreshes `/v1/models` to seed its model list.
-    let _models_mock =
-        responses::mount_models_once(&server, ModelsResponse { models: Vec::new() }).await;
     let sse = concat!(
         "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
@@ -202,19 +151,16 @@ async fn exec_cli_applies_model_instructions_file() {
     // Build a provider override that points at the mock server and instructs
     // Codex to use the Responses API with the dummy env var.
     let provider_override = format!(
-        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"OPENAI_API_KEY\", wire_api = \"responses\" }}",
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
         server.uri()
     );
 
     let home = TempDir::new().unwrap();
     let repo_root = repo_root();
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
-        // Avoid keyring prompts/latency in CI by forcing file-backed auth storage.
-        .arg("-c")
-        .arg("cli_auth_credentials_store=\"file\"")
         .arg("-c")
         .arg(&provider_override)
         .arg("-c")
@@ -225,7 +171,6 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -282,7 +227,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
     .unwrap();
 
     let repo_root = repo_root();
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -296,8 +241,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
+        .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
     println!("Status: {}", output.status);
@@ -332,7 +276,7 @@ async fn responses_api_stream_cli() {
     let repo_root = repo_root();
 
     let home = TempDir::new().unwrap();
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -342,7 +286,6 @@ async fn responses_api_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture);
 
@@ -370,7 +313,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let repo_root = repo_root();
 
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
-    let bin = cached_ata_bin().unwrap();
+    let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
@@ -380,7 +323,6 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture);
 
@@ -492,7 +434,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    let bin2 = cached_ata_bin().unwrap();
+    let bin2 = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd2 = AssertCommand::new(bin2);
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
@@ -504,7 +446,6 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("resume")
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
-        .env("HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture);
 
@@ -621,7 +562,7 @@ async fn integration_git_info_unit_test() {
         .unwrap();
 
     // 3. Test git info collection directly
-    let git_info = codex_core::git_info::collect_git_info(&git_repo).await;
+    let git_info = collect_git_info(&git_repo).await;
 
     // 4. Verify git info is present and contains expected data
     assert!(git_info.is_some(), "Git info should be collected");
@@ -633,7 +574,7 @@ async fn integration_git_info_unit_test() {
         git_info.commit_hash.is_some(),
         "Git info should contain commit_hash"
     );
-    let commit_hash = git_info.commit_hash.as_ref().unwrap();
+    let commit_hash = &git_info.commit_hash.as_ref().unwrap().0;
     assert_eq!(commit_hash.len(), 40, "Commit hash should be 40 characters");
     assert!(
         commit_hash.chars().all(|c| c.is_ascii_hexdigit()),
@@ -654,7 +595,7 @@ async fn integration_git_info_unit_test() {
         "Git info should contain repository_url"
     );
     let repo_url = git_info.repository_url.as_ref().unwrap();
-    // Some hosts rewrite remotes (e.g., github.com -> git@github.com), so assert against
+    // Some hosts rewrite remotes (e.g., github.com → git@github.com), so assert against
     // the actual remote reported by git instead of a static URL.
     let expected_remote_url = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
@@ -670,7 +611,7 @@ async fn integration_git_info_unit_test() {
         "Repository URL should match git remote get-url output"
     );
 
-    println!("Git info collection test passed!");
+    println!("✅ Git info collection test passed!");
     println!("   Commit: {commit_hash}");
     println!("   Branch: {branch}");
     println!("   Repo: {repo_url}");
@@ -683,5 +624,5 @@ async fn integration_git_info_unit_test() {
     assert_eq!(git_info.branch, deserialized.branch);
     assert_eq!(git_info.repository_url, deserialized.repository_url);
 
-    println!("Git info serialization test passed!");
+    println!("✅ Git info serialization test passed!");
 }

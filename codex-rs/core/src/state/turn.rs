@@ -1,5 +1,6 @@
 //! Turn-scoped state and active turn metadata scaffolding.
 
+use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -10,23 +11,45 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
-use crate::codex::TurnContext;
-use crate::protocol::ReviewDecision;
-use crate::protocol::TokenUsage;
-use crate::sandboxing::merge_permission_profiles;
-use crate::tasks::SessionTask;
-use codex_protocol::models::PermissionProfile;
+use crate::session::turn_context::TurnContext;
+use crate::tasks::AnySessionTask;
+use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::protocol::TokenUsage;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
+}
+
+/// Whether mailbox deliveries should still be folded into the current turn.
+///
+/// State machine:
+/// - A turn starts in `CurrentTurn`, so queued child mail can join the next
+///   model request for that turn.
+/// - After user-visible terminal output is recorded, we switch to `NextTurn`
+///   to leave late child mail queued instead of extending an already shown
+///   answer.
+/// - If the same task later gets explicit same-turn work again (a steered user
+///   prompt or a tool call after an untagged preamble), we reopen `CurrentTurn`
+///   so that pending child mail is drained into that follow-up request.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum MailboxDeliveryPhase {
+    /// Incoming mailbox messages can still be consumed by the current turn.
+    #[default]
+    CurrentTurn,
+    /// The current turn already emitted visible final answer text; mailbox
+    /// messages should remain queued for a later turn.
+    NextTurn,
 }
 
 impl Default for ActiveTurn {
@@ -48,12 +71,17 @@ pub(crate) enum TaskKind {
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
-    pub(crate) task: Arc<dyn SessionTask>,
+    pub(crate) task: Arc<dyn AnySessionTask>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) handle: Arc<AbortOnDropHandle<()>>,
+    pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
+}
+
+pub(crate) struct RemovedTask {
+    pub(crate) records_turn_token_usage_on_span: bool,
+    pub(crate) active_turn_is_empty: bool,
 }
 
 impl ActiveTurn {
@@ -62,9 +90,14 @@ impl ActiveTurn {
         self.tasks.insert(sub_id, task);
     }
 
-    pub(crate) fn remove_task(&mut self, sub_id: &str) -> bool {
-        self.tasks.swap_remove(sub_id);
-        self.tasks.is_empty()
+    pub(crate) fn remove_task(&mut self, sub_id: &str) -> Option<RemovedTask> {
+        let task = self.tasks.swap_remove(sub_id)?;
+        let records_turn_token_usage_on_span = task.task.records_turn_token_usage_on_span();
+        task.handle.detach();
+        Some(RemovedTask {
+            records_turn_token_usage_on_span,
+            active_turn_is_empty: self.tasks.is_empty(),
+        })
     }
 
     pub(crate) fn drain_tasks(&mut self) -> Vec<RunningTask> {
@@ -76,15 +109,27 @@ impl ActiveTurn {
 #[derive(Default)]
 pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_request_permissions: HashMap<String, oneshot::Sender<RequestPermissionsResponse>>,
+    pending_request_permissions: HashMap<String, PendingRequestPermissions>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
-    url_attachments_injected: usize,
-    granted_permissions: Option<PermissionProfile>,
+    mailbox_delivery_phase: MailboxDeliveryPhase,
+    granted_permissions: Option<AdditionalPermissionProfile>,
+    strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
+    pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+    /// Count of URL file attachments injected into this turn so far. Used by the
+    /// URL-attach pipeline (`attach_url_files`, `crop_figure`) to enforce a
+    /// per-turn cap and to support context-window/file-error recovery.
+    url_attachments_injected: usize,
+}
+
+pub(crate) struct PendingRequestPermissions {
+    pub(crate) tx_response: oneshot::Sender<RequestPermissionsResponse>,
+    pub(crate) requested_permissions: RequestPermissionProfile,
+    pub(crate) cwd: AbsolutePathBuf,
 }
 
 impl TurnState {
@@ -110,21 +155,21 @@ impl TurnState {
         self.pending_elicitations.clear();
         self.pending_dynamic_tools.clear();
         self.pending_input.clear();
-        self.url_attachments_injected = 0;
     }
 
     pub(crate) fn insert_pending_request_permissions(
         &mut self,
         key: String,
-        tx: oneshot::Sender<RequestPermissionsResponse>,
-    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
-        self.pending_request_permissions.insert(key, tx)
+        pending_request_permissions: PendingRequestPermissions,
+    ) -> Option<PendingRequestPermissions> {
+        self.pending_request_permissions
+            .insert(key, pending_request_permissions)
     }
 
     pub(crate) fn remove_pending_request_permissions(
         &mut self,
         key: &str,
-    ) -> Option<oneshot::Sender<RequestPermissionsResponse>> {
+    ) -> Option<PendingRequestPermissions> {
         self.pending_request_permissions.remove(key)
     }
 
@@ -181,6 +226,37 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
+    /// Returns the number of URL file attachments injected into this turn so
+    /// far.
+    pub(crate) fn url_attachments_injected(&self) -> usize {
+        self.url_attachments_injected
+    }
+
+    /// Atomically reserves capacity for `additional` URL file attachments in
+    /// this turn, enforcing `per_turn_limit`. Returns `Ok(())` on success, or
+    /// `Err(current_count)` if the reservation would exceed the limit.
+    pub(crate) fn reserve_url_attachments(
+        &mut self,
+        additional: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), usize> {
+        let current = self.url_attachments_injected;
+        if current.saturating_add(additional) > per_turn_limit {
+            return Err(current);
+        }
+        self.url_attachments_injected = current + additional;
+        Ok(())
+    }
+
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -195,52 +271,33 @@ impl TurnState {
         !self.pending_input.is_empty()
     }
 
-    /// Reserve capacity for URL file attachments in this turn.
-    ///
-    /// Returns `Ok(())` if reservation succeeds, or `Err(current_count)` when the
-    /// reservation would exceed the per-turn limit.
-    pub(crate) fn can_reserve_url_attachments(
-        &self,
-        to_add: usize,
-        per_turn_limit: usize,
-    ) -> Result<(), usize> {
-        if to_add == 0 {
-            return Ok(());
-        }
-
-        let next = self.url_attachments_injected.saturating_add(to_add);
-        if next > per_turn_limit {
-            return Err(self.url_attachments_injected);
-        }
-
-        Ok(())
+    pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
+        self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
     }
 
-    pub(crate) fn url_attachments_injected(&self) -> usize {
-        self.url_attachments_injected
+    pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
+        self.mailbox_delivery_phase == MailboxDeliveryPhase::CurrentTurn
     }
 
-    /// Reserve capacity for URL file attachments in this turn.
-    ///
-    /// Returns `Ok(())` if reservation succeeds, or `Err(current_count)` when the
-    /// reservation would exceed the per-turn limit.
-    pub(crate) fn reserve_url_attachments(
-        &mut self,
-        to_add: usize,
-        per_turn_limit: usize,
-    ) -> Result<(), usize> {
-        self.can_reserve_url_attachments(to_add, per_turn_limit)?;
-        self.url_attachments_injected = self.url_attachments_injected.saturating_add(to_add);
-        Ok(())
+    pub(crate) fn set_mailbox_delivery_phase(&mut self, phase: MailboxDeliveryPhase) {
+        self.mailbox_delivery_phase = phase;
     }
 
-    pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {
+    pub(crate) fn record_granted_permissions(&mut self, permissions: AdditionalPermissionProfile) {
         self.granted_permissions =
             merge_permission_profiles(self.granted_permissions.as_ref(), Some(&permissions));
     }
 
-    pub(crate) fn granted_permissions(&self) -> Option<PermissionProfile> {
+    pub(crate) fn granted_permissions(&self) -> Option<AdditionalPermissionProfile> {
         self.granted_permissions.clone()
+    }
+
+    pub(crate) fn enable_strict_auto_review(&mut self) {
+        self.strict_auto_review_enabled = true;
+    }
+
+    pub(crate) fn strict_auto_review_enabled(&self) -> bool {
+        self.strict_auto_review_enabled
     }
 }
 

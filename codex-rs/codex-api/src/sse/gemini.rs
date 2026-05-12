@@ -2,6 +2,15 @@
 //!
 //! Gemini uses a JSON lines streaming format rather than standard SSE.
 //! Each response chunk contains candidates with content parts.
+//!
+//! `#![allow(dead_code)]` applies module-wide because the wire-envelope
+//! structs (`GeminiCandidate`, `GeminiContent`, `GeminiPart`,
+//! `GeminiPromptFeedback`, `GeminiSafetyRating`, etc.) deserialize from
+//! the `generateContent` response shape; not every field is read at
+//! runtime, but each is load-bearing documentation of the protocol
+//! contract and may be consumed by future code paths (telemetry, safety
+//! gating, etc.).
+#![allow(dead_code)]
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -355,7 +364,6 @@ pub fn parse_gemini_chunk(
                                 id: None,
                                 role: "assistant".to_string(),
                                 content: vec![],
-                                end_turn: None,
                                 phase: None,
                             }));
                         }
@@ -380,7 +388,6 @@ pub fn parse_gemini_chunk(
                             call_id,
                             name: function_call.name.clone(),
                             arguments,
-                            thought_signature: part.thought_signature.clone(),
                             namespace: None,
                         }));
                     }
@@ -451,6 +458,7 @@ pub fn finalize_gemini_stream(
     events.push(ResponseEvent::Completed {
         response_id: String::new(),
         token_usage,
+        end_turn: Some(true),
     });
 
     events
@@ -464,7 +472,6 @@ pub fn build_message_item(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
-        end_turn: Some(true),
         phase: None,
     }
 }

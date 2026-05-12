@@ -14,6 +14,7 @@ use super::CommandShell;
 use super::ConfiguredHandler;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
+use crate::events::common::matches_matcher;
 
 #[derive(Debug)]
 pub(crate) struct ParsedHandler<T> {
@@ -24,20 +25,39 @@ pub(crate) struct ParsedHandler<T> {
 pub(crate) fn select_handlers(
     handlers: &[ConfiguredHandler],
     event_name: HookEventName,
-    session_start_source: Option<&str>,
+    matcher_input: Option<&str>,
 ) -> Vec<ConfiguredHandler> {
+    let matcher_inputs = matcher_input.into_iter().collect::<Vec<_>>();
+    select_handlers_for_matcher_inputs(handlers, event_name, &matcher_inputs)
+}
+
+pub(crate) fn select_handlers_for_matcher_inputs(
+    handlers: &[ConfiguredHandler],
+    event_name: HookEventName,
+    matcher_inputs: &[&str],
+) -> Vec<ConfiguredHandler> {
+    // Check each configured handler once, even when several compatibility names
+    // match the same regex. A hook like `apply_patch|Write|Edit` should run a
+    // single time for one tool call, not once per matching alias.
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
-            HookEventName::SessionStart => match (&handler.matcher, session_start_source) {
-                (Some(matcher), Some(source)) => regex::Regex::new(matcher)
-                    .map(|regex| regex.is_match(source))
-                    .unwrap_or(false),
-                (None, _) => true,
-                _ => false,
-            },
-            HookEventName::Stop => true,
+            HookEventName::PreToolUse
+            | HookEventName::PermissionRequest
+            | HookEventName::PostToolUse
+            | HookEventName::SessionStart
+            | HookEventName::PreCompact
+            | HookEventName::PostCompact => {
+                if matcher_inputs.is_empty() {
+                    matches_matcher(handler.matcher.as_deref(), /*input*/ None)
+                } else {
+                    matcher_inputs
+                        .iter()
+                        .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
+                }
+            }
+            HookEventName::UserPromptSubmit | HookEventName::Stop => true,
         })
         .cloned()
         .collect()
@@ -51,6 +71,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status: HookRunStatus::Running,
         status_message: handler.status_message.clone(),
@@ -96,6 +117,7 @@ pub(crate) fn completed_summary(
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
+        source: handler.source,
         display_order: handler.display_order,
         status,
         status_message: handler.status_message.clone(),
@@ -109,18 +131,26 @@ pub(crate) fn completed_summary(
 fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
-        HookEventName::Stop => HookScope::Turn,
+        HookEventName::PreToolUse
+        | HookEventName::PermissionRequest
+        | HookEventName::PostToolUse
+        | HookEventName::PreCompact
+        | HookEventName::PostCompact
+        | HookEventName::UserPromptSubmit
+        | HookEventName::Stop => HookScope::Turn,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
 
     use super::ConfiguredHandler;
     use super::select_handlers;
+    use super::select_handlers_for_matcher_inputs;
 
     fn make_handler(
         event_name: HookEventName,
@@ -134,19 +164,31 @@ mod tests {
             command: command.to_string(),
             timeout_sec: 5,
             status_message: None,
-            source_path: PathBuf::from("/tmp/hooks.json"),
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: HookSource::User,
             display_order,
+            env: std::collections::HashMap::new(),
         }
     }
 
     #[test]
     fn select_handlers_keeps_duplicate_stop_handlers() {
         let handlers = vec![
-            make_handler(HookEventName::Stop, None, "echo same", 0),
-            make_handler(HookEventName::Stop, None, "echo same", 1),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                "echo same",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                "echo same",
+                /*display_order*/ 1,
+            ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, None);
+        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);
@@ -156,12 +198,17 @@ mod tests {
     #[test]
     fn select_handlers_keeps_overlapping_session_start_matchers() {
         let handlers = vec![
-            make_handler(HookEventName::SessionStart, Some("start.*"), "echo same", 0),
+            make_handler(
+                HookEventName::SessionStart,
+                Some("start.*"),
+                "echo same",
+                /*display_order*/ 0,
+            ),
             make_handler(
                 HookEventName::SessionStart,
                 Some("^startup$"),
                 "echo same",
-                1,
+                /*display_order*/ 1,
             ),
         ];
 
@@ -173,14 +220,212 @@ mod tests {
     }
 
     #[test]
-    fn select_handlers_preserves_declaration_order() {
+    fn compact_hooks_match_trigger() {
         let handlers = vec![
-            make_handler(HookEventName::Stop, None, "first", 0),
-            make_handler(HookEventName::Stop, None, "second", 1),
-            make_handler(HookEventName::Stop, None, "third", 2),
+            make_handler(
+                HookEventName::PreCompact,
+                Some("manual"),
+                "echo manual",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreCompact,
+                Some("auto"),
+                "echo auto",
+                /*display_order*/ 1,
+            ),
         ];
 
-        let selected = select_handlers(&handlers, HookEventName::Stop, None);
+        let selected = select_handlers(&handlers, HookEventName::PreCompact, Some("manual"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn pre_tool_use_matches_tool_name() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Bash$"),
+                "echo same",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Edit$"),
+                "echo same",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn post_tool_use_matches_tool_name() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PostToolUse,
+                Some("^Bash$"),
+                "echo same",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PostToolUse,
+                Some("^Edit$"),
+                "echo same",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PostToolUse, Some("Bash"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn pre_tool_use_star_matcher_matches_all_tools() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("*"),
+                "echo same",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Edit$"),
+                "echo same",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].display_order, 0);
+    }
+
+    #[test]
+    fn pre_tool_use_regex_alternation_matches_each_tool_name() {
+        let handlers = vec![make_handler(
+            HookEventName::PreToolUse,
+            Some("Edit|Write"),
+            "echo same",
+            /*display_order*/ 0,
+        )];
+
+        let selected_edit = select_handlers(&handlers, HookEventName::PreToolUse, Some("Edit"));
+        let selected_write = select_handlers(&handlers, HookEventName::PreToolUse, Some("Write"));
+        let selected_bash = select_handlers(&handlers, HookEventName::PreToolUse, Some("Bash"));
+
+        assert_eq!(selected_edit.len(), 1);
+        assert_eq!(selected_write.len(), 1);
+        assert_eq!(selected_bash.len(), 0);
+    }
+
+    #[test]
+    fn pre_tool_use_aliases_match_once_per_handler() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^apply_patch$"),
+                "echo apply_patch",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Write$"),
+                "echo write",
+                /*display_order*/ 1,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("^Edit$"),
+                "echo edit",
+                /*display_order*/ 2,
+            ),
+            make_handler(
+                HookEventName::PreToolUse,
+                Some("apply_patch|Write|Edit"),
+                "echo combined",
+                /*display_order*/ 3,
+            ),
+        ];
+
+        let selected = select_handlers_for_matcher_inputs(
+            &handlers,
+            HookEventName::PreToolUse,
+            &["apply_patch", "Write", "Edit"],
+        );
+
+        assert_eq!(selected.len(), 4);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|handler| handler.display_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3],
+        );
+    }
+
+    #[test]
+    fn user_prompt_submit_ignores_matcher() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::UserPromptSubmit,
+                Some("^hello"),
+                "echo first",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::UserPromptSubmit,
+                Some("["),
+                "echo second",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::UserPromptSubmit,
+            /*matcher_input*/ None,
+        );
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].display_order, 0);
+        assert_eq!(selected[1].display_order, 1);
+    }
+
+    #[test]
+    fn select_handlers_preserves_declaration_order() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                "first",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                "second",
+                /*display_order*/ 1,
+            ),
+            make_handler(
+                HookEventName::Stop,
+                /*matcher*/ None,
+                "third",
+                /*display_order*/ 2,
+            ),
+        ];
+
+        let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
 
         assert_eq!(selected.len(), 3);
         assert_eq!(selected[0].command, "first");

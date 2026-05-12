@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
@@ -7,14 +6,14 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
-use super::CodeModeSessionProgress;
 use super::DEFAULT_WAIT_YIELD_TIME_MS;
 use super::ExecContext;
-use super::PUBLIC_TOOL_NAME;
 use super::WAIT_TOOL_NAME;
-use super::handle_node_message;
-use super::protocol::HostToNodeMessage;
+use super::handle_runtime_response;
+use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler;
 
@@ -42,9 +41,16 @@ where
     })
 }
 
-#[async_trait]
 impl ToolHandler for CodeModeWaitHandler {
     type Output = FunctionToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(WAIT_TOOL_NAME)
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_wait_tool())
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -60,69 +66,43 @@ impl ToolHandler for CodeModeWaitHandler {
         } = invocation;
 
         match payload {
-            ToolPayload::Function { arguments } if tool_name == WAIT_TOOL_NAME => {
+            ToolPayload::Function { arguments }
+                if tool_name.namespace.is_none() && tool_name.name.as_str() == WAIT_TOOL_NAME =>
+            {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
-                let request_id = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .allocate_request_id()
-                    .await;
                 let started_at = std::time::Instant::now();
-                let message = if args.terminate {
-                    HostToNodeMessage::Terminate {
-                        request_id: request_id.clone(),
-                        cell_id: args.cell_id.clone(),
-                    }
-                } else {
-                    HostToNodeMessage::Poll {
-                        request_id: request_id.clone(),
-                        cell_id: args.cell_id.clone(),
-                        yield_time_ms: args.yield_time_ms,
-                    }
-                };
-                let process_slot = exec
+                let wait_response = exec
                     .session
                     .services
                     .code_mode_service
-                    .ensure_started()
+                    .wait(codex_code_mode::WaitRequest {
+                        cell_id: args.cell_id,
+                        yield_time_ms: args.yield_time_ms,
+                        terminate: args.terminate,
+                    })
                     .await
-                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
-                let result = {
-                    let mut process_slot = process_slot;
-                    let Some(process) = process_slot.as_mut() else {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "{PUBLIC_TOOL_NAME} runner failed to start"
-                        )));
+                    .map_err(FunctionCallError::RespondToModel)?;
+                if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
+                    && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
+                {
+                    // Only a live-cell wait can close a CodeCell. A missing
+                    // cell is still an ordinary `wait` tool result, but there
+                    // is no runtime object for the reducer to complete.
+                    let runtime_cell_id = match response {
+                        codex_code_mode::RuntimeResponse::Yielded { cell_id, .. }
+                        | codex_code_mode::RuntimeResponse::Terminated { cell_id, .. }
+                        | codex_code_mode::RuntimeResponse::Result { cell_id, .. } => cell_id,
                     };
-                    if !matches!(process.has_exited(), Ok(false)) {
-                        return Err(FunctionCallError::RespondToModel(format!(
-                            "{PUBLIC_TOOL_NAME} runner failed to start"
-                        )));
-                    }
-                    let message = process
-                        .send(&request_id, &message)
-                        .await
-                        .map_err(|err| err.to_string());
-                    let message = match message {
-                        Ok(message) => message,
-                        Err(error) => return Err(FunctionCallError::RespondToModel(error)),
-                    };
-                    handle_node_message(
-                        &exec,
-                        args.cell_id,
-                        message,
-                        Some(args.max_tokens),
-                        started_at,
-                    )
-                    .await
-                };
-                match result {
-                    Ok(CodeModeSessionProgress::Finished(output))
-                    | Ok(CodeModeSessionProgress::Yielded { output }) => Ok(output),
-                    Err(error) => Err(FunctionCallError::RespondToModel(error)),
+                    exec.session
+                        .services
+                        .rollout_thread_trace
+                        .code_cell_trace_context(exec.turn.sub_id.as_str(), runtime_cell_id)
+                        .record_ended(response);
                 }
+                handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)
             }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{WAIT_TOOL_NAME} expects JSON arguments"

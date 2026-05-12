@@ -1,10 +1,20 @@
 use super::*;
+use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v1;
+use crate::turn_timing::now_unix_timestamp_ms;
+use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
 
-#[async_trait]
 impl ToolHandler for Handler {
     type Output = CloseAgentResult;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("close_agent")
+    }
+
+    fn spec(&self) -> Option<ToolSpec> {
+        Some(create_close_agent_tool_v1())
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
@@ -24,18 +34,18 @@ impl ToolHandler for Handler {
         } = invocation;
         let arguments = function_arguments(payload)?;
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
-        let agent_id = agent_id(&args.id)?;
-        let (receiver_agent_nickname, receiver_agent_role) = session
+        let agent_id = parse_agent_id_target(&args.target)?;
+        let receiver_agent = session
             .services
             .agent_control
-            .get_agent_nickname_and_role(agent_id)
-            .await
-            .unwrap_or((None, None));
+            .get_agent_metadata(agent_id)
+            .unwrap_or_default();
         session
             .send_event(
                 &turn,
                 CollabCloseBeginEvent {
                     call_id: call_id.clone(),
+                    started_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
                 }
@@ -56,10 +66,11 @@ impl ToolHandler for Handler {
                         &turn,
                         CollabCloseEndEvent {
                             call_id: call_id.clone(),
+                            completed_at_ms: now_unix_timestamp_ms(),
                             sender_thread_id: session.conversation_id,
                             receiver_thread_id: agent_id,
-                            receiver_agent_nickname: receiver_agent_nickname.clone(),
-                            receiver_agent_role: receiver_agent_role.clone(),
+                            receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
+                            receiver_agent_role: receiver_agent.agent_role.clone(),
                             status,
                         }
                         .into(),
@@ -68,26 +79,20 @@ impl ToolHandler for Handler {
                 return Err(collab_agent_error(agent_id, err));
             }
         };
-        let result = if !matches!(status, AgentStatus::Shutdown) {
-            session
-                .services
-                .agent_control
-                .shutdown_agent(agent_id)
-                .await
-                .map_err(|err| collab_agent_error(agent_id, err))
-                .map(|_| ())
-        } else {
-            Ok(())
-        };
+        let result = Box::pin(session.services.agent_control.close_agent(agent_id))
+            .await
+            .map_err(|err| collab_agent_error(agent_id, err))
+            .map(|_| ());
         session
             .send_event(
                 &turn,
                 CollabCloseEndEvent {
                     call_id,
+                    completed_at_ms: now_unix_timestamp_ms(),
                     sender_thread_id: session.conversation_id,
                     receiver_thread_id: agent_id,
-                    receiver_agent_nickname,
-                    receiver_agent_role,
+                    receiver_agent_nickname: receiver_agent.agent_nickname,
+                    receiver_agent_role: receiver_agent.agent_role,
                     status: status.clone(),
                 }
                 .into(),
@@ -95,13 +100,15 @@ impl ToolHandler for Handler {
             .await;
         result?;
 
-        Ok(CloseAgentResult { status })
+        Ok(CloseAgentResult {
+            previous_status: status,
+        })
     }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct CloseAgentResult {
-    pub(crate) status: AgentStatus,
+    pub(crate) previous_status: AgentStatus,
 }
 
 impl ToolOutput for CloseAgentResult {
@@ -120,4 +127,9 @@ impl ToolOutput for CloseAgentResult {
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
         tool_output_code_mode_result(self, "close_agent")
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct CloseAgentArgs {
+    target: String,
 }

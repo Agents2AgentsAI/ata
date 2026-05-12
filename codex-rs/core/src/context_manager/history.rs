@@ -1,12 +1,8 @@
-use crate::codex::TurnContext;
 use crate::context_manager::normalize;
+use crate::event_mapping::has_non_contextual_dev_message_content;
+use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_bytes_for_tokens;
-use crate::truncate::approx_token_count;
-use crate::truncate::approx_tokens_from_byte_count_i64;
-use crate::truncate::truncate_function_output_items_with_policy;
-use crate::truncate::truncate_text;
+use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
@@ -16,14 +12,19 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::is_file_close_tag_text;
-use codex_protocol::models::is_file_open_tag_text;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
+use codex_utils_output_truncation::TruncationPolicy;
+use codex_utils_output_truncation::approx_bytes_for_tokens;
+use codex_utils_output_truncation::approx_token_count;
+use codex_utils_output_truncation::approx_tokens_from_byte_count_i64;
+use codex_utils_output_truncation::truncate_function_output_items_with_policy;
+use codex_utils_output_truncation::truncate_text;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
@@ -40,6 +41,8 @@ pub(crate) struct DroppedUrlFileInfo {
 pub(crate) struct ContextManager {
     /// The oldest items are at the beginning of the vector.
     items: Vec<ResponseItem>,
+    /// Bumped whenever history is rewritten, such as compaction or rollback.
+    history_version: u64,
     token_info: Option<TokenUsageInfo>,
     /// Reference context snapshot used for diffing and producing model-visible
     /// settings update items.
@@ -48,7 +51,9 @@ pub(crate) struct ContextManager {
     /// match the current turn after context updates are persisted.
     ///
     /// When this is `None`, settings diffing treats the next turn as having no
-    /// baseline and emits a full reinjection of context state.
+    /// baseline and emits a full reinjection of context state. Rollback may
+    /// also clear this when it trims a mixed initial-context developer bundle
+    /// whose non-diff fragments no longer exist in the surviving history.
     reference_context_item: Option<TurnContextItem>,
 }
 
@@ -64,7 +69,10 @@ impl ContextManager {
     pub(crate) fn new() -> Self {
         Self {
             items: Vec::new(),
-            token_info: TokenUsageInfo::new_or_append(&None, &None, None),
+            history_version: 0,
+            token_info: TokenUsageInfo::new_or_append(
+                &None, &None, /*model_context_window*/ None,
+            ),
             reference_context_item: None,
         }
     }
@@ -102,8 +110,7 @@ impl ContextManager {
     {
         for item in items {
             let item_ref = item.deref();
-            let is_ghost_snapshot = matches!(item_ref, ResponseItem::GhostSnapshot { .. });
-            if !is_api_message(item_ref) && !is_ghost_snapshot {
+            if !is_api_message(item_ref) {
                 continue;
             }
 
@@ -119,13 +126,15 @@ impl ContextManager {
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
         self.items
-            .retain(|item| !matches!(item, ResponseItem::GhostSnapshot { .. }));
-        self.items
     }
 
     /// Returns raw items in the history.
     pub(crate) fn raw_items(&self) -> &[ResponseItem] {
         &self.items
+    }
+
+    pub(crate) fn history_version(&self) -> u64 {
+        self.history_version
     }
 
     // Estimate token usage using byte-based heuristics from the truncation helpers.
@@ -170,6 +179,7 @@ impl ContextManager {
     pub(crate) fn remove_last_item(&mut self) -> bool {
         if let Some(removed) = self.items.pop() {
             normalize::remove_corresponding_for(&mut self.items, &removed);
+            self.history_version = self.history_version.saturating_add(1);
             true
         } else {
             false
@@ -178,14 +188,80 @@ impl ContextManager {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+        self.history_version = self.history_version.saturating_add(1);
+    }
+
+    /// Drops up to `max_count` URL/inline file attachments from user messages
+    /// in the most recent turn. Returns metadata for each dropped attachment so
+    /// the caller can attempt cache-based recovery (e.g., re-inject the cached
+    /// bytes when the provider rejected the live URL fetch).
+    ///
+    /// `max_count == 0` is a no-op and returns an empty vec. Empty user message
+    /// content blocks are removed once their attachments are stripped.
+    pub(crate) fn drop_last_turn_url_files(&mut self, max_count: usize) -> Vec<DroppedUrlFileInfo> {
+        if max_count == 0 {
+            return Vec::new();
+        }
+
+        let last_turn_start = self
+            .items
+            .iter()
+            .rposition(is_user_turn_boundary)
+            .unwrap_or(self.items.len());
+
+        let mut dropped = Vec::new();
+        let mut bumped = false;
+        for item in self.items[last_turn_start..].iter_mut() {
+            let ResponseItem::Message { role, content, .. } = item else {
+                continue;
+            };
+            if role != "user" {
+                continue;
+            }
+            content.retain_mut(|c| {
+                if dropped.len() >= max_count {
+                    return true;
+                }
+                match c {
+                    ContentItem::UrlFile { url, filename, .. } => {
+                        dropped.push(DroppedUrlFileInfo {
+                            url: Some(std::mem::take(url)),
+                            filename: filename.take(),
+                        });
+                        bumped = true;
+                        false
+                    }
+                    ContentItem::InputFile { filename, .. } => {
+                        dropped.push(DroppedUrlFileInfo {
+                            url: None,
+                            filename: filename.take(),
+                        });
+                        bumped = true;
+                        false
+                    }
+                    _ => true,
+                }
+            });
+        }
+
+        // Drop user messages that became empty after stripping attachments.
+        let len_before = self.items.len();
+        self.items.retain(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => !content.is_empty(),
+            _ => true,
+        });
+        if bumped || self.items.len() != len_before {
+            self.history_version = self.history_version.saturating_add(1);
+        }
+
+        dropped
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {
         let Some(index) = self.items.iter().rposition(|item| {
-            matches!(item, ResponseItem::FunctionCallOutput { .. })
-                || matches!(item, ResponseItem::Message { role, .. } if role == "user")
+            matches!(item, ResponseItem::FunctionCallOutput { .. }) || is_user_turn_boundary(item)
         }) else {
             return false;
         };
@@ -205,169 +281,32 @@ impl ContextManager {
                         replaced = true;
                     }
                 }
+                if replaced {
+                    self.history_version = self.history_version.saturating_add(1);
+                }
                 replaced
             }
-            ResponseItem::Message { role, .. } if role == "user" => false,
+            ResponseItem::Message { .. } => false,
             _ => false,
         }
     }
 
-    /// Drops URL-based file attachments from the most recent user turn.
+    /// Drop the last `num_turns` instruction turns from this history.
     ///
-    /// When `url_attachments_in_turn` is `0`, only `UrlFile` items are removed.
-    /// Otherwise, both `UrlFile` and `InputFile` items are removed from the last user turn,
-    /// counting down from the given budget of URL attachments injected as local files.
-    ///
-    /// Returns metadata about each removed attachment.
-    pub(crate) fn drop_last_turn_url_files(
-        &mut self,
-        url_attachments_in_turn: usize,
-    ) -> Vec<DroppedUrlFileInfo> {
-        let Some(last_user_index) = self
-            .items
-            .iter()
-            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
-        else {
-            return Vec::new();
-        };
-
-        let turn_start = self.items[..last_user_index]
-            .iter()
-            .rposition(
-                |item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant"),
-            )
-            .map_or(0, |index| index.saturating_add(1));
-
-        let remove_url_files_only = url_attachments_in_turn == 0;
-        let mut remaining_url_attachments = url_attachments_in_turn;
-        let mut dropped = Vec::new();
-        let mut index = self.items.len();
-        while index > turn_start {
-            if !remove_url_files_only && remaining_url_attachments == 0 {
-                break;
-            }
-            index -= 1;
-
-            let mut should_remove_message = false;
-            if let ResponseItem::Message { role, content, .. } = &mut self.items[index]
-                && role == "user"
-            {
-                let mut removed_in_message = 0usize;
-                let mut filtered = Vec::with_capacity(content.len());
-                let mut content_index = 0usize;
-
-                while content_index < content.len() {
-                    if !remove_url_files_only && remaining_url_attachments == 0 {
-                        filtered.extend(content[content_index..].iter().cloned());
-                        break;
-                    }
-
-                    let next_is_removable = content.get(content_index + 1).is_some_and(|next| {
-                        matches!(next, ContentItem::UrlFile { .. })
-                            || (!remove_url_files_only
-                                && matches!(next, ContentItem::InputFile { .. }))
-                    });
-                    if let ContentItem::InputText { text } = &content[content_index]
-                        && is_file_open_tag_text(text)
-                        && next_is_removable
-                    {
-                        removed_in_message = removed_in_message.saturating_add(1);
-                        if !remove_url_files_only {
-                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
-                        }
-                        match content.get(content_index + 1) {
-                            Some(ContentItem::UrlFile { url, filename, .. }) => {
-                                dropped.push(DroppedUrlFileInfo {
-                                    url: Some(url.clone()),
-                                    filename: filename.clone(),
-                                });
-                            }
-                            Some(ContentItem::InputFile { filename, .. }) => {
-                                dropped.push(DroppedUrlFileInfo {
-                                    url: None,
-                                    filename: filename.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
-                        content_index += 2;
-                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
-                            && is_file_close_tag_text(text)
-                        {
-                            content_index += 1;
-                        }
-                        continue;
-                    }
-
-                    let current_is_removable = matches!(
-                        content.get(content_index),
-                        Some(ContentItem::UrlFile { .. })
-                    ) || (!remove_url_files_only
-                        && matches!(
-                            content.get(content_index),
-                            Some(ContentItem::InputFile { .. })
-                        ));
-                    if current_is_removable {
-                        removed_in_message = removed_in_message.saturating_add(1);
-                        if !remove_url_files_only {
-                            remaining_url_attachments = remaining_url_attachments.saturating_sub(1);
-                        }
-                        match content.get(content_index) {
-                            Some(ContentItem::UrlFile { url, filename, .. }) => {
-                                dropped.push(DroppedUrlFileInfo {
-                                    url: Some(url.clone()),
-                                    filename: filename.clone(),
-                                });
-                            }
-                            Some(ContentItem::InputFile { filename, .. }) => {
-                                dropped.push(DroppedUrlFileInfo {
-                                    url: None,
-                                    filename: filename.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
-                        if filtered.last().is_some_and(|item| {
-                            matches!(item, ContentItem::InputText { text } if is_file_open_tag_text(text))
-                        }) {
-                            filtered.pop();
-                        }
-                        content_index += 1;
-                        if let Some(ContentItem::InputText { text }) = content.get(content_index)
-                            && is_file_close_tag_text(text)
-                        {
-                            content_index += 1;
-                        }
-                        continue;
-                    }
-
-                    filtered.push(content[content_index].clone());
-                    content_index += 1;
-                }
-
-                if removed_in_message > 0 {
-                    *content = filtered;
-                    should_remove_message = content.is_empty();
-                }
-            }
-
-            if should_remove_message {
-                self.items.remove(index);
-            }
-        }
-
-        dropped
-    }
-
-    /// Drop the last `num_turns` user turns from this history.
-    ///
-    /// "User turns" are identified as `ResponseItem::Message` entries whose role is `"user"`.
+    /// Instruction turns are history messages that should behave like a new prompt boundary:
+    /// ordinary user messages and structured assistant inter-agent instructions.
     ///
     /// This mirrors thread-rollback semantics:
     /// - `num_turns == 0` is a no-op
     /// - if there are no user turns, this is a no-op
     /// - if `num_turns` exceeds the number of user turns, all user turns are dropped while
     ///   preserving any items that occurred before the first user message.
+    ///
+    /// If rollback trims a pre-turn developer message that mixes contextual fragments with
+    /// persistent developer text from `build_initial_context`, this also clears
+    /// `reference_context_item`. The surviving history no longer contains the full bundle that
+    /// established the prior baseline, so future turns must fall back to full reinjection instead
+    /// of diffing against stale state.
     pub(crate) fn drop_last_n_user_turns(&mut self, num_turns: u32) {
         if num_turns == 0 {
             return;
@@ -375,17 +314,20 @@ impl ContextManager {
 
         let snapshot = self.items.clone();
         let user_positions = user_message_positions(&snapshot);
-        let Some(&first_user_idx) = user_positions.first() else {
+        let Some(&first_instruction_turn_idx) = user_positions.first() else {
             self.replace(snapshot);
             return;
         };
 
         let n_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
-        let cut_idx = if n_from_end >= user_positions.len() {
-            first_user_idx
+        let mut cut_idx = if n_from_end >= user_positions.len() {
+            first_instruction_turn_idx
         } else {
             user_positions[user_positions.len() - n_from_end]
         };
+
+        cut_idx =
+            self.trim_pre_turn_context_updates(&snapshot, first_instruction_turn_idx, cut_idx);
 
         self.replace(snapshot[..cut_idx].to_vec());
     }
@@ -403,12 +345,8 @@ impl ContextManager {
     }
 
     fn get_non_last_reasoning_items_tokens(&self) -> i64 {
-        // Get reasoning items excluding all the ones after the last user message.
-        let Some(last_user_index) = self
-            .items
-            .iter()
-            .rposition(|item| matches!(item, ResponseItem::Message { role, .. } if role == "user"))
-        else {
+        // Get reasoning items excluding all the ones after the last instruction boundary.
+        let Some(last_user_index) = self.items.iter().rposition(is_user_turn_boundary) else {
             return 0;
         };
 
@@ -516,15 +454,15 @@ impl ContextManager {
                     ),
                 }
             }
-            ResponseItem::CustomToolCallOutput { call_id, output } => {
-                ResponseItem::CustomToolCallOutput {
-                    call_id: call_id.clone(),
-                    output: truncate_function_output_payload(
-                        output,
-                        policy_with_serialization_budget,
-                    ),
-                }
-            }
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+            },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
@@ -535,13 +473,60 @@ impl ContextManager {
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
-            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => item.clone(),
         }
     }
+
+    /// Walk backward from a rollback cut and trim contiguous pre-turn context-update items.
+    ///
+    /// Returns the adjusted cut index after removing contextual developer/user items immediately
+    /// above the rolled-back turn boundary.
+    ///
+    /// `first_instruction_turn_idx` is the earliest rollback-eligible instruction-turn boundary
+    /// in `snapshot`; the trim walk never crosses it so any session-prefix items that predate the
+    /// first real turn survive rollback.
+    ///
+    /// `cut_idx` is the tentative slice boundary after dropping the requested number of
+    /// instruction turns, before stripping contextual pre-turn items that sit immediately above
+    /// that boundary.
+    ///
+    /// If any trimmed developer message was a mixed `build_initial_context` bundle containing both
+    /// rollback-trimmable contextual fragments and persistent developer text, this also clears the
+    /// stored `reference_context_item` baseline so the next real turn falls back to full
+    /// reinjection.
+    fn trim_pre_turn_context_updates(
+        &mut self,
+        snapshot: &[ResponseItem],
+        first_instruction_turn_idx: usize,
+        mut cut_idx: usize,
+    ) -> usize {
+        while cut_idx > first_instruction_turn_idx {
+            match &snapshot[cut_idx - 1] {
+                ResponseItem::Message { role, content, .. }
+                    if role == "developer" && is_contextual_dev_message_content(content) =>
+                {
+                    if has_non_contextual_dev_message_content(content) {
+                        // Mixed `build_initial_context` bundles are not reconstructible from
+                        // steady-state diffs once trimmed, so the next real turn must fully
+                        // reinject context instead of diffing against a stale baseline.
+                        self.reference_context_item = None;
+                    }
+                    cut_idx -= 1;
+                }
+                ResponseItem::Message { role, content, .. }
+                    if role == "user" && is_contextual_user_message_content(content) =>
+                {
+                    cut_idx -= 1;
+                }
+                _ => break,
+            }
+        }
+        cut_idx
+    }
 }
 
-fn truncate_function_output_payload(
+pub(crate) fn truncate_function_output_payload(
     output: &FunctionCallOutputPayload,
     policy: TruncationPolicy,
 ) -> FunctionCallOutputPayload {
@@ -576,8 +561,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. }
-        | ResponseItem::Compaction { .. } => true,
-        ResponseItem::GhostSnapshot { .. } => false,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -604,6 +589,10 @@ const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7373;
 // Use a direct 32px patch count only for `detail: "original"`;
 // all other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
 const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
+// See https://platform.openai.com/docs/guides/images-vision#model-sizing-behavior.
+// Keep this hard-coded for now; move it into model capabilities if the patch
+// budget starts changing often across model releases.
+const ORIGINAL_IMAGE_MAX_PATCHES: usize = 10_000;
 const ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE: usize = 32;
 
 static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option<i64>>> =
@@ -615,13 +604,15 @@ static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option
 
 pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) -> i64 {
     match item {
-        ResponseItem::GhostSnapshot { .. } => 0,
         ResponseItem::Reasoning {
             encrypted_content: Some(content),
             ..
         }
         | ResponseItem::Compaction {
             encrypted_content: content,
+        }
+        | ResponseItem::ContextCompaction {
+            encrypted_content: Some(content),
         } => i64::try_from(estimate_reasoning_length(content.len())).unwrap_or(i64::MAX),
         item => {
             let raw = serde_json::to_string(item)
@@ -706,6 +697,7 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
         let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
         let patch_count = patches_wide.saturating_mul(patches_high);
         let patch_count = usize::try_from(patch_count).unwrap_or(usize::MAX);
+        let patch_count = patch_count.min(ORIGINAL_IMAGE_MAX_PATCHES);
         Some(i64::try_from(approx_bytes_for_tokens(patch_count)).unwrap_or(i64::MAX))
     })
 }
@@ -734,8 +726,8 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     match item {
         ResponseItem::Message { content, .. } => {
             for content_item in content {
-                if let ContentItem::InputImage { image_url } = content_item {
-                    accumulate(image_url, None);
+                if let ContentItem::InputImage { image_url, detail } = content_item {
+                    accumulate(image_url, *detail);
                 }
             }
         }
@@ -767,11 +759,11 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::Compaction { .. } => true,
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::ContextCompaction { .. } => true,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::GhostSnapshot { .. }
         | ResponseItem::Other => false,
     }
 }
@@ -790,7 +782,12 @@ pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {
         return false;
     };
 
-    role == "user" && !is_contextual_user_message_content(content)
+    (role == "user" && !is_contextual_user_message_content(content))
+        || (role == "assistant" && is_inter_agent_instruction_content(content))
+}
+
+fn is_inter_agent_instruction_content(content: &[ContentItem]) -> bool {
+    InterAgentCommunication::is_message_content(content)
 }
 
 fn user_message_positions(items: &[ResponseItem]) -> Vec<usize> {

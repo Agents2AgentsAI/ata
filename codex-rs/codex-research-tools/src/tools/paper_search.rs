@@ -190,33 +190,16 @@ pub(crate) async fn paper_search(
     })
 }
 
+pub(crate) async fn paper_get_metadata(toolkit: &ResearchToolkit, paper_id: &str) -> Result<Paper> {
+    let include_abstract = true;
+    let lookup_id = to_semantic_scholar_id(paper_id)?;
+    paper_get_metadata_by_lookup_id(toolkit, &lookup_id, include_abstract).await
+}
+
 pub(crate) async fn paper_get(toolkit: &ResearchToolkit, paper_id: &str) -> Result<PaperDetail> {
     let include_abstract = true;
     let lookup_id = to_semantic_scholar_id(paper_id)?;
-    let params_hash = hash_cache_payload(&("paper_get", &lookup_id, include_abstract))?;
-    let key = CacheKey {
-        tool_name: "paper_get",
-        params_hash,
-    };
-
-    let paper: Paper = get_or_fetch_typed(
-        toolkit,
-        key,
-        toolkit.config().cache_ttls.paper_search,
-        || async {
-            semantic_scholar::get_paper(
-                toolkit.http(),
-                SemanticScholarConfig {
-                    base_url: &toolkit.config().semantic_scholar_base_url,
-                    api_key: toolkit.config().semantic_scholar_api_key.as_deref(),
-                },
-                &lookup_id,
-                include_abstract,
-            )
-            .await
-        },
-    )
-    .await?;
+    let paper = paper_get_metadata_by_lookup_id(toolkit, &lookup_id, include_abstract).await?;
 
     let references_page = relation_search(
         toolkit,
@@ -235,6 +218,37 @@ pub(crate) async fn paper_get(toolkit: &ResearchToolkit, paper_id: &str) -> Resu
         paper,
         references: references_page.papers,
     })
+}
+
+async fn paper_get_metadata_by_lookup_id(
+    toolkit: &ResearchToolkit,
+    lookup_id: &str,
+    include_abstract: bool,
+) -> Result<Paper> {
+    let params_hash = hash_cache_payload(&("paper_get", &lookup_id, include_abstract))?;
+    let key = CacheKey {
+        tool_name: "paper_get_metadata",
+        params_hash,
+    };
+
+    get_or_fetch_typed(
+        toolkit,
+        key,
+        toolkit.config().cache_ttls.paper_search,
+        || async {
+            semantic_scholar::get_paper(
+                toolkit.http(),
+                SemanticScholarConfig {
+                    base_url: &toolkit.config().semantic_scholar_base_url,
+                    api_key: toolkit.config().semantic_scholar_api_key.as_deref(),
+                },
+                lookup_id,
+                include_abstract,
+            )
+            .await
+        },
+    )
+    .await
 }
 
 pub(crate) async fn paper_citations(
@@ -1056,6 +1070,53 @@ mod tests {
             .await;
 
         assert!(citations.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn paper_get_metadata_does_not_fetch_references() {
+        let semantic_server = MockServer::start().await;
+        let arxiv_server = MockServer::start().await;
+        let openalex_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/s2id-meta"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "paperId": "s2id-meta",
+                "title": "Metadata Only Paper",
+                "abstract": "Metadata abstract",
+                "year": 2023,
+                "citationCount": 8,
+                "venue": "ICLR",
+                "url": "https://example.org/meta",
+                "externalIds": { "DOI": "10.5555/meta" },
+                "authors": [{"name": "Eve"}]
+            })))
+            .expect(1)
+            .mount(&semantic_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/graph/v1/paper/s2id-meta/references"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("references should not be fetched"),
+            )
+            .expect(0)
+            .mount(&semantic_server)
+            .await;
+
+        let toolkit = build_test_toolkit(
+            format!("{}/graph/v1", semantic_server.uri()),
+            arxiv_server.uri(),
+            openalex_server.uri(),
+        );
+
+        let paper = toolkit
+            .paper_get_metadata("s2:s2id-meta")
+            .await
+            .expect("paper_get_metadata should succeed");
+
+        assert_eq!(paper.title, "Metadata Only Paper");
+        assert_eq!(paper.doi.as_deref(), Some("10.5555/meta"));
     }
 
     #[tokio::test(flavor = "multi_thread")]

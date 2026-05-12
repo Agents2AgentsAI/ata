@@ -100,6 +100,8 @@ pub struct PresentDocumentEvent {
     pub document_id: String,
     pub title: String,
     pub content: String,
+    #[serde(default)]
+    pub is_reopen: bool,
 }
 
 /// Event emitted when the agent calls `update_document_section`.
@@ -110,6 +112,12 @@ pub struct UpdateDocumentSectionEvent {
     pub document_id: String,
     pub section_index: usize,
     pub content: String,
+    /// Whether the updated section should be collapsible.
+    #[serde(default)]
+    pub foldable: bool,
+    /// Short summary shown when the fold is collapsed.
+    #[serde(default)]
+    pub summary: Option<String>,
 }
 
 /// Event emitted when the agent calls `append_to_section`.
@@ -271,10 +279,33 @@ mod tests {
     }
 
     #[test]
+    fn update_event_backwards_compat() {
+        let json =
+            r#"{"call_id":"c","turn_id":"t","document_id":"d","section_index":0,"content":"x"}"#;
+        let decoded: UpdateDocumentSectionEvent = serde_json::from_str(json).expect("deserialize");
+        assert!(!decoded.foldable);
+        assert_eq!(decoded.summary, None);
+    }
+
+    #[test]
     fn patch_event_backwards_compat() {
         let json = r#"{"call_id":"c","turn_id":"t","document_id":"d","section_index":0,"old_text":"a","new_text":"b"}"#;
         let decoded: PatchDocumentSectionEvent = serde_json::from_str(json).expect("deserialize");
         assert!(!decoded.foldable);
         assert_eq!(decoded.summary, None);
+    }
+
+    #[test]
+    fn present_document_event_defaults_is_reopen_to_false() {
+        let json = serde_json::json!({
+            "call_id": "c",
+            "turn_id": "t",
+            "document_id": "d",
+            "title": "Doc",
+            "content": "## Intro\nHello",
+        })
+        .to_string();
+        let decoded: PresentDocumentEvent = serde_json::from_str(&json).expect("deserialize");
+        assert!(!decoded.is_reopen);
     }
 }

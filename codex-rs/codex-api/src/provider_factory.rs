@@ -19,7 +19,7 @@ pub enum WireApi {
     AnthropicMessages,
     /// Google Gemini GenerateContent API.
     GeminiGenerate,
-    /// GitHub Copilot inline completions at `https://api.github.com/copilot/inline`.
+    /// GitHub Copilot Chat Completions API.
     CopilotInline,
 }
 

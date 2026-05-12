@@ -17,16 +17,32 @@ use crate::error::LspError;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
-    pub id: i64,
+    pub id: JsonRpcId,
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Value>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JsonRpcId {
+    Number(i64),
+    String(String),
+}
+
+impl JsonRpcId {
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Self::Number(id) => Some(*id),
+            Self::String(id) => id.parse().ok(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
-    pub id: Option<i64>,
+    pub id: Option<JsonRpcId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,7 +204,24 @@ mod tests {
         let msg = codec.decode(&mut buf).expect("decode").expect("Some");
         match msg {
             JsonRpcMessage::Response(resp) => {
-                assert_eq!(resp.id, Some(1));
+                assert_eq!(resp.id, Some(JsonRpcId::Number(1)));
+            }
+            other => panic!("expected Response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_response_with_string_id() {
+        let mut codec = LspCodec::new();
+        let body = br#"{"jsonrpc":"2.0","id":"1","result":null}"#.to_vec();
+
+        let mut buf = BytesMut::new();
+        codec.encode(body, &mut buf).expect("encode");
+
+        let msg = codec.decode(&mut buf).expect("decode").expect("Some");
+        match msg {
+            JsonRpcMessage::Response(resp) => {
+                assert_eq!(resp.id, Some(JsonRpcId::String("1".into())));
             }
             other => panic!("expected Response, got {other:?}"),
         }
@@ -241,6 +274,22 @@ mod tests {
         .expect("parse");
         let msg = classify_message(raw).expect("classify");
         assert!(matches!(msg, JsonRpcMessage::Request(_)));
+    }
+
+    #[test]
+    fn classify_request_with_string_id() {
+        let raw: Value = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"1","method":"window/workDoneProgress/create","params":{}}"#,
+        )
+        .expect("parse");
+        let msg = classify_message(raw).expect("classify");
+        match msg {
+            JsonRpcMessage::Request(req) => {
+                assert_eq!(req.id, JsonRpcId::String("1".into()));
+                assert_eq!(req.id.as_i64(), Some(1));
+            }
+            other => panic!("expected Request, got {other:?}"),
+        }
     }
 
     #[test]

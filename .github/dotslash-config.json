@@ -11,12 +11,12 @@
           "path": "ata"
         },
         "linux-x86_64": {
-          "regex": "^ata-x86_64-unknown-linux-musl\\.zst$",
-          "path": "ata"
+          "regex": "^codex-x86_64-unknown-linux-musl-bundle\\.tar\\.zst$",
+          "path": "codex"
         },
         "linux-aarch64": {
-          "regex": "^ata-aarch64-unknown-linux-musl\\.zst$",
-          "path": "ata"
+          "regex": "^codex-aarch64-unknown-linux-musl-bundle\\.tar\\.zst$",
+          "path": "codex"
         },
         "windows-x86_64": {
           "regex": "^ata-x86_64-pc-windows-msvc\\.exe\\.zst$",
@@ -24,7 +24,35 @@
         }
       }
     },
-    "ata-responses-api-proxy": {
+    "codex-app-server": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^codex-app-server-aarch64-apple-darwin\\.zst$",
+          "path": "codex-app-server"
+        },
+        "macos-x86_64": {
+          "regex": "^codex-app-server-x86_64-apple-darwin\\.zst$",
+          "path": "codex-app-server"
+        },
+        "linux-x86_64": {
+          "regex": "^codex-app-server-x86_64-unknown-linux-musl\\.zst$",
+          "path": "codex-app-server"
+        },
+        "linux-aarch64": {
+          "regex": "^codex-app-server-aarch64-unknown-linux-musl\\.zst$",
+          "path": "codex-app-server"
+        },
+        "windows-x86_64": {
+          "regex": "^codex-app-server-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-app-server.exe"
+        },
+        "windows-aarch64": {
+          "regex": "^codex-app-server-aarch64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex-app-server.exe"
+        }
+      }
+    },
+    "codex-responses-api-proxy": {
       "platforms": {
         "macos-aarch64": {
           "regex": "^ata-responses-api-proxy-aarch64-apple-darwin\\.zst$",
@@ -48,7 +76,19 @@
         }
       }
     },
-    "ata-command-runner": {
+    "bwrap": {
+      "platforms": {
+        "linux-x86_64": {
+          "regex": "^bwrap-x86_64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
+        },
+        "linux-aarch64": {
+          "regex": "^bwrap-aarch64-unknown-linux-musl\\.zst$",
+          "path": "bwrap"
+        }
+      }
+    },
+    "codex-command-runner": {
       "platforms": {
         "windows-x86_64": {
           "regex": "^ata-command-runner-x86_64-pc-windows-msvc\\.exe\\.zst$",

@@ -38,8 +38,15 @@ jobs:
             fi
           done
 
-          # Check for old repo references in workflow files specifically
-          if grep -rn 'openai/codex' .github/ | grep -v '.github/workflows/keyword-scan.yml'; then
+          # Check for old repo references in workflow files specifically.
+          # Allowlist:
+          #  - keyword-scan.yml itself (the rule definitions match themselves).
+          #  - The rusty_v8 prebuilt-archive URL: ATA does not host its own
+          #    rusty_v8 builds, so the CI bootstrap legitimately downloads
+          #    them from upstream openai/codex releases.
+          if grep -rn 'openai/codex' .github/ \
+            | grep -v '.github/workflows/keyword-scan.yml' \
+            | grep -v 'github.com/openai/codex/releases/download/'; then
             echo "::error::Found old repo reference: openai/codex"
             failed=true
           fi

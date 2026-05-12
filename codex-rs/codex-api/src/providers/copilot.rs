@@ -2,8 +2,9 @@
 //!
 //! Authentication is handled out-of-band via OAuth (see
 //! `codex_core::auth::copilot_oauth`); the resolved Copilot bearer token is
-//! threaded through the standard `ApiAuthProvider` path. This adapter is
-//! responsible for the VS Code impersonation headers Copilot requires.
+//! threaded through the standard `ApiAuthProvider` path. With the official
+//! `ata`/opencode Copilot client ID, GitHub accepts requests directly without
+//! any VS Code impersonation headers.
 
 use http::HeaderMap;
 use http::HeaderValue;
@@ -34,11 +35,16 @@ fn responses_input_to_chat_messages(instructions: &str, input: &[Value]) -> Vec<
         match item_type {
             "message" => {
                 let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
-                let text = extract_message_text(item);
-                if text.is_empty() {
+                let content = convert_message_content_for_chat_completions(item);
+                let is_empty = match &content {
+                    Value::String(s) => s.is_empty(),
+                    Value::Array(a) => a.is_empty(),
+                    _ => true,
+                };
+                if is_empty {
                     continue;
                 }
-                messages.push(json!({"role": role, "content": text}));
+                messages.push(json!({"role": role, "content": content}));
             }
             "function_call" => {
                 let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
@@ -115,29 +121,67 @@ fn responses_tools_to_chat_tools(tools: &[Value]) -> Vec<Value> {
     out
 }
 
-fn extract_message_text(item: &Value) -> String {
+/// Translates a Responses-API `content` array into a Chat Completions
+/// payload. Returns a plain string when the message is text-only (preserves
+/// the historic single-string shape that downstream tools expect) and a
+/// multimodal content array when files/images are present, so PDFs and
+/// images survive the round-trip instead of being dropped before the wire.
+fn convert_message_content_for_chat_completions(item: &Value) -> Value {
     if let Some(s) = item.get("content").and_then(Value::as_str) {
-        return s.to_string();
+        return Value::String(s.to_string());
     }
-    let Some(content) = item.get("content").and_then(Value::as_array) else {
-        return String::new();
+    let Some(parts) = item.get("content").and_then(Value::as_array) else {
+        return Value::String(String::new());
     };
-    let mut out = String::new();
-    for part in content {
-        let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
-        if (part_type == "input_text" || part_type == "output_text")
-            && let Some(text) = part.get("text").and_then(Value::as_str)
-        {
-            out.push_str(text);
+
+    let mut has_attachment = false;
+    let mut translated: Vec<Value> = Vec::new();
+    for part in parts {
+        let kind = part.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "input_text" | "output_text" => {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    translated.push(json!({"type": "text", "text": text}));
+                }
+            }
+            "input_image" => {
+                has_attachment = true;
+                if let Some(url) = part.get("image_url").and_then(Value::as_str) {
+                    translated.push(json!({
+                        "type": "image_url",
+                        "image_url": {"url": url},
+                    }));
+                }
+            }
+            "input_file" => {
+                has_attachment = true;
+                let mut file_obj = serde_json::Map::new();
+                if let Some(name) = part.get("filename").and_then(Value::as_str) {
+                    file_obj.insert("filename".to_string(), json!(name));
+                }
+                if let Some(data) = part.get("file_data").and_then(Value::as_str) {
+                    file_obj.insert("file_data".to_string(), json!(data));
+                } else if let Some(file_id) = part.get("file_id").and_then(Value::as_str) {
+                    file_obj.insert("file_id".to_string(), json!(file_id));
+                }
+                translated.push(json!({"type": "file", "file": file_obj}));
+            }
+            _ => {}
         }
     }
-    out
+
+    if !has_attachment {
+        let text: String = translated
+            .iter()
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("");
+        return Value::String(text);
+    }
+    Value::Array(translated)
 }
 
-const COPILOT_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
-const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
-const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
-const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const COPILOT_USER_AGENT: &str = concat!("ata/", env!("CARGO_PKG_VERSION"));
 
 /// GitHub Copilot adapter.
 pub struct CopilotAdapter;
@@ -204,18 +248,6 @@ impl ProviderAdapter for CopilotAdapter {
             HeaderValue::from_static(COPILOT_USER_AGENT),
         );
         headers.insert(
-            "Editor-Version",
-            HeaderValue::from_static(COPILOT_EDITOR_VERSION),
-        );
-        headers.insert(
-            "Editor-Plugin-Version",
-            HeaderValue::from_static(COPILOT_EDITOR_PLUGIN_VERSION),
-        );
-        headers.insert(
-            "Copilot-Integration-Id",
-            HeaderValue::from_static(COPILOT_INTEGRATION_ID),
-        );
-        headers.insert(
             "Openai-Intent",
             HeaderValue::from_static("conversation-edits"),
         );
@@ -269,6 +301,54 @@ mod tests {
     }
 
     #[test]
+    fn build_request_body_forwards_input_file_as_chat_completions_file_part() {
+        // Regression: gpt-5.x routes through `/responses` and gets PDFs
+        // natively; Gemini/Claude on Copilot route through `/chat/completions`
+        // and previously had `input_file` parts silently dropped before the
+        // wire. The adapter must translate them into the Chat-Completions
+        // `{"type": "file", "file": {...}}` shape so models that don't get
+        // the Responses path still see the bytes.
+        let adapter = CopilotAdapter::new();
+        let input = vec![json!({
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "summarize"},
+                {
+                    "type": "input_file",
+                    "filename": "locus_proposal.pdf",
+                    "file_data": "data:application/pdf;base64,JVBERi0xLjQK",
+                },
+            ],
+        })];
+        let body = adapter
+            .build_request_body(
+                "gemini-3.1-pro-preview",
+                "",
+                &input,
+                &[],
+                &RequestOptions::default(),
+            )
+            .expect("request body");
+
+        let messages = body["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("content should be a multimodal array when an attachment is present");
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "summarize");
+        assert_eq!(content[1]["type"], "file");
+        assert_eq!(content[1]["file"]["filename"], "locus_proposal.pdf");
+        assert_eq!(
+            content[1]["file"]["file_data"],
+            "data:application/pdf;base64,JVBERi0xLjQK"
+        );
+    }
+
+    #[test]
     fn responses_tools_translate_to_chat_tools() {
         let tools = vec![
             json!({
@@ -317,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn extra_headers_include_vscode_impersonation() {
+    fn extra_headers_identify_ata_without_impersonation() {
         let adapter = CopilotAdapter::new();
         let headers = adapter.extra_headers();
         assert_eq!(
@@ -326,16 +406,15 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some(COPILOT_USER_AGENT)
         );
-        assert_eq!(
-            headers.get("Editor-Version").and_then(|v| v.to_str().ok()),
-            Some(COPILOT_EDITOR_VERSION)
-        );
-        assert_eq!(
+        assert!(
             headers
-                .get("Copilot-Integration-Id")
-                .and_then(|v| v.to_str().ok()),
-            Some(COPILOT_INTEGRATION_ID)
+                .get(http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("ata/"))
         );
+        assert!(headers.get("Editor-Version").is_none());
+        assert!(headers.get("Editor-Plugin-Version").is_none());
+        assert!(headers.get("Copilot-Integration-Id").is_none());
         // Auth header is supplied by the auth provider, not the adapter.
         assert!(headers.get(http::header::AUTHORIZATION).is_none());
     }

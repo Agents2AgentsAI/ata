@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -10,19 +9,21 @@ use tokio::time::Sleep;
 use super::UnifiedExecContext;
 use super::UnifiedExecProcessManager;
 use super::process::UnifiedExecProcess;
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::exec::ExecToolCallOutput;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
-use crate::exec::StreamOutput;
-use crate::protocol::EventMsg;
-use crate::protocol::ExecCommandOutputDeltaEvent;
-use crate::protocol::ExecCommandSource;
-use crate::protocol::ExecOutputStream;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
+use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecOutputStream;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 pub(crate) const TRAILING_OUTPUT_GRACE: Duration = Duration::from_millis(100);
 
@@ -106,12 +107,12 @@ pub(crate) fn start_streaming_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_exit_watcher(
     process: Arc<UnifiedExecProcess>,
-    manager: UnifiedExecProcessManager,
+    _manager: UnifiedExecProcessManager,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: i32,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     started_at: Instant,
@@ -123,28 +124,37 @@ pub(crate) fn spawn_exit_watcher(
         exit_token.cancelled().await;
         output_drained.notified().await;
 
-        let exit_code = process.exit_code().unwrap_or(-1);
         let duration = Instant::now().saturating_duration_since(started_at);
-        emit_exec_end_for_unified_exec(
-            session_ref,
-            turn_ref,
-            call_id,
-            command,
-            cwd,
-            Some(process_id.to_string()),
-            transcript,
-            String::new(),
-            exit_code,
-            duration,
-        )
-        .await;
-
-        // Note: we intentionally do NOT call manager.release_process_id() here.
-        // Eager release races with in-flight exec_command / write_stdin calls
-        // that may still be checking the process status (e.g., when paused by
-        // out-of-band elicitation). Instead, exited processes are cleaned up
-        // lazily by cleanup_exited_processes() when FD pressure is detected.
-        let _ = manager;
+        if let Some(message) = process.failure_message() {
+            emit_failed_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                String::new(),
+                message,
+                duration,
+            )
+            .await;
+        } else {
+            let exit_code = process.exit_code().unwrap_or(-1);
+            emit_exec_end_for_unified_exec(
+                session_ref,
+                turn_ref,
+                call_id,
+                command,
+                cwd,
+                Some(process_id.to_string()),
+                transcript,
+                String::new(),
+                exit_code,
+                duration,
+            )
+            .await;
+        }
     });
 }
 
@@ -189,7 +199,7 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     turn_ref: Arc<TurnContext>,
     call_id: String,
     command: Vec<String>,
-    cwd: PathBuf,
+    cwd: AbsolutePathBuf,
     process_id: Option<String>,
     transcript: Arc<Mutex<HeadTailBuffer>>,
     fallback_output: String,
@@ -205,7 +215,12 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         duration,
         timed_out: false,
     };
-    let event_ctx = ToolEventCtx::new(session_ref.as_ref(), turn_ref.as_ref(), &call_id, None);
+    let event_ctx = ToolEventCtx::new(
+        session_ref.as_ref(),
+        turn_ref.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
     let emitter = ToolEmitter::unified_exec(
         &command,
         cwd,
@@ -213,7 +228,64 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         process_id,
     );
     emitter
-        .emit(event_ctx, ToolEventStage::Success(output))
+        .emit(
+            event_ctx,
+            ToolEventStage::Success {
+                output,
+                applied_patch_delta: None,
+            },
+        )
+        .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_failed_exec_end_for_unified_exec(
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    command: Vec<String>,
+    cwd: AbsolutePathBuf,
+    process_id: Option<String>,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    fallback_output: String,
+    message: String,
+    duration: Duration,
+) {
+    let stdout = if fallback_output.is_empty() {
+        resolve_aggregated_output(&transcript, fallback_output).await
+    } else {
+        fallback_output
+    };
+    let aggregated_output = if stdout.is_empty() {
+        message.clone()
+    } else {
+        format!("{stdout}\n{message}")
+    };
+    let output = ExecToolCallOutput {
+        exit_code: -1,
+        stdout: StreamOutput::new(stdout),
+        stderr: StreamOutput::new(message),
+        aggregated_output: StreamOutput::new(aggregated_output),
+        duration,
+        timed_out: false,
+    };
+    let event_ctx = ToolEventCtx::new(
+        session_ref.as_ref(),
+        turn_ref.as_ref(),
+        &call_id,
+        /*turn_diff_tracker*/ None,
+    );
+    let emitter = ToolEmitter::unified_exec(
+        &command,
+        cwd,
+        ExecCommandSource::UnifiedExecStartup,
+        process_id,
+    );
+    emitter
+        .emit(
+            event_ctx,
+            ToolEventStage::Failure(ToolEventFailure::Output(output)),
+        )
         .await;
 }
 

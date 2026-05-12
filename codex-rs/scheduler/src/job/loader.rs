@@ -9,7 +9,7 @@ use super::validate_job;
 /// Return the directory where job TOML files live (`~/.ata/jobs/`).
 pub fn jobs_dir() -> anyhow::Result<PathBuf> {
     let home = codex_utils_home_dir::find_codex_home().map_err(|e| anyhow::anyhow!(e))?;
-    Ok(home.join("jobs"))
+    Ok(home.join("jobs").into_path_buf())
 }
 
 /// Load a single job from a TOML file. The file stem is used as the job ID.

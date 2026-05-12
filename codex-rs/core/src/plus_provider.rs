@@ -9,6 +9,11 @@ use codex_protocol::models::ResponseItem;
 /// All methods have default no-op implementations so that
 /// [`NoopPlusProvider`] (and tests) can use the trait without
 /// implementing every method.
+///
+/// The private (paid-tier) `Handle` implementation that lives in the
+/// internal `codex_coordination` / `plus_context` crates is layered on
+/// top by the private branch; on the public release branch this trait
+/// only ever resolves to [`NoopPlusProvider`].
 #[async_trait]
 pub trait PlusProvider: Send + Sync {
     /// Developer instructions text to inject into the initial context.

@@ -19,9 +19,10 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
-use codex_core::state_db::reconcile_rollout;
+use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::GitInfo as RolloutGitInfo;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -32,6 +33,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
 async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() -> Result<()> {
@@ -75,6 +77,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         to_response::<ThreadMetadataUpdateResponse>(update_resp)?;
 
     assert_eq!(updated.id, thread.id);
+    assert_eq!(updated.session_id, thread.session_id);
     assert_eq!(
         updated.git_info,
         Some(GitInfo {
@@ -88,6 +91,10 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         .get("thread")
         .and_then(Value::as_object)
         .expect("thread/metadata/update result.thread must be an object");
+    assert_eq!(
+        updated_thread_json.get("sessionId").and_then(Value::as_str),
+        Some(thread.session_id.as_str())
+    );
     let updated_git_info_json = updated_thread_json
         .get("gitInfo")
         .and_then(Value::as_object)
@@ -108,7 +115,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(
         read.git_info,
@@ -170,6 +177,57 @@ async fn thread_metadata_update_rejects_empty_git_info_patch() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_metadata_update_rejects_ephemeral_thread() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ephemeral: Some(true),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(start_resp)?;
+
+    let update_id = mcp
+        .send_thread_metadata_update_request(ThreadMetadataUpdateParams {
+            thread_id: thread.id.clone(),
+            git_info: Some(ThreadMetadataGitInfoUpdateParams {
+                sha: None,
+                branch: Some(Some("feature/ephemeral".to_string())),
+                origin_url: None,
+            }),
+        })
+        .await?;
+    let update_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(update_id)),
+    )
+    .await??;
+
+    assert_eq!(update_err.error.code, INVALID_REQUEST_ERROR_CODE);
+    assert_eq!(
+        update_err.error.message,
+        format!(
+            "ephemeral thread does not support metadata updates: {}",
+            thread.id
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -183,7 +241,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_stored_thread() -
         "2025-01-05T12:00:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -236,7 +294,7 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
         "2025-01-06T08:30:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
     let thread_uuid = ThreadId::from_string(&thread_id)?;
     let rollout_path = rollout_path(codex_home.path(), "2025-01-06T08-30-00", &thread_id);
@@ -244,10 +302,10 @@ async fn thread_metadata_update_repairs_loaded_thread_without_resetting_summary(
         Some(&state_db),
         rollout_path.as_path(),
         "mock_provider",
-        None,
+        /*builder*/ None,
         &[],
-        None,
-        None,
+        /*archived_only*/ None,
+        /*new_thread_memory_mode*/ None,
     )
     .await;
 
@@ -316,7 +374,7 @@ async fn thread_metadata_update_repairs_missing_sqlite_row_for_archived_thread()
         "2025-01-06T08:30:00Z",
         preview,
         Some("mock_provider"),
-        None,
+        /*git_info*/ None,
     )?;
 
     let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
@@ -378,7 +436,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
         "Thread preview",
         Some("mock_provider"),
         Some(RolloutGitInfo {
-            commit_hash: Some("abc123".to_string()),
+            commit_hash: Some(GitSha::new("abc123")),
             branch: Some("feature/sidebar-pr".to_string()),
             repository_url: Some("git@example.com:openai/codex.git".to_string()),
         }),
@@ -420,7 +478,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
     )
     .await??;
-    let ThreadReadResponse { thread: read } = to_response::<ThreadReadResponse>(read_resp)?;
+    let ThreadReadResponse { thread: read, .. } = to_response::<ThreadReadResponse>(read_resp)?;
 
     assert_eq!(read.git_info, None);
 
@@ -429,7 +487,9 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
 
 async fn init_state_db(codex_home: &Path) -> Result<Arc<StateRuntime>> {
     let state_db = StateRuntime::init(codex_home.to_path_buf(), "mock_provider".into()).await?;
-    state_db.mark_backfill_complete(None).await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
     Ok(state_db)
 }
 

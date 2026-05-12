@@ -37,6 +37,7 @@ use crate::types::ZoteroCitationResult;
 use crate::types::ZoteroCollectionItemsParams;
 use crate::types::ZoteroCollectionsParams;
 use crate::types::ZoteroCollectionsResult;
+use crate::types::ZoteroCreateAttachmentImportUrlParams;
 use crate::types::ZoteroFullTextResult;
 use crate::types::ZoteroGrepParams;
 use crate::types::ZoteroGrepResult;
@@ -110,6 +111,7 @@ use document_resolution::normalize_arxiv_id;
 use document_resolution::resolve_document_sources_with_storage_root;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
+const DEFAULT_COLLECTION_ITEMS_LIMIT: u32 = 100;
 const DEFAULT_TAGS_LIMIT: u32 = 100;
 const DEFAULT_COLLECTIONS_LIMIT: u32 = 100;
 const DEFAULT_GROUPS_LIMIT: u32 = 100;

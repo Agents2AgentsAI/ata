@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
@@ -48,6 +49,7 @@ const DIAG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Skip syncing very large files to avoid excessive JSON payloads.
 const MAX_SYNC_FILE_SIZE: u64 = 5 * 1024 * 1024;
+const STDERR_TAIL_MAX_BYTES: usize = 8 * 1024;
 
 type PendingMap = Arc<Mutex<HashMap<i64, oneshot::Sender<JsonRpcResponse>>>>;
 
@@ -80,6 +82,33 @@ pub(crate) fn path_from_uri(uri: &Uri) -> Option<std::path::PathBuf> {
     url.to_file_path().ok()
 }
 
+fn lock_unpoisoned<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn append_stderr_tail(buffer: &StdMutex<String>, chunk: &str) {
+    let mut stderr_tail = lock_unpoisoned(buffer);
+    if !stderr_tail.is_empty() {
+        stderr_tail.push('\n');
+    }
+    stderr_tail.push_str(chunk);
+    if stderr_tail.len() > STDERR_TAIL_MAX_BYTES {
+        let mut trim_at = stderr_tail.len() - STDERR_TAIL_MAX_BYTES;
+        while trim_at < stderr_tail.len() && !stderr_tail.is_char_boundary(trim_at) {
+            trim_at += 1;
+        }
+        stderr_tail.drain(..trim_at);
+    }
+}
+
+fn snapshot_stderr_tail(buffer: &StdMutex<String>) -> Option<String> {
+    let stderr_tail = lock_unpoisoned(buffer);
+    (!stderr_tail.is_empty()).then(|| stderr_tail.clone())
+}
+
 /// A running LSP client connected to a single server process.
 pub struct LspClient {
     /// Stdin writer to the server process, protected by a mutex.
@@ -102,6 +131,8 @@ pub struct LspClient {
     initialization_options: Option<Value>,
     /// Handle to the child process (for kill on shutdown).
     child: Arc<Mutex<Option<Child>>>,
+    /// Last stderr lines seen from the server process.
+    stderr_tail: Arc<StdMutex<String>>,
     /// Optional JSONL trace writer for requests/responses (debug-only).
     trace: Option<Arc<Mutex<tokio::fs::File>>>,
 }
@@ -130,6 +161,20 @@ impl LspClient {
             .stderr(std::process::Stdio::piped())
             .current_dir(&root_canonical)
             .kill_on_drop(true);
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        // On Linux, request SIGTERM-on-parent-death so the kernel kills this
+        // LSP if ata exits ungracefully (OOM, SIGKILL, panic). Without this,
+        // `kill_on_drop` does not fire and the child is reparented to PID 1,
+        // keeping ~10 GB of rust-analyzer resident per crashed session.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            let parent_pid = libc::getpid();
+            cmd.pre_exec(move || {
+                codex_utils_pty::process_group::set_parent_death_signal(parent_pid)
+            });
+        }
 
         for (k, v) in &config.env {
             cmd.env(k, v);
@@ -138,6 +183,14 @@ impl LspClient {
         let mut child = cmd
             .spawn()
             .map_err(|e| LspError::SpawnFailed(format!("{binary}: {e}")))?;
+        let pid = child.id();
+        tracing::info!(
+            server = server_id,
+            binary,
+            pid = pid.unwrap_or_default(),
+            root = %root_canonical.display(),
+            "spawned lsp server"
+        );
 
         let stdin = child
             .stdin
@@ -164,12 +217,15 @@ impl LspClient {
             });
         }
 
+        let stderr_tail = Arc::new(StdMutex::new(String::new()));
         // Server is still running — spawn a background task to drain stderr.
         let drain_server_id = server_id.to_string();
+        let drain_stderr_tail = stderr_tail.clone();
         tokio::spawn(async move {
             let reader = tokio::io::BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                append_stderr_tail(drain_stderr_tail.as_ref(), &line);
                 tracing::trace!(server = %drain_server_id, "stderr: {line}");
             }
         });
@@ -192,6 +248,7 @@ impl LspClient {
             root_uri: root_uri.clone(),
             initialization_options: config.initialization_options.clone(),
             child: Arc::new(Mutex::new(Some(child))),
+            stderr_tail,
             trace,
         });
 
@@ -217,19 +274,56 @@ impl LspClient {
                 // broken shim (e.g. rustup proxy without the component) rather
                 // than a legitimate handshake failure.  Convert to
                 // ProcessExitedImmediately so callers can attempt auto-install.
-                let mut guard = client.child.lock().await;
-                if let Some(ref mut child) = *guard
-                    && let Ok(Some(exit_status)) = child.try_wait()
-                {
+                let exit_status = {
+                    let mut guard = client.child.lock().await;
+                    if let Some(ref mut child) = *guard {
+                        child.try_wait().ok().flatten()
+                    } else {
+                        None
+                    }
+                };
+                if let Some(exit_status) = exit_status {
                     return Err(LspError::ProcessExitedImmediately {
                         status: exit_status.to_string(),
-                        stderr: format!(
-                            "server exited during initialize handshake: {handshake_err}"
-                        ),
+                        stderr: client
+                            .server_exit_details(
+                                format!(
+                                    "server exited during initialize handshake: {handshake_err}"
+                                ),
+                                false,
+                            )
+                            .await,
                     });
                 }
                 Err(handshake_err)
             }
+        }
+    }
+
+    async fn child_exit_status(&self) -> Option<String> {
+        let mut guard = self.child.lock().await;
+        guard
+            .as_mut()
+            .and_then(|child| child.try_wait().ok().flatten())
+            .map(|status| status.to_string())
+    }
+
+    async fn server_exit_details(&self, context: String, include_status: bool) -> String {
+        let mut details = context;
+        if include_status && let Some(status) = self.child_exit_status().await {
+            details.push_str("\nstatus=");
+            details.push_str(&status);
+        }
+        if let Some(stderr) = snapshot_stderr_tail(self.stderr_tail.as_ref()) {
+            details.push_str("\nstderr:\n");
+            details.push_str(&stderr);
+        }
+        details
+    }
+
+    async fn server_exited_error(&self, context: String) -> LspError {
+        LspError::ServerExited {
+            details: self.server_exit_details(context, true).await,
         }
     }
 
@@ -373,6 +467,10 @@ impl LspClient {
     // -----------------------------------------------------------------------
 
     /// Notify the server about a file being opened or changed (full-document sync).
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "file_versions guard is dropped explicitly before each notify await"
+    )]
     pub async fn notify_open(&self, path: &Path) -> Result<(), LspError> {
         let metadata = tokio::fs::metadata(path).await.map_err(LspError::Io)?;
         if metadata.len() > MAX_SYNC_FILE_SIZE {
@@ -453,6 +551,22 @@ impl LspClient {
         }
 
         Ok(())
+    }
+
+    /// Ensure the server has seen a `didOpen` for this file without forcing a
+    /// redundant `didChange` when the file is already synchronized.
+    pub async fn ensure_open(&self, path: &Path) -> Result<(), LspError> {
+        let uri = uri_from_path(path).ok_or_else(|| {
+            LspError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "bad path",
+            ))
+        })?;
+        let uri_key = uri.as_str().to_string();
+        if self.file_versions.lock().await.contains_key(&uri_key) {
+            return Ok(());
+        }
+        self.notify_open(path).await
     }
 
     async fn send_file_watch_event(&self, uri: &Uri, typ: FileChangeType) -> Result<(), LspError> {
@@ -768,11 +882,29 @@ impl LspClient {
     // -----------------------------------------------------------------------
 
     /// Graceful shutdown: shutdown request (2s) → exit notification → kill.
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "child guard is taken/dropped before any further await"
+    )]
     pub async fn shutdown(&self) {
         let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.send_request("shutdown", None)).await;
         let _ = self.send_notification("exit", None).await;
         if let Some(mut child) = self.child.lock().await.take() {
+            let pid = child.id();
+            tracing::info!(
+                server = %self.server_id,
+                pid = pid.unwrap_or_default(),
+                root = self.root_uri.as_str(),
+                "shutting down lsp server"
+            );
             let _ = child.kill().await;
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                unsafe {
+                    libc::killpg(pid as i32, libc::SIGKILL);
+                }
+            }
+            let _ = child.wait().await;
         }
     }
 
@@ -848,7 +980,7 @@ impl LspClient {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let request = JsonRpcRequest {
             jsonrpc: "2.0".into(),
-            id,
+            id: JsonRpcId::Number(id),
             method: method.to_string(),
             params,
         };
@@ -862,7 +994,14 @@ impl LspClient {
         let body = serde_json::to_vec(&request)?;
         self.write_message(body).await?;
 
-        let response = rx.await.map_err(|_| LspError::ServerExited)?;
+        let response = match rx.await {
+            Ok(response) => response,
+            Err(_) => {
+                return Err(self
+                    .server_exited_error(format!("request `{method}` did not receive a response"))
+                    .await);
+            }
+        };
 
         if let Some(err) = response.error {
             self.trace_event(
@@ -899,6 +1038,10 @@ impl LspClient {
         self.write_message(body).await
     }
 
+    #[allow(
+        clippy::await_holding_invalid_type,
+        reason = "trace file lock must serialize across the async write"
+    )]
     async fn trace_event(
         &self,
         kind: &'static str,
@@ -958,7 +1101,7 @@ impl LspClient {
 
             match msg {
                 JsonRpcMessage::Response(resp) => {
-                    if let Some(id) = resp.id
+                    if let Some(id) = resp.id.as_ref().and_then(JsonRpcId::as_i64)
                         && let Some(tx) = context.pending.lock().await.remove(&id)
                     {
                         let _ = tx.send(resp);
@@ -1100,6 +1243,10 @@ fn workspace_symbol_to_info(sym: WorkspaceSymbol) -> Option<SymbolInformation> {
     })
 }
 
+#[allow(
+    clippy::await_holding_invalid_type,
+    reason = "writer lock must serialize header+body across the async stdin write"
+)]
 async fn write_framed_message(
     writer: &Arc<Mutex<ChildStdin>>,
     body: &[u8],
@@ -1157,4 +1304,54 @@ fn redact_params(method: &str, params: &Value) -> Value {
     }
 
     params.clone()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[expect(clippy::expect_used)]
+    fn write_executable(dir: &tempfile::TempDir, name: &str, contents: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        let mut file = fs::File::create(&path).expect("create temporary executable file");
+        file.write_all(contents.as_bytes())
+            .expect("write executable contents");
+        let mut permissions = file.metadata().expect("read file metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).expect("set executable permissions");
+        path
+    }
+
+    #[tokio::test]
+    async fn create_captures_stderr_for_initialize_exit() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin_dir = tempfile::TempDir::new().unwrap();
+        let script = "#!/bin/sh\n\
+echo 'captured initialize stderr' >&2\n\
+sleep 0.05\n\
+exit 1\n";
+        let binary = write_executable(&bin_dir, "fake-lsp", script);
+
+        let config = LspServerConfig::new(
+            vec![".txt".into()],
+            vec![binary.to_string_lossy().to_string()],
+            vec![],
+        );
+
+        let result = LspClient::create("fake-lsp", &config, root.path()).await;
+        assert!(result.is_err(), "fake server should fail during initialize");
+        let err = result.err().unwrap();
+        match err {
+            LspError::ProcessExitedImmediately { stderr, .. } => {
+                assert!(
+                    stderr.contains("captured initialize stderr"),
+                    "stderr should include the server's stderr tail: {stderr}"
+                );
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }

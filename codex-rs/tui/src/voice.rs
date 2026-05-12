@@ -1,93 +1,54 @@
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::legacy_core::config::Config;
 use base64::Engine;
-use codex_client::build_reqwest_client_with_custom_ca;
-use codex_core::auth::AuthCredentialsStoreMode;
-use codex_core::config::Config;
-use codex_core::config::find_codex_home;
-use codex_core::default_client::get_codex_user_agent;
-use codex_login::AuthMode;
-use codex_login::CodexAuth;
-use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_app_server_protocol::ThreadRealtimeAudioChunk;
 use cpal::traits::DeviceTrait;
-use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
-use hound::SampleFormat;
-use hound::WavSpec;
-use hound::WavWriter;
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU16;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use tracing::error;
-use tracing::info;
-use tracing::trace;
 
-const AUDIO_MODEL: &str = "gpt-4o-mini-transcribe";
 const MODEL_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const MODEL_AUDIO_CHANNELS: u16 = 1;
 
-struct TranscriptionAuthContext {
-    mode: AuthMode,
-    bearer_token: String,
-    chatgpt_account_id: Option<String>,
-    chatgpt_base_url: String,
-}
-
+/// PCM buffer captured during a PTT recording. For realtime mode `data` is
+/// always empty (frames are streamed through `AppEventSender` instead).
 pub struct RecordedAudio {
     pub data: Vec<i16>,
     pub sample_rate: u32,
     pub channels: u16,
 }
 
+impl RecordedAudio {
+    pub fn duration_seconds(&self) -> f32 {
+        if self.sample_rate == 0 || self.channels == 0 {
+            return 0.0;
+        }
+        let frames = self.data.len() / usize::from(self.channels).max(1);
+        frames as f32 / self.sample_rate as f32
+    }
+}
+
 pub struct VoiceCapture {
     stream: Option<cpal::Stream>,
     sample_rate: u32,
     channels: u16,
-    data: Arc<Mutex<Vec<i16>>>,
+    /// `Some` for PTT (`start_ptt`), `None` for streaming realtime mode.
+    data: Option<Arc<Mutex<Vec<i16>>>>,
     stopped: Arc<AtomicBool>,
     last_peak: Arc<AtomicU16>,
 }
 
 impl VoiceCapture {
-    pub fn start() -> Result<Self, String> {
-        let (device, config) = select_default_input_device_and_config()?;
-
-        let sample_rate = config.sample_rate().0;
-        let channels = config.channels();
-        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
-        let stopped = Arc::new(AtomicBool::new(false));
-        let last_peak = Arc::new(AtomicU16::new(0));
-
-        let stream = build_input_stream(&device, &config, data.clone(), last_peak.clone())?;
-        stream
-            .play()
-            .map_err(|e| format!("failed to start input stream: {e}"))?;
-
-        Ok(Self {
-            stream: Some(stream),
-            sample_rate,
-            channels,
-            data,
-            stopped,
-            last_peak,
-        })
-    }
-
     pub fn start_realtime(config: &Config, tx: AppEventSender) -> Result<Self, String> {
         let (device, config) = select_realtime_input_device_and_config(config)?;
 
         let sample_rate = config.sample_rate().0;
         let channels = config.channels();
-        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
         let stopped = Arc::new(AtomicBool::new(false));
         let last_peak = Arc::new(AtomicU16::new(0));
 
@@ -107,7 +68,34 @@ impl VoiceCapture {
             stream: Some(stream),
             sample_rate,
             channels,
-            data,
+            data: None,
+            stopped,
+            last_peak,
+        })
+    }
+
+    /// Start capture that buffers raw mic samples locally for later retrieval
+    /// (used by PTT → WAV → ElevenLabs STT). Does not stream to the agent.
+    pub fn start_ptt(config: &Config) -> Result<Self, String> {
+        let (device, config) = select_realtime_input_device_and_config(config)?;
+
+        let sample_rate = config.sample_rate().0;
+        let channels = config.channels();
+        let data: Arc<Mutex<Vec<i16>>> = Arc::new(Mutex::new(Vec::new()));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let last_peak = Arc::new(AtomicU16::new(0));
+
+        let stream =
+            build_ptt_input_stream(&device, &config, Arc::clone(&data), last_peak.clone())?;
+        stream
+            .play()
+            .map_err(|e| format!("failed to start input stream: {e}"))?;
+
+        Ok(Self {
+            stream: Some(stream),
+            sample_rate,
+            channels,
+            data: Some(data),
             stopped,
             last_peak,
         })
@@ -118,11 +106,13 @@ impl VoiceCapture {
         self.stopped.store(true, Ordering::SeqCst);
         // Dropping the stream stops capture.
         self.stream.take();
-        let data = self
-            .data
-            .lock()
-            .map_err(|_| "failed to lock audio buffer".to_string())?
-            .clone();
+        let data = match self.data.take() {
+            Some(buf) => buf
+                .lock()
+                .map_err(|_| "failed to lock audio buffer".to_string())?
+                .clone(),
+            None => Vec::new(),
+        };
         Ok(RecordedAudio {
             data,
             sample_rate: self.sample_rate,
@@ -130,20 +120,8 @@ impl VoiceCapture {
         })
     }
 
-    pub fn data_arc(&self) -> Arc<Mutex<Vec<i16>>> {
-        self.data.clone()
-    }
-
     pub fn stopped_flag(&self) -> Arc<AtomicBool> {
         self.stopped.clone()
-    }
-
-    pub fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-
-    pub fn channels(&self) -> u16 {
-        self.channels
     }
 
     pub fn last_peak_arc(&self) -> Arc<AtomicU16> {
@@ -210,134 +188,14 @@ impl RecordingMeterState {
     }
 }
 
-pub fn transcribe_async(
-    id: String,
-    audio: RecordedAudio,
-    context: Option<String>,
-    tx: AppEventSender,
-) {
-    std::thread::spawn(move || {
-        // Enforce minimum duration to avoid garbage outputs.
-        const MIN_DURATION_SECONDS: f32 = 1.0;
-        let duration_seconds = clip_duration_seconds(&audio);
-        if duration_seconds < MIN_DURATION_SECONDS {
-            let msg = format!(
-                "recording too short ({duration_seconds:.2}s); minimum is {MIN_DURATION_SECONDS:.2}s"
-            );
-            info!("{msg}");
-            tx.send(AppEvent::TranscriptionFailed { id, error: msg });
-            return;
-        }
-
-        // Encode entire clip as normalized WAV.
-        let wav_bytes = match encode_wav_normalized(&audio) {
-            Ok(b) => b,
-            Err(e) => {
-                error!("failed to encode wav: {e}");
-                tx.send(AppEvent::TranscriptionFailed { id, error: e });
-                return;
-            }
-        };
-
-        // Run the HTTP request on a small, dedicated runtime.
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                error!("failed to create tokio runtime: {e}");
-                return;
-            }
-        };
-
-        let tx2 = tx.clone();
-        let id2 = id.clone();
-        let res: Result<String, String> = rt
-            .block_on(async move { transcribe_bytes(wav_bytes, context, duration_seconds).await });
-
-        match res {
-            Ok(text) => {
-                tx2.send(AppEvent::TranscriptionComplete { id: id2, text });
-                info!("voice transcription succeeded");
-            }
-            Err(e) => {
-                error!("voice transcription error: {e}");
-                tx.send(AppEvent::TranscriptionFailed { id, error: e });
-            }
-        }
-    });
-}
-
 // -------------------------
 // Voice input helpers
 // -------------------------
-
-fn select_default_input_device_and_config()
--> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "no input audio device available".to_string())?;
-    let config = crate::audio_device::preferred_input_config(&device)?;
-    Ok((device, config))
-}
 
 fn select_realtime_input_device_and_config(
     config: &Config,
 ) -> Result<(cpal::Device, cpal::SupportedStreamConfig), String> {
     crate::audio_device::select_configured_input_device_and_config(config)
-}
-
-fn build_input_stream(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    data: Arc<Mutex<Vec<i16>>>,
-    last_peak: Arc<AtomicU16>,
-) -> Result<cpal::Stream, String> {
-    match config.sample_format() {
-        cpal::SampleFormat::F32 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[f32], _| {
-                    let peak = peak_f32(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    if let Ok(mut buf) = data.lock() {
-                        for &s in input {
-                            buf.push(f32_to_i16(s));
-                        }
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::I16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[i16], _| {
-                    let peak = peak_i16(input);
-                    last_peak.store(peak, Ordering::Relaxed);
-                    if let Ok(mut buf) = data.lock() {
-                        buf.extend_from_slice(input);
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        cpal::SampleFormat::U16 => device
-            .build_input_stream(
-                &config.clone().into(),
-                move |input: &[u16], _| {
-                    if let Ok(mut buf) = data.lock() {
-                        let peak = convert_u16_to_i16_and_peak(input, &mut buf);
-                        last_peak.store(peak, Ordering::Relaxed);
-                    }
-                },
-                move |err| error!("audio input error: {err}"),
-                None,
-            )
-            .map_err(|e| format!("failed to build input stream: {e}")),
-        _ => Err("unsupported input sample format".to_string()),
-    }
 }
 
 fn build_realtime_input_stream(
@@ -391,6 +249,69 @@ fn build_realtime_input_stream(
     }
 }
 
+fn build_ptt_input_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    data: Arc<Mutex<Vec<i16>>>,
+    last_peak: Arc<AtomicU16>,
+) -> Result<cpal::Stream, String> {
+    match config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[f32], _| {
+                        let peak = peak_f32(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend(input.iter().copied().map(f32_to_i16));
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::I16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[i16], _| {
+                        let peak = peak_i16(input);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.extend_from_slice(input);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        cpal::SampleFormat::U16 => {
+            let data = Arc::clone(&data);
+            device
+                .build_input_stream(
+                    &config.clone().into(),
+                    move |input: &[u16], _| {
+                        let mut samples = Vec::with_capacity(input.len());
+                        let peak = convert_u16_to_i16_and_peak(input, &mut samples);
+                        last_peak.store(peak, Ordering::Relaxed);
+                        if let Ok(mut buf) = data.lock() {
+                            buf.append(&mut samples);
+                        }
+                    },
+                    move |err| error!("audio input error: {err}"),
+                    None,
+                )
+                .map_err(|e| format!("failed to build input stream: {e}"))
+        }
+        _ => Err("unsupported input sample format".to_string()),
+    }
+}
+
 fn send_realtime_audio_chunk(
     tx: &AppEventSender,
     samples: Vec<i16>,
@@ -424,16 +345,13 @@ fn send_realtime_audio_chunk(
     let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
     let samples_per_channel = (samples.len() / usize::from(MODEL_AUDIO_CHANNELS)) as u32;
 
-    tx.send(AppEvent::CodexOp(Op::RealtimeConversationAudio(
-        ConversationAudioParams {
-            frame: RealtimeAudioFrame {
-                data: encoded,
-                sample_rate: MODEL_AUDIO_SAMPLE_RATE,
-                num_channels: MODEL_AUDIO_CHANNELS,
-                samples_per_channel: Some(samples_per_channel),
-            },
-        },
-    )));
+    tx.realtime_conversation_audio(ThreadRealtimeAudioChunk {
+        data: encoded,
+        sample_rate: MODEL_AUDIO_SAMPLE_RATE,
+        num_channels: MODEL_AUDIO_CHANNELS,
+        samples_per_channel: Some(samples_per_channel),
+        item_id: None,
+    });
 }
 
 #[inline]
@@ -487,27 +405,16 @@ fn convert_u16_to_i16_and_peak(input: &[u16], out: &mut Vec<i16>) -> u16 {
 // -------------------------
 
 pub(crate) struct RealtimeAudioPlayer {
-    stream: cpal::Stream,
+    _stream: cpal::Stream,
     queue: Arc<Mutex<VecDeque<i16>>>,
     output_sample_rate: u32,
     output_channels: u16,
-    /// Source samples handed off to the audio callback so far.
-    /// This is used to construct timestamped playback segments; it is not
-    /// itself treated as the speaker playback cursor.
-    samples_played: Arc<AtomicUsize>,
-    /// Whether audio output is currently paused.  Shared with the audio
-    /// callback so it outputs silence instead of draining the queue.
+    /// Shared with the cpal callback; when true, the callback emits silence
+    /// without draining the queue.
     paused: Arc<AtomicBool>,
-    /// Playback speed factor stored as f32 bit-pattern.  1.0 = normal speed.
-    /// >1.0 skips input samples (faster, higher pitch);
-    /// > <1.0 repeats/interpolates (slower, lower pitch).
-    speed_factor: Arc<AtomicU32>,
-    /// Fractional resampler cursor carried across output callbacks.
-    /// Reset this whenever playback is cleared or repositioned so new turns
-    /// do not inherit stale sub-sample state from earlier audio.
-    fractional_cursor: Arc<AtomicU64>,
-    /// All samples ever enqueued, kept so we can seek back to any position.
-    all_samples: Arc<Mutex<Vec<i16>>>,
+    /// Total samples drained by the cpal callback. Used to compute the
+    /// playback cursor for karaoke alignment.
+    samples_played: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl RealtimeAudioPlayer {
@@ -517,37 +424,29 @@ impl RealtimeAudioPlayer {
         let output_sample_rate = config.sample_rate().0;
         let output_channels = config.channels();
         let queue = Arc::new(Mutex::new(VecDeque::new()));
-        let samples_played = Arc::new(AtomicUsize::new(0));
         let paused = Arc::new(AtomicBool::new(false));
-        let speed_factor = Arc::new(AtomicU32::new(f32::to_bits(1.0)));
-        let fractional_cursor = Arc::new(AtomicU64::new(f64::to_bits(0.0)));
-        let all_samples = Arc::new(Mutex::new(Vec::new()));
+        let samples_played = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let stream = build_output_stream(
             &device,
             &config,
             Arc::clone(&queue),
-            Arc::clone(&samples_played),
             Arc::clone(&paused),
-            Arc::clone(&speed_factor),
-            Arc::clone(&fractional_cursor),
+            Arc::clone(&samples_played),
         )?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
         Ok(Self {
-            stream,
+            _stream: stream,
             queue,
             output_sample_rate,
             output_channels,
-            samples_played,
             paused,
-            speed_factor,
-            fractional_cursor,
-            all_samples,
+            samples_played,
         })
     }
 
-    pub(crate) fn enqueue_frame(&self, frame: &RealtimeAudioFrame) -> Result<(), String> {
+    pub(crate) fn enqueue_frame(&self, frame: &ThreadRealtimeAudioChunk) -> Result<(), String> {
         if frame.num_channels == 0 || frame.sample_rate == 0 {
             return Err("invalid realtime audio frame format".to_string());
         }
@@ -571,9 +470,6 @@ impl RealtimeAudioPlayer {
         if converted.is_empty() {
             return Ok(());
         }
-        if let Ok(mut all) = self.all_samples.lock() {
-            all.extend_from_slice(&converted);
-        }
         let mut guard = self
             .queue
             .lock()
@@ -587,60 +483,114 @@ impl RealtimeAudioPlayer {
         if let Ok(mut guard) = self.queue.lock() {
             guard.clear();
         }
-        if let Ok(mut all) = self.all_samples.lock() {
-            all.clear();
+    }
+
+    /// Return a `Send`-able handle that can push PCM into the same queue
+    /// `enqueue_frame` writes to. The handle does not keep the cpal stream
+    /// alive — once the parent `RealtimeAudioPlayer` is dropped, pushes are
+    /// silently no-ops because the consumer thread stops draining.
+    /// Used by alternative TTS backends (e.g. ElevenLabs) that drive PCM
+    /// from an async/Send task while the cpal stream stays on the UI thread.
+    pub(crate) fn playback_handle(&self) -> RealtimeAudioPlaybackHandle {
+        RealtimeAudioPlaybackHandle {
+            queue: Arc::clone(&self.queue),
+            output_sample_rate: self.output_sample_rate,
+            output_channels: self.output_channels,
         }
-        // Reset playback position so karaoke sync starts fresh.
-        self.samples_played
-            .store(0, std::sync::atomic::Ordering::Relaxed);
-        self.fractional_cursor
-            .store(f64::to_bits(0.0), Ordering::Relaxed);
     }
 
-    /// Seek to a specific sample offset. Clears the current playback queue
-    /// and re-enqueues audio from the given offset. Resets `samples_played`
-    /// to reflect the new position.
-    pub(crate) fn seek_to_sample(&self, sample_offset: usize) {
-        let all = match self.all_samples.lock() {
-            Ok(guard) => guard,
-            Err(_) => return,
-        };
+    // ─── voice_mode TTS playback shims ──────────────────────────────────
+    // The voice mode pipeline expects pause/resume + buffer state queries on
+    // the player. v0.129.0's RealtimeAudioPlayer is a thin cpal wrapper; we
+    // provide minimal implementations that operate on the queue and a
+    // shared atomic pause flag.
 
-        let clamped = sample_offset.min(all.len());
-
-        // Clear the current queue and re-enqueue from offset
-        if let Ok(mut queue) = self.queue.lock() {
-            queue.clear();
-            queue.extend(all[clamped..].iter().copied());
-        }
-
-        // Reset samples_played to reflect the new position
-        self.samples_played.store(clamped, Ordering::Relaxed);
-        self.fractional_cursor
-            .store(f64::to_bits(0.0), Ordering::Relaxed);
-    }
-
-    /// Seek to a specific time in milliseconds. Converts to a sample offset
-    /// using the output device's sample rate and channel count, then delegates
-    /// to `seek_to_sample`.
-    pub(crate) fn seek_to_ms(&self, ms: u64) {
-        let sample_offset =
-            (ms * self.output_sample_rate as u64 * self.output_channels as u64 / 1000) as usize;
-        self.seek_to_sample(sample_offset);
-    }
-
-    /// Returns `true` if the audio buffer has samples waiting to be played.
-    pub(crate) fn has_buffered_audio(&self) -> bool {
-        self.queue
-            .lock()
-            .map(|guard| !guard.is_empty())
-            .unwrap_or(false)
-    }
-
-    /// Enqueue raw PCM i16 samples directly (no base64 decoding).
-    /// Used by the voice mode pipeline where audio arrives as native PCM.
     pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
-        if pcm.is_empty() || sample_rate == 0 || channels == 0 {
+        self.playback_handle()
+            .enqueue_pcm(pcm, sample_rate, channels);
+    }
+
+    pub(crate) fn pause(&self) {
+        self.paused.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn resume(&self) {
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn has_buffered_audio(&self) -> bool {
+        self.queue.lock().map(|q| !q.is_empty()).unwrap_or(false)
+    }
+
+    pub(crate) fn playback_position_ms(&self) -> u64 {
+        let played = self.samples_played.load(Ordering::Relaxed);
+        let denom = (self.output_sample_rate as u64) * (self.output_channels as u64).max(1);
+        if denom == 0 {
+            return 0;
+        }
+        played.saturating_mul(1_000) / denom
+    }
+
+    pub(crate) fn reset_playback_position(&self) {
+        self.clear();
+        self.samples_played.store(0, Ordering::Relaxed);
+        self.paused.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn seek_to_ms(&self, _position_ms: u64) {
+        self.clear();
+    }
+
+    pub(crate) fn playback_speed(&self) -> f64 {
+        1.0
+    }
+
+    pub(crate) fn set_playback_speed(&self, _speed: f64) {}
+}
+
+/// Encode a captured PCM buffer into a WAV blob suitable for upload to
+/// ElevenLabs STT. Used by voice_mode after a PTT release.
+pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
+    if audio.sample_rate == 0 || audio.channels == 0 {
+        return Err("invalid recorded audio: zero sample rate or channels".to_string());
+    }
+    let spec = hound::WavSpec {
+        channels: audio.channels,
+        sample_rate: audio.sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut buf: Vec<u8> = Vec::with_capacity(44 + audio.data.len() * 2);
+    let cursor = std::io::Cursor::new(&mut buf);
+    let mut writer = hound::WavWriter::new(cursor, spec).map_err(|e| format!("hound init: {e}"))?;
+    for &sample in &audio.data {
+        writer
+            .write_sample(sample)
+            .map_err(|e| format!("hound write: {e}"))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| format!("hound finalize: {e}"))?;
+    Ok(buf)
+}
+
+/// Send-able view of the playback queue. Constructed via
+/// `RealtimeAudioPlayer::playback_handle` so async tasks can push PCM
+/// while the underlying cpal stream stays on its constructing thread.
+#[derive(Clone)]
+pub(crate) struct RealtimeAudioPlaybackHandle {
+    queue: Arc<Mutex<VecDeque<i16>>>,
+    output_sample_rate: u32,
+    output_channels: u16,
+}
+
+impl RealtimeAudioPlaybackHandle {
+    pub(crate) fn enqueue_pcm(&self, pcm: &[i16], sample_rate: u32, channels: u16) {
+        if pcm.is_empty() || channels == 0 || sample_rate == 0 {
             return;
         }
         let converted = convert_pcm16(
@@ -653,75 +603,15 @@ impl RealtimeAudioPlayer {
         if converted.is_empty() {
             return;
         }
-        if let Ok(mut all) = self.all_samples.lock() {
-            all.extend_from_slice(&converted);
-        }
         if let Ok(mut guard) = self.queue.lock() {
             guard.extend(converted);
         }
     }
 
-    /// Returns true when the playback queue is empty.
-    #[allow(dead_code)]
-    pub(crate) fn is_idle(&self) -> bool {
-        self.queue
-            .lock()
-            .map(|guard| guard.is_empty())
-            .unwrap_or(true)
-    }
-
-    /// Current playback position in milliseconds.
-    /// Current playback position in milliseconds.
-    ///
-    /// Uses `samples_played` — the atomic counter incremented by the audio
-    /// callback each time it consumes samples from the queue.  This tracks
-    /// real-time playback within one audio-buffer period (~10-20 ms), which
-    /// is well within the 33 ms karaoke tick interval.
-    pub(crate) fn playback_position_ms(&self) -> u64 {
-        let samples = self.samples_played.load(Ordering::Relaxed) as u64;
-        let frames = samples / self.output_channels.max(1) as u64;
-        frames * 1000 / self.output_sample_rate.max(1) as u64
-    }
-
-    /// Reset the playback position counter (call when starting a new voice turn).
-    pub(crate) fn reset_playback_position(&self) {
-        self.samples_played.store(0, Ordering::Relaxed);
-        self.fractional_cursor
-            .store(f64::to_bits(0.0), Ordering::Relaxed);
-    }
-
-    /// Pause audio output. The queue retains its data; playback position freezes.
-    pub(crate) fn pause(&self) {
-        // Set the flag FIRST so any in-flight audio callbacks see it
-        // and output silence instead of draining the queue.
-        self.paused.store(true, Ordering::SeqCst);
-        let _ = self.stream.pause();
-    }
-
-    /// Set client-side playback speed.  Values >1.0 play faster (higher pitch),
-    /// <1.0 play slower (lower pitch).  Simple resampling — no pitch preservation.
-    pub(crate) fn set_playback_speed(&self, speed: f32) {
-        let clamped = speed.clamp(0.25, 4.0);
-        self.speed_factor
-            .store(f32::to_bits(clamped), Ordering::Relaxed);
-    }
-
-    /// Returns the current playback speed factor (1.0 = normal).
-    pub(crate) fn playback_speed(&self) -> f32 {
-        f32::from_bits(self.speed_factor.load(Ordering::Relaxed))
-    }
-
-    /// Resume audio output from where it was paused.
-    pub(crate) fn resume(&self) {
-        // Clear the flag FIRST so callbacks can drain the queue
-        // as soon as the stream restarts.
-        self.paused.store(false, Ordering::SeqCst);
-        let _ = self.stream.play();
-    }
-
-    /// Whether the player is currently paused.
-    pub(crate) fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::SeqCst)
+    pub(crate) fn clear(&self) {
+        if let Ok(mut guard) = self.queue.lock() {
+            guard.clear();
+        }
     }
 }
 
@@ -729,23 +619,19 @@ fn build_output_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
     queue: Arc<Mutex<VecDeque<i16>>>,
-    samples_played: Arc<AtomicUsize>,
     paused: Arc<AtomicBool>,
-    speed: Arc<AtomicU32>,
-    fractional_cursor: Arc<AtomicU64>,
+    samples_played: Arc<std::sync::atomic::AtomicU64>,
 ) -> Result<cpal::Stream, String> {
     let config_any: cpal::StreamConfig = config.clone().into();
     match config.sample_format() {
         cpal::SampleFormat::F32 => {
-            let sp = Arc::clone(&samples_played);
-            let p = Arc::clone(&paused);
-            let s = Arc::clone(&speed);
-            let frac = Arc::clone(&fractional_cursor);
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [f32], _info| {
-                        fill_output_f32(output, &queue, &sp, &p, &s, &frac);
+                    move |output: &mut [f32], _| {
+                        fill_output_f32(output, &queue, &paused, &samples_played)
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -753,15 +639,13 @@ fn build_output_stream(
                 .map_err(|e| format!("failed to build f32 output stream: {e}"))
         }
         cpal::SampleFormat::I16 => {
-            let sp = Arc::clone(&samples_played);
-            let p = Arc::clone(&paused);
-            let s = Arc::clone(&speed);
-            let frac = Arc::clone(&fractional_cursor);
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [i16], _info| {
-                        fill_output_i16(output, &queue, &sp, &p, &s, &frac);
+                    move |output: &mut [i16], _| {
+                        fill_output_i16(output, &queue, &paused, &samples_played)
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -769,15 +653,13 @@ fn build_output_stream(
                 .map_err(|e| format!("failed to build i16 output stream: {e}"))
         }
         cpal::SampleFormat::U16 => {
-            let sp = Arc::clone(&samples_played);
-            let p = Arc::clone(&paused);
-            let s = Arc::clone(&speed);
-            let frac = Arc::clone(&fractional_cursor);
+            let paused = Arc::clone(&paused);
+            let samples_played = Arc::clone(&samples_played);
             device
                 .build_output_stream(
                     &config_any,
-                    move |output: &mut [u16], _info| {
-                        fill_output_u16(output, &queue, &sp, &p, &s, &frac);
+                    move |output: &mut [u16], _| {
+                        fill_output_u16(output, &queue, &paused, &samples_played)
                     },
                     move |err| error!("audio output error: {err}"),
                     None,
@@ -788,49 +670,30 @@ fn build_output_stream(
     }
 }
 
-/// Read an interpolated i16 sample from the queue at fractional position `pos`.
-/// Returns 0 (silence) when the queue is exhausted.
-#[inline]
-fn interpolated_sample(queue: &VecDeque<i16>, pos: f64) -> i16 {
-    let idx = pos as usize;
-    if idx + 1 < queue.len() {
-        let frac = pos - idx as f64;
-        let s0 = queue[idx] as f64;
-        let s1 = queue[idx + 1] as f64;
-        (s0 + frac * (s1 - s0)) as i16
-    } else if idx < queue.len() {
-        queue[idx]
-    } else {
-        0
-    }
-}
-
 fn fill_output_i16(
     output: &mut [i16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
-    samples_played: &Arc<AtomicUsize>,
-    paused: &AtomicBool,
-    speed: &AtomicU32,
-    fractional_cursor: &Arc<AtomicU64>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
 ) {
-    if paused.load(Ordering::Acquire) {
+    if paused.load(Ordering::Relaxed) {
         output.fill(0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
-        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
+        let mut drained: u64 = 0;
         for sample in output.iter_mut() {
-            *sample = interpolated_sample(&guard, frac_pos);
-            frac_pos += step;
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    v
+                }
+                None => 0,
+            };
         }
-        let consumed = (frac_pos as usize).min(guard.len());
-        if consumed > 0 {
-            guard.drain(..consumed);
-            samples_played.fetch_add(consumed, Ordering::Relaxed);
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
-        frac_pos -= consumed as f64;
-        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(0);
@@ -839,29 +702,27 @@ fn fill_output_i16(
 fn fill_output_f32(
     output: &mut [f32],
     queue: &Arc<Mutex<VecDeque<i16>>>,
-    samples_played: &Arc<AtomicUsize>,
-    paused: &AtomicBool,
-    speed: &AtomicU32,
-    fractional_cursor: &Arc<AtomicU64>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
 ) {
-    if paused.load(Ordering::Acquire) {
+    if paused.load(Ordering::Relaxed) {
         output.fill(0.0);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
-        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
+        let mut drained: u64 = 0;
         for sample in output.iter_mut() {
-            *sample = interpolated_sample(&guard, frac_pos) as f32 / i16::MAX as f32;
-            frac_pos += step;
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    (v as f32) / (i16::MAX as f32)
+                }
+                None => 0.0,
+            };
         }
-        let consumed = (frac_pos as usize).min(guard.len());
-        if consumed > 0 {
-            guard.drain(..consumed);
-            samples_played.fetch_add(consumed, Ordering::Relaxed);
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
-        frac_pos -= consumed as f64;
-        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(0.0);
@@ -870,30 +731,27 @@ fn fill_output_f32(
 fn fill_output_u16(
     output: &mut [u16],
     queue: &Arc<Mutex<VecDeque<i16>>>,
-    samples_played: &Arc<AtomicUsize>,
-    paused: &AtomicBool,
-    speed: &AtomicU32,
-    fractional_cursor: &Arc<AtomicU64>,
+    paused: &Arc<AtomicBool>,
+    samples_played: &Arc<std::sync::atomic::AtomicU64>,
 ) {
-    if paused.load(Ordering::Acquire) {
+    if paused.load(Ordering::Relaxed) {
         output.fill(32768);
         return;
     }
     if let Ok(mut guard) = queue.lock() {
-        let step = f32::from_bits(speed.load(Ordering::Relaxed)) as f64;
-        let mut frac_pos = f64::from_bits(fractional_cursor.load(Ordering::Relaxed));
+        let mut drained: u64 = 0;
         for sample in output.iter_mut() {
-            let v = interpolated_sample(&guard, frac_pos);
-            *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
-            frac_pos += step;
+            *sample = match guard.pop_front() {
+                Some(v) => {
+                    drained += 1;
+                    (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16
+                }
+                None => 32768,
+            };
         }
-        let consumed = (frac_pos as usize).min(guard.len());
-        if consumed > 0 {
-            guard.drain(..consumed);
-            samples_played.fetch_add(consumed, Ordering::Relaxed);
+        if drained > 0 {
+            samples_played.fetch_add(drained, Ordering::Relaxed);
         }
-        frac_pos -= consumed as f64;
-        fractional_cursor.store(f64::to_bits(frac_pos), Ordering::Relaxed);
         return;
     }
     output.fill(32768);
@@ -958,241 +816,18 @@ fn convert_pcm16(
     out
 }
 
-// -------------------------
-// Transcription helpers
-// -------------------------
-
-fn clip_duration_seconds(audio: &RecordedAudio) -> f32 {
-    let total_samples = audio.data.len() as f32;
-    let samples_per_second = (audio.sample_rate as f32) * (audio.channels as f32);
-    if samples_per_second > 0.0 {
-        total_samples / samples_per_second
-    } else {
-        0.0
-    }
-}
-
-fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
-    let converted;
-    let (channels, sample_rate, segment) =
-        if audio.channels == MODEL_AUDIO_CHANNELS && audio.sample_rate == MODEL_AUDIO_SAMPLE_RATE {
-            (audio.channels, audio.sample_rate, audio.data.as_slice())
-        } else {
-            converted = convert_pcm16(
-                &audio.data,
-                audio.sample_rate,
-                audio.channels,
-                MODEL_AUDIO_SAMPLE_RATE,
-                MODEL_AUDIO_CHANNELS,
-            );
-            (
-                MODEL_AUDIO_CHANNELS,
-                MODEL_AUDIO_SAMPLE_RATE,
-                converted.as_slice(),
-            )
-        };
-
-    let mut wav_bytes: Vec<u8> = Vec::new();
-    let spec = WavSpec {
-        channels,
-        sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let mut cursor = Cursor::new(&mut wav_bytes);
-    let mut writer =
-        WavWriter::new(&mut cursor, spec).map_err(|_| "failed to create wav writer".to_string())?;
-
-    // Simple peak normalization with headroom to improve audibility on quiet inputs.
-    let mut peak: i16 = 0;
-    for &s in segment {
-        let a = s.unsigned_abs();
-        if a > peak.unsigned_abs() {
-            peak = s;
-        }
-    }
-    let peak_abs = (peak as i32).unsigned_abs() as i32;
-    let target = (i16::MAX as f32) * 0.9; // leave some headroom
-    let gain: f32 = if peak_abs > 0 {
-        target / (peak_abs as f32)
-    } else {
-        1.0
-    };
-
-    for &s in segment {
-        let v = ((s as f32) * gain)
-            .round()
-            .clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-        writer
-            .write_sample(v)
-            .map_err(|_| "failed writing wav sample".to_string())?;
-    }
-    writer
-        .finalize()
-        .map_err(|_| "failed to finalize wav".to_string())?;
-    Ok(wav_bytes)
-}
-
-/// Public wrapper around `encode_wav_normalized` for use by voice mode STT.
-pub(crate) fn encode_wav_for_voice_mode(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
-    encode_wav_normalized(audio)
-}
-
-fn normalize_chatgpt_base_url(input: &str) -> String {
-    let mut base_url = input.to_string();
-    while base_url.ends_with('/') {
-        base_url.pop();
-    }
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
-}
-
-async fn resolve_auth() -> Result<TranscriptionAuthContext, String> {
-    let codex_home = find_codex_home().map_err(|e| format!("failed to find codex home: {e}"))?;
-    let auth = CodexAuth::from_auth_storage(&codex_home, AuthCredentialsStoreMode::Auto)
-        .map_err(|e| format!("failed to read auth.json: {e}"))?
-        .ok_or_else(|| "No Codex auth is configured; please run `codex login`".to_string())?;
-
-    let chatgpt_account_id = auth.get_account_id();
-
-    let token = auth
-        .get_token()
-        .map_err(|e| format!("failed to get auth token: {e}"))?;
-    let config = Config::load_with_cli_overrides(Vec::new())
-        .await
-        .map_err(|e| format!("failed to load config: {e}"))?;
-    Ok(TranscriptionAuthContext {
-        mode: auth.api_auth_mode(),
-        bearer_token: token,
-        chatgpt_account_id,
-        chatgpt_base_url: normalize_chatgpt_base_url(&config.chatgpt_base_url),
-    })
-}
-
-async fn transcribe_bytes(
-    wav_bytes: Vec<u8>,
-    context: Option<String>,
-    duration_seconds: f32,
-) -> Result<String, String> {
-    let auth = resolve_auth().await?;
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())
-        .map_err(|error| format!("failed to build transcription HTTP client: {error}"))?;
-    let audio_bytes = wav_bytes.len();
-    let prompt_for_log = context.as_deref().unwrap_or("").to_string();
-    let (endpoint, request) =
-        if matches!(auth.mode, AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens) {
-            let part = reqwest::multipart::Part::bytes(wav_bytes)
-                .file_name("audio.wav")
-                .mime_str("audio/wav")
-                .map_err(|e| format!("failed to set mime: {e}"))?;
-            let form = reqwest::multipart::Form::new().part("file", part);
-            let endpoint = format!("{}/transcribe", auth.chatgpt_base_url);
-            let mut req = client
-                .post(&endpoint)
-                .bearer_auth(&auth.bearer_token)
-                .multipart(form)
-                .header("User-Agent", get_codex_user_agent());
-            if let Some(acc) = auth.chatgpt_account_id {
-                req = req.header("ChatGPT-Account-Id", acc);
-            }
-            (endpoint, req)
-        } else {
-            let part = reqwest::multipart::Part::bytes(wav_bytes)
-                .file_name("audio.wav")
-                .mime_str("audio/wav")
-                .map_err(|e| format!("failed to set mime: {e}"))?;
-            let mut form = reqwest::multipart::Form::new()
-                .text("model", AUDIO_MODEL)
-                .part("file", part);
-            if let Some(context) = context {
-                form = form.text("prompt", context);
-            }
-            let endpoint = "https://api.openai.com/v1/audio/transcriptions".to_string();
-            (
-                endpoint,
-                client
-                    .post("https://api.openai.com/v1/audio/transcriptions")
-                    .bearer_auth(&auth.bearer_token)
-                    .multipart(form)
-                    .header("User-Agent", get_codex_user_agent()),
-            )
-        };
-
-    let audio_kib = audio_bytes as f32 / 1024.0;
-    let mode = auth.mode;
-    trace!(
-        "sending transcription request: mode={mode:?} endpoint={endpoint} duration={duration_seconds:.2}s audio={audio_kib:.1}KiB prompt={prompt_for_log}"
-    );
-
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| format!("transcription request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<failed to read body>".to_string());
-        return Err(format!("transcription failed: {status} {body}"));
-    }
-
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse json: {e}"))?;
-    let text = v
-        .get("text")
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if text.is_empty() {
-        Err("empty transcription result".to_string())
-    } else {
-        Ok(text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::RecordedAudio;
     use super::convert_pcm16;
-    use super::encode_wav_normalized;
     use pretty_assertions::assert_eq;
-    use std::io::Cursor;
 
     #[test]
     fn convert_pcm16_downmixes_and_resamples_for_model_input() {
         let input = vec![100, 300, 200, 400, 500, 700, 600, 800];
-        let converted = convert_pcm16(&input, 48_000, 2, 24_000, 1);
+        let converted = convert_pcm16(
+            &input, /*input_sample_rate*/ 48_000, /*input_channels*/ 2,
+            /*output_sample_rate*/ 24_000, /*output_channels*/ 1,
+        );
         assert_eq!(converted, vec![200, 700]);
-    }
-
-    #[test]
-    fn encode_wav_normalized_outputs_24khz_mono_audio() {
-        let audio = RecordedAudio {
-            data: vec![100, 300, 200, 400, 500, 700, 600, 800],
-            sample_rate: 48_000,
-            channels: 2,
-        };
-
-        let wav = encode_wav_normalized(&audio).expect("wav should encode");
-        let reader = hound::WavReader::new(Cursor::new(wav)).expect("wav should parse");
-        let spec = reader.spec();
-        let samples = reader
-            .into_samples::<i16>()
-            .collect::<Result<Vec<_>, _>>()
-            .expect("samples should decode");
-
-        assert_eq!(spec.channels, 1);
-        assert_eq!(spec.sample_rate, 24_000);
-        assert_eq!(samples, vec![8_426, 29_490]);
     }
 }

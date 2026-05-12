@@ -3,6 +3,7 @@ name = "codex-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [[bin]]
 name = "ata"
@@ -11,6 +12,7 @@ path = "src/main.rs"
 [lib]
 name = "codex_cli"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -25,26 +27,37 @@ codex-app-server-test-client = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-chatgpt = { workspace = true }
 codex-cloud-tasks = { path = "../cloud-tasks" }
+codex-research-tools = { workspace = true }
+codex-scheduler = { workspace = true }
+codex-workspace = { workspace = true }
 codex-utils-cli = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
+codex-core-plugins = { workspace = true }
 codex-exec = { workspace = true }
+codex-exec-server = { workspace = true }
 codex-execpolicy = { workspace = true }
+codex-features = { workspace = true }
 codex-login = { workspace = true }
+codex-memories-write = { workspace = true }
+codex-mcp = { workspace = true }
 codex-mcp-server = { workspace = true }
+codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-responses-api-proxy = { workspace = true }
-codex-research-tools = { workspace = true }
 codex-rmcp-client = { workspace = true }
-codex-scheduler = { workspace = true }
+codex-rollout-trace = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-state = { workspace = true }
 codex-stdio-to-uds = { workspace = true }
+codex-terminal-detection = { workspace = true }
 codex-tui = { workspace = true }
-codex-workspace = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
+codex-utils-path = { workspace = true }
 libc = { workspace = true }
 owo-colors = { workspace = true }
 regex-lite = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 supports-color = { workspace = true }
 tempfile = { workspace = true }
@@ -63,13 +76,6 @@ tracing-subscriber = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 codex_windows_sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 
-[target.'cfg(not(windows))'.dependencies]
-qrcode = { workspace = true }
-rand = { workspace = true }
-
-[features]
-data = ["codex-core/data"]
-
 [dev-dependencies]
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
@@ -77,3 +83,4 @@ codex-utils-cargo-bin = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 sqlx = { workspace = true }
+wiremock = { workspace = true }

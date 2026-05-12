@@ -1,296 +1,169 @@
-use async_trait::async_trait;
-use serde_json::Value as JsonValue;
-use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+//! `js_repl` tool: evaluate a JavaScript snippet in an embedded V8 isolate.
+//!
+//! The actual evaluation lives in the `codex-v8-poc` crate. This module is
+//! the v0.129.0-shaped tool handler glue: parse the function-call arguments,
+//! dispatch the eval on a blocking thread (V8 isolates are `!Send`), and
+//! map the outcome back into a `ResponseInputItem`.
+//!
+//! The previous Ata tree had a session-scoped REPL kernel with a manager,
+//! reset handler, freeform-payload pragma parser, and a `JsRepl` feature
+//! flag. v0.129.0's tool-spec system asks every tool to be self-contained
+//! and registered through `tools::spec_plan::build_specs_with_toolkits`,
+//! so this re-port follows that contract: a single function-typed tool,
+//! stateless across calls, always available. State persistence can be
+//! layered on later by giving `Session::services` a per-session V8 worker.
 
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::ExecCommandSource;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
-use crate::tools::events::ToolEmitter;
-use crate::tools::events::ToolEventCtx;
-use crate::tools::events::ToolEventFailure;
-use crate::tools::events::ToolEventStage;
-use crate::tools::handlers::parse_arguments;
-use crate::tools::js_repl::JS_REPL_PRAGMA_PREFIX;
-use crate::tools::js_repl::JsReplArgs;
+use crate::tools::handlers::js_repl_spec::JS_REPL_TOOL_NAME;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
+use codex_tools::ToolName;
+use codex_v8_poc::JsEvalOutcome;
+use codex_v8_poc::js_eval;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 pub struct JsReplHandler;
-pub struct JsReplResetHandler;
 
-fn join_outputs(stdout: &str, stderr: &str) -> String {
-    if stdout.is_empty() {
-        stderr.to_string()
-    } else if stderr.is_empty() {
-        stdout.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
+#[derive(Debug, Deserialize)]
+struct JsReplArgs {
+    code: String,
+}
+
+pub struct JsReplToolOutput {
+    outcome: JsEvalOutcome,
+}
+
+impl ToolOutput for JsReplToolOutput {
+    fn log_preview(&self) -> String {
+        let mut preview = self.outcome.value.clone();
+        if let Some(idx) = preview.find('\n') {
+            preview.truncate(idx);
+        }
+        if self.outcome.success {
+            format!("js_repl ok: {preview}")
+        } else {
+            format!("js_repl failed: {preview}")
+        }
+    }
+
+    fn success_for_logging(&self) -> bool {
+        self.outcome.success
+    }
+
+    fn to_response_item(&self, call_id: &str, _payload: &ToolPayload) -> ResponseInputItem {
+        let mut output = FunctionCallOutputPayload::from_text(self.outcome.value.clone());
+        output.success = Some(self.outcome.success);
+        ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_string(),
+            output,
+        }
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "value".to_string(),
+            JsonValue::String(self.outcome.value.clone()),
+        );
+        map.insert("success".to_string(), JsonValue::Bool(self.outcome.success));
+        map.insert(
+            "elapsed_ms".to_string(),
+            JsonValue::Number(serde_json::Number::from(
+                self.outcome.elapsed.as_millis() as u64
+            )),
+        );
+        JsonValue::Object(map)
     }
 }
 
-fn build_js_repl_exec_output(
-    output: &str,
-    error: Option<&str>,
-    duration: Duration,
-) -> ExecToolCallOutput {
-    let stdout = output.to_string();
-    let stderr = error.unwrap_or("").to_string();
-    let aggregated_output = join_outputs(&stdout, &stderr);
-    ExecToolCallOutput {
-        exit_code: if error.is_some() { 1 } else { 0 },
-        stdout: StreamOutput::new(stdout),
-        stderr: StreamOutput::new(stderr),
-        aggregated_output: StreamOutput::new(aggregated_output),
-        duration,
-        timed_out: false,
-    }
-}
-
-async fn emit_js_repl_exec_begin(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
-    call_id: &str,
-) {
-    let emitter = ToolEmitter::shell(
-        vec!["js_repl".to_string()],
-        turn.cwd.clone(),
-        ExecCommandSource::Agent,
-        false,
-    );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
-    emitter.emit(ctx, ToolEventStage::Begin).await;
-}
-
-async fn emit_js_repl_exec_end(
-    session: &crate::codex::Session,
-    turn: &crate::codex::TurnContext,
-    call_id: &str,
-    output: &str,
-    error: Option<&str>,
-    duration: Duration,
-) {
-    let exec_output = build_js_repl_exec_output(output, error, duration);
-    let emitter = ToolEmitter::shell(
-        vec!["js_repl".to_string()],
-        turn.cwd.clone(),
-        ExecCommandSource::Agent,
-        false,
-    );
-    let ctx = ToolEventCtx::new(session, turn, call_id, None);
-    let stage = if error.is_some() {
-        ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
-    } else {
-        ToolEventStage::Success(exec_output)
-    };
-    emitter.emit(ctx, stage).await;
-}
-#[async_trait]
 impl ToolHandler for JsReplHandler {
-    type Output = FunctionToolOutput;
+    type Output = JsReplToolOutput;
+
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(JS_REPL_TOOL_NAME)
+    }
 
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(
-            payload,
-            ToolPayload::Function { .. } | ToolPayload::Custom { .. }
-        )
-    }
-
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation {
-            session,
-            turn,
-            tracker,
-            payload,
-            call_id,
-            ..
-        } = invocation;
-
-        if !session.features().enabled(Feature::JsRepl) {
-            return Err(FunctionCallError::RespondToModel(
-                "js_repl is disabled by feature flag".to_string(),
-            ));
-        }
-
-        let args = match payload {
-            ToolPayload::Function { arguments } => parse_arguments(&arguments)?,
-            ToolPayload::Custom { input } => parse_freeform_args(&input)?,
+        let arguments = match invocation.payload {
+            ToolPayload::Function { arguments } => arguments,
             _ => {
                 return Err(FunctionCallError::RespondToModel(
-                    "js_repl expects custom or function payload".to_string(),
+                    "js_repl handler received unsupported payload".to_string(),
                 ));
             }
         };
-        let manager = turn.js_repl.manager().await?;
-        let started_at = Instant::now();
-        emit_js_repl_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
-        let result = manager
-            .execute(Arc::clone(&session), Arc::clone(&turn), tracker, args)
-            .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(err) => {
-                let message = err.to_string();
-                emit_js_repl_exec_end(
-                    session.as_ref(),
-                    turn.as_ref(),
-                    &call_id,
-                    "",
-                    Some(&message),
-                    started_at.elapsed(),
-                )
-                .await;
-                return Err(err);
-            }
-        };
 
-        let content = result.output;
-        let mut items = Vec::with_capacity(result.content_items.len() + 1);
-        if !content.is_empty() {
-            items.push(FunctionCallOutputContentItem::InputText {
-                text: content.clone(),
-            });
-        }
-        items.extend(result.content_items);
+        let args: JsReplArgs = serde_json::from_str(&arguments).map_err(|e| {
+            FunctionCallError::RespondToModel(format!("failed to parse js_repl arguments: {e}"))
+        })?;
 
-        emit_js_repl_exec_end(
-            session.as_ref(),
-            turn.as_ref(),
-            &call_id,
-            &content,
-            None,
-            started_at.elapsed(),
-        )
-        .await;
-
-        if items.is_empty() {
-            Ok(FunctionToolOutput::from_text(content, Some(true)))
-        } else {
-            Ok(FunctionToolOutput::from_content(items, Some(true)))
-        }
-    }
-}
-
-#[async_trait]
-impl ToolHandler for JsReplResetHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        if !invocation.session.features().enabled(Feature::JsRepl) {
-            return Err(FunctionCallError::RespondToModel(
-                "js_repl is disabled by feature flag".to_string(),
-            ));
-        }
-        let manager = invocation.turn.js_repl.manager().await?;
-        manager.reset().await?;
-        Ok(FunctionToolOutput::from_text(
-            "js_repl kernel reset".to_string(),
-            Some(true),
-        ))
-    }
-}
-
-fn parse_freeform_args(input: &str) -> Result<JsReplArgs, FunctionCallError> {
-    if input.trim().is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "js_repl expects raw JavaScript tool input (non-empty). Provide JS source text, optionally with first-line `// codex-js-repl: ...`."
-                .to_string(),
-        ));
-    }
-
-    let mut args = JsReplArgs {
-        code: input.to_string(),
-        timeout_ms: None,
-    };
-
-    let mut lines = input.splitn(2, '\n');
-    let first_line = lines.next().unwrap_or_default();
-    let rest = lines.next().unwrap_or_default();
-    let trimmed = first_line.trim_start();
-    let Some(pragma) = trimmed.strip_prefix(JS_REPL_PRAGMA_PREFIX) else {
-        reject_json_or_quoted_source(&args.code)?;
-        return Ok(args);
-    };
-
-    let mut timeout_ms: Option<u64> = None;
-    let directive = pragma.trim();
-    if !directive.is_empty() {
-        for token in directive.split_whitespace() {
-            let (key, value) = token.split_once('=').ok_or_else(|| {
-                FunctionCallError::RespondToModel(format!(
-                    "js_repl pragma expects space-separated key=value pairs (supported keys: timeout_ms); got `{token}`"
-                ))
+        // V8 isolates are `!Send`; run the eval on a blocking thread so we do
+        // not pin a tokio worker for the duration of the script. A panic
+        // inside the eval propagates here as a `JoinError` — convert it into
+        // a model-visible failure rather than aborting the turn.
+        let outcome = tokio::task::spawn_blocking(move || js_eval(&args.code))
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("js_repl execution panicked: {err}"))
             })?;
-            match key {
-                "timeout_ms" => {
-                    if timeout_ms.is_some() {
-                        return Err(FunctionCallError::RespondToModel(
-                            "js_repl pragma specifies timeout_ms more than once".to_string(),
-                        ));
-                    }
-                    let parsed = value.parse::<u64>().map_err(|_| {
-                        FunctionCallError::RespondToModel(format!(
-                            "js_repl pragma timeout_ms must be an integer; got `{value}`"
-                        ))
-                    })?;
-                    timeout_ms = Some(parsed);
-                }
-                _ => {
-                    return Err(FunctionCallError::RespondToModel(format!(
-                        "js_repl pragma only supports timeout_ms; got `{key}`"
-                    )));
-                }
-            }
-        }
-    }
 
-    if rest.trim().is_empty() {
-        return Err(FunctionCallError::RespondToModel(
-            "js_repl pragma must be followed by JavaScript source on subsequent lines".to_string(),
-        ));
-    }
-
-    reject_json_or_quoted_source(rest)?;
-    args.code = rest.to_string();
-    args.timeout_ms = timeout_ms;
-    Ok(args)
-}
-
-fn reject_json_or_quoted_source(code: &str) -> Result<(), FunctionCallError> {
-    let trimmed = code.trim();
-    if trimmed.starts_with("```") {
-        return Err(FunctionCallError::RespondToModel(
-            "js_repl expects raw JavaScript source, not markdown code fences. Resend plain JS only (optional first line `// codex-js-repl: ...`)."
-                .to_string(),
-        ));
-    }
-    let Ok(value) = serde_json::from_str::<JsonValue>(trimmed) else {
-        return Ok(());
-    };
-    match value {
-        JsonValue::Object(_) | JsonValue::String(_) => Err(FunctionCallError::RespondToModel(
-            "js_repl is a freeform tool and expects raw JavaScript source. Resend plain JS only (optional first line `// codex-js-repl: ...`); do not send JSON (`{\"code\":...}`), quoted code, or markdown fences."
-                .to_string(),
-        )),
-        _ => Ok(()),
+        Ok(JsReplToolOutput { outcome })
     }
 }
 
 #[cfg(test)]
-#[path = "js_repl_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn make_outcome(success: bool, value: &str) -> JsReplToolOutput {
+        JsReplToolOutput {
+            outcome: JsEvalOutcome {
+                value: value.to_string(),
+                success,
+                elapsed: std::time::Duration::from_millis(7),
+            },
+        }
+    }
+
+    #[test]
+    fn log_preview_summarizes_success() {
+        let preview = make_outcome(true, "42").log_preview();
+        assert_eq!(preview, "js_repl ok: 42");
+    }
+
+    #[test]
+    fn log_preview_summarizes_failure() {
+        let preview = make_outcome(false, "compile error").log_preview();
+        assert_eq!(preview, "js_repl failed: compile error");
+    }
+
+    #[test]
+    fn log_preview_collapses_multiline_value() {
+        let preview = make_outcome(true, "line1\nline2\nline3").log_preview();
+        assert_eq!(preview, "js_repl ok: line1");
+    }
+
+    #[test]
+    fn code_mode_result_includes_value_success_and_elapsed() {
+        let value = make_outcome(true, "ok").code_mode_result(&ToolPayload::Function {
+            arguments: String::new(),
+        });
+        let JsonValue::Object(map) = value else {
+            panic!("expected object");
+        };
+        assert_eq!(map.get("value"), Some(&JsonValue::String("ok".to_string())));
+        assert_eq!(map.get("success"), Some(&JsonValue::Bool(true)));
+        assert!(matches!(map.get("elapsed_ms"), Some(JsonValue::Number(_))));
+    }
+}

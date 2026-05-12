@@ -59,7 +59,7 @@ pub fn scan_directory_with_config(
 
         let path = entry.path();
         let rel_path = match path.strip_prefix(root) {
-            Ok(rel) => rel.to_string_lossy().to_string(),
+            Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
             Err(_) => continue,
         };
 

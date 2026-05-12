@@ -1,6 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
     "ByteRange": {
       "properties": {
         "end": {
@@ -78,7 +82,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
               "enum": [
@@ -177,6 +181,15 @@
         }
       ]
     },
+    "CommandExecutionSource": {
+      "enum": [
+        "agent",
+        "userShell",
+        "unifiedExecStartup",
+        "unifiedExecInteraction"
+      ],
+      "type": "string"
+    },
     "CommandExecutionStatus": {
       "enum": [
         "inProgress",
@@ -257,6 +270,21 @@
       ],
       "type": "object"
     },
+    "HookPromptFragment": {
+      "properties": {
+        "hookRunId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "hookRunId",
+        "text"
+      ],
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -270,6 +298,7 @@
     },
     "McpToolCallResult": {
       "properties": {
+        "_meta": true,
         "content": {
           "items": true,
           "type": "array"
@@ -288,6 +317,54 @@
         "failed"
       ],
       "type": "string"
+    },
+    "MemoryCitation": {
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/definitions/MemoryCitationEntry"
+          },
+          "type": "array"
+        },
+        "threadIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entries",
+        "threadIds"
+      ],
+      "type": "object"
+    },
+    "MemoryCitationEntry": {
+      "properties": {
+        "lineEnd": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lineStart": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lineEnd",
+        "lineStart",
+        "note",
+        "path"
+      ],
+      "type": "object"
     },
     "MessagePhase": {
       "description": "Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as \"phase unknown\" and keep compatibility behavior for legacy models.",
@@ -377,16 +454,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "adaptive"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "TextElement": {
       "properties": {
@@ -442,8 +530,46 @@
         },
         {
           "properties": {
+            "fragments": {
+              "items": {
+                "$ref": "#/definitions/HookPromptFragment"
+              },
+              "type": "array"
+            },
             "id": {
               "type": "string"
+            },
+            "type": {
+              "enum": [
+                "hookPrompt"
+              ],
+              "title": "HookPromptThreadItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fragments",
+            "id",
+            "type"
+          ],
+          "title": "HookPromptThreadItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "memoryCitation": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MemoryCitation"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
             },
             "phase": {
               "anyOf": [
@@ -555,8 +681,12 @@
               "type": "array"
             },
             "cwd": {
-              "description": "The command's working directory.",
-              "type": "string"
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                }
+              ],
+              "description": "The command's working directory."
             },
             "durationMs": {
               "description": "The duration of the command execution in milliseconds.",
@@ -583,6 +713,14 @@
                 "string",
                 "null"
               ]
+            },
+            "source": {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/CommandExecutionSource"
+                }
+              ],
+              "default": "agent"
             },
             "status": {
               "$ref": "#/definitions/CommandExecutionStatus"
@@ -661,6 +799,12 @@
             "id": {
               "type": "string"
             },
+            "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "result": {
               "anyOf": [
                 {
@@ -721,6 +865,12 @@
             },
             "id": {
               "type": "string"
+            },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
@@ -877,7 +1027,7 @@
               "type": "string"
             },
             "path": {
-              "type": "string"
+              "$ref": "#/definitions/AbsolutePathBuf"
             },
             "type": {
               "enum": [
@@ -907,6 +1057,16 @@
               "type": [
                 "string",
                 "null"
+              ]
+            },
+            "savedPath": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AbsolutePathBuf"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "status": {
@@ -1116,6 +1276,60 @@
           ],
           "title": "MentionUserInput",
           "type": "object"
+        },
+        {
+          "description": "Local PDF or other file the user attached, either explicitly via the composer or implicitly via the proactive-injection pipeline that detects PDF mentions in turn text. Sent through to the model as a `ContentItem::InputFile` block once the file is read or uploaded.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localFile"
+              ],
+              "title": "LocalFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalFileUserInput",
+          "type": "object"
+        },
+        {
+          "description": "File previously uploaded to the provider's file API and reused by `file_id` (avoids re-uploading on subsequent turns).",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "string"
+            },
+            "source_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "uploadedFile"
+              ],
+              "title": "UploadedFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id",
+            "filename",
+            "mime_type",
+            "source_path",
+            "type"
+          ],
+          "title": "UploadedFileUserInput",
+          "type": "object"
         }
       ]
     },
@@ -1225,6 +1439,11 @@
     "item": {
       "$ref": "#/definitions/ThreadItem"
     },
+    "startedAtMs": {
+      "description": "Unix timestamp (in milliseconds) when this item lifecycle started.",
+      "format": "int64",
+      "type": "integer"
+    },
     "threadId": {
       "type": "string"
     },
@@ -1234,6 +1453,7 @@
   },
   "required": [
     "item",
+    "startedAtMs",
     "threadId",
     "turnId"
   ],
