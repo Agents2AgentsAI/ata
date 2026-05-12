@@ -17,6 +17,7 @@ use super::append_text_with_rebased_elements;
 /// preambles (voice-mode, reading-view question context) are hidden from
 /// display but kept in the model payload.
 fn displayable_range(text: &str) -> (usize, usize) {
+    #[cfg_attr(target_os = "linux", allow(unused_mut))]
     let mut start = 0usize;
     let mut end = text.len();
 
