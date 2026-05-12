@@ -6,7 +6,7 @@ inputs:
     required: true
   binaries:
     description: Space-delimited binary basenames to sign.
-    default: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner"
+    default: "ata ata-responses-api-proxy ata-windows-sandbox-setup ata-command-runner"
   client-id:
     description: Azure Trusted Signing client ID.
     required: true
