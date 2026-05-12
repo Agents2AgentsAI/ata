@@ -95,38 +95,39 @@ jobs:
             binaries: "codex-app-server"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          # Build on the runs-on.io release pools (not GitHub-hosted 4 vCPU /
-          # 16 GB runners): the `primary` bundle compiles `--bin ata` (the whole
-          # TUI dep tree, incl. cpal/syntect/arboard/...) under `--release`, which
-          # OOMs / runs out of disk on the small runners. See .github/runs-on.yml.
+          # Build on the same runs-on.io Linux pools the CI workflow uses
+          # (ata-ci-platform.yml) — they're already sized 8-16 vCPU / 32-64 GB,
+          # on-demand, with retry-on-interrupt. The GitHub-hosted 4 vCPU / 16 GB
+          # default can't compile `--bin ata` (the whole TUI dep tree —
+          # cpal/syntect/arboard/x11rb/...) under `--release` without OOMing.
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
             binaries: "ata ata-responses-api-proxy bwrap"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
             binaries: "codex-app-server"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-x64/extras=s3-cache/volume=160gb/spot=false"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
             binaries: "ata ata-responses-api-proxy bwrap"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
             binaries: "codex-app-server"
             build_dmg: "false"
-            runs_on: "runs-on=${{ github.run_id }}/runner=release-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
+            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
