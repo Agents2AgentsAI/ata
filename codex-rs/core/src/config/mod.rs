@@ -135,8 +135,7 @@ mod managed_features;
 mod network_proxy_spec;
 mod otel;
 mod permissions;
-#[cfg(test)]
-mod schema;
+pub mod schema;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
