@@ -51,14 +51,14 @@ jobs:
             lib_name: argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc.dll
             runner_binary: argument-comment-lint.exe
             cargo_dylint_binary: cargo-dylint.exe
-            runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+            runs_on: "runs-on=${{ github.run_id }}/runner=release-windows-x64"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      # `@master` (not the channel-pinned `@1.93.0` tag) so the `toolchain:`
+      # input is accepted — this build needs a specific nightly.
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-09-18
           targets: ${{ matrix.target }}

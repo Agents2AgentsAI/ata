@@ -18,7 +18,6 @@ const PLATFORM_PACKAGE_BY_TARGET = {
   "x86_64-apple-darwin": "@a2a-ai/ata-darwin-x64",
   "aarch64-apple-darwin": "@a2a-ai/ata-darwin-arm64",
   "x86_64-pc-windows-msvc": "@a2a-ai/ata-win32-x64",
-  "aarch64-pc-windows-msvc": "@a2a-ai/ata-win32-arm64",
 };
 
 const { platform, arch } = process;
@@ -54,9 +53,6 @@ switch (platform) {
     switch (arch) {
       case "x64":
         targetTriple = "x86_64-pc-windows-msvc";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-pc-windows-msvc";
         break;
       default:
         break;

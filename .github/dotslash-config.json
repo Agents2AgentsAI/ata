@@ -45,10 +45,6 @@
         "windows-x86_64": {
           "regex": "^codex-app-server-x86_64-pc-windows-msvc\\.exe\\.zst$",
           "path": "codex-app-server.exe"
-        },
-        "windows-aarch64": {
-          "regex": "^codex-app-server-aarch64-pc-windows-msvc\\.exe\\.zst$",
-          "path": "codex-app-server.exe"
         }
       }
     },
