@@ -1441,7 +1441,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_app_link_view(&mut self, params: crate::bottom_pane::AppLinkViewParams) {
-        let view = crate::bottom_pane::AppLinkView::new(params, self.app_event_tx.clone());
+        let view = crate::bottom_pane::AppLinkView::new_with_keymap(
+            params,
+            self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
+        );
         self.bottom_pane.show_view(Box::new(view));
         self.request_redraw();
     }
@@ -1899,6 +1903,7 @@ impl ChatWidget {
             self.config.memories.use_memories,
             self.config.memories.generate_memories,
             self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
         );
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -4981,6 +4986,7 @@ impl ChatWidget {
             self.config.tui_status_line_use_colors,
             self.status_surface_preview_data(),
             self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
         );
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -4992,6 +4998,7 @@ impl ChatWidget {
             Some(configured_terminal_title_items.as_slice()),
             self.terminal_title_preview_data(),
             self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
         );
         self.bottom_pane.show_view(Box::new(view));
     }
@@ -6517,7 +6524,11 @@ impl ChatWidget {
             })
             .collect();
 
-        let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
+        let view = ExperimentalFeaturesView::new(
+            features,
+            self.app_event_tx.clone(),
+            self.bottom_pane.list_keymap(),
+        );
         self.bottom_pane.show_view(Box::new(view));
     }
 
