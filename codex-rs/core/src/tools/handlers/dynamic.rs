@@ -5,6 +5,7 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -52,7 +53,7 @@ impl DynamicToolHandler {
     }
 }
 
-impl ToolHandler for DynamicToolHandler {
+impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     type Output = FunctionToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -61,17 +62,6 @@ impl ToolHandler for DynamicToolHandler {
 
     fn spec(&self) -> Option<ToolSpec> {
         self.spec.clone()
-    }
-
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        ToolSearchInfo::from_spec(
-            self.search_text.clone(),
-            self.spec()?,
-            Some(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            }),
-        )
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
@@ -116,6 +106,19 @@ impl ToolHandler for DynamicToolHandler {
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
         Ok(FunctionToolOutput::from_content(body, Some(success)))
+    }
+}
+
+impl ToolHandler for DynamicToolHandler {
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        ToolSearchInfo::from_spec(
+            self.search_text.clone(),
+            self.spec()?,
+            Some(ToolSearchSourceInfo {
+                name: "Dynamic tools".to_string(),
+                description: Some("Tools provided by the current Codex thread.".to_string()),
+            }),
+        )
     }
 }
 

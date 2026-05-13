@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,22 +35,11 @@ use tracing::warn;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
-pub trait ToolHandler: Send + Sync {
-    type Output: ToolOutput + 'static;
+pub use codex_tools::ToolExecutor;
 
-    /// The concrete tool name handled by this handler instance.
-    fn tool_name(&self) -> ToolName;
-
-    fn spec(&self) -> Option<ToolSpec> {
-        None
-    }
-
+pub trait ToolHandler: ToolExecutor<ToolInvocation> {
     fn search_info(&self) -> Option<ToolSearchInfo> {
         None
-    }
-
-    fn supports_parallel_tool_calls(&self) -> bool {
-        false
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -62,7 +52,7 @@ pub trait ToolHandler: Send + Sync {
     fn telemetry_tags(
         &self,
         _invocation: &ToolInvocation,
-    ) -> impl std::future::Future<Output = ToolTelemetryTags> + Send {
+    ) -> impl Future<Output = ToolTelemetryTags> + Send {
         async { Vec::new() }
     }
 
@@ -96,13 +86,6 @@ pub trait ToolHandler: Send + Sync {
     fn create_diff_consumer(&self) -> Option<Box<dyn ToolArgumentDiffConsumer>> {
         None
     }
-
-    /// Perform the actual [ToolInvocation] and returns a [ToolOutput] containing
-    /// the final output to return to the model.
-    fn handle(
-        &self,
-        invocation: ToolInvocation,
-    ) -> impl std::future::Future<Output = Result<Self::Output, FunctionCallError>> + Send;
 }
 
 /// Consumes streamed argument diffs for a tool call and emits protocol events
@@ -209,11 +192,11 @@ where
     T: ToolHandler,
 {
     fn tool_name(&self) -> ToolName {
-        ToolHandler::tool_name(self)
+        ToolExecutor::tool_name(self)
     }
 
     fn spec(&self) -> Option<ToolSpec> {
-        ToolHandler::spec(self)
+        ToolExecutor::spec(self)
     }
 
     fn search_info(&self) -> Option<ToolSearchInfo> {
@@ -221,7 +204,7 @@ where
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
-        ToolHandler::supports_parallel_tool_calls(self)
+        ToolExecutor::supports_parallel_tool_calls(self)
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -257,7 +240,7 @@ where
         Box::pin(async move {
             let call_id = invocation.call_id.clone();
             let payload = invocation.payload.clone();
-            let output = self.handle(invocation.clone()).await?;
+            let output = ToolExecutor::handle(self, invocation.clone()).await?;
             let post_tool_use_payload =
                 ToolHandler::post_tool_use_payload(self, &invocation, &output);
             Ok(AnyToolResult {

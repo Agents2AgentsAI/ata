@@ -22,7 +22,7 @@ impl Handler {
     }
 }
 
-impl ToolHandler for Handler {
+impl ToolExecutor<ToolInvocation> for Handler {
     type Output = SpawnAgentResult;
 
     fn tool_name(&self) -> ToolName {
@@ -31,10 +31,6 @@ impl ToolHandler for Handler {
 
     fn spec(&self) -> Option<ToolSpec> {
         Some(create_spawn_agent_tool_v1(self.options.clone()))
-    }
-
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Function { .. })
     }
 
     fn handle(
@@ -195,6 +191,12 @@ async fn handle_spawn_agent(
         agent_id: new_thread_id.to_string(),
         nickname,
     })
+}
+
+impl ToolHandler for Handler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Function { .. })
+    }
 }
 
 #[derive(Debug, Deserialize)]

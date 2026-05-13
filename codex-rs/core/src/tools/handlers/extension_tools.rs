@@ -16,6 +16,7 @@ use crate::tools::flat_tool_name;
 use crate::tools::hook_names::HookToolName;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 
 pub(crate) struct BundledToolOutput {
@@ -68,7 +69,7 @@ impl BundledToolHandler {
     }
 }
 
-impl ToolHandler for BundledToolHandler {
+impl ToolExecutor<ToolInvocation> for BundledToolHandler {
     type Output = BundledToolOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -79,6 +80,30 @@ impl ToolHandler for BundledToolHandler {
         Some(self.spec.clone())
     }
 
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+        let arguments = self
+            .arguments_from_payload(&invocation.payload)
+            .ok_or_else(|| {
+                FunctionCallError::Fatal(format!(
+                    "tool {} invoked with incompatible payload",
+                    self.bundle.tool_name()
+                ))
+            })?
+            .to_string();
+        let value = self
+            .bundle
+            .executor()
+            .execute(codex_tool_api::ToolCall {
+                call_id: invocation.call_id,
+                arguments,
+            })
+            .await
+            .map_err(map_extension_tool_error)?;
+        Ok(BundledToolOutput { value })
+    }
+}
+
+impl ToolHandler for BundledToolHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         self.arguments_from_payload(payload).is_some()
     }
@@ -104,28 +129,6 @@ impl ToolHandler for BundledToolHandler {
             tool_response: result
                 .post_tool_use_response(&invocation.call_id, &invocation.payload)?,
         })
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let arguments = self
-            .arguments_from_payload(&invocation.payload)
-            .ok_or_else(|| {
-                FunctionCallError::Fatal(format!(
-                    "tool {} invoked with incompatible payload",
-                    self.bundle.tool_name()
-                ))
-            })?
-            .to_string();
-        let value = self
-            .bundle
-            .executor()
-            .execute(codex_tool_api::ToolCall {
-                call_id: invocation.call_id,
-                arguments,
-            })
-            .await
-            .map_err(map_extension_tool_error)?;
-        Ok(BundledToolOutput { value })
     }
 }
 

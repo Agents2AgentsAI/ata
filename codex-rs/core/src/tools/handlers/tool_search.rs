@@ -3,6 +3,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::ToolSearchOutput;
 use crate::tools::handlers::tool_search_spec::create_tool_search_tool;
+use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolHandler;
 use crate::tools::tool_search_entry::ToolSearchEntry;
 use crate::tools::tool_search_entry::ToolSearchInfo;
@@ -51,7 +52,7 @@ impl ToolSearchHandler {
     }
 }
 
-impl ToolHandler for ToolSearchHandler {
+impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
     type Output = ToolSearchOutput;
 
     fn tool_name(&self) -> ToolName {
@@ -107,6 +108,8 @@ impl ToolHandler for ToolSearchHandler {
         Ok(ToolSearchOutput { tools })
     }
 }
+
+impl ToolHandler for ToolSearchHandler {}
 
 impl ToolSearchHandler {
     fn search(
