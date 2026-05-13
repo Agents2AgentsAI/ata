@@ -2615,6 +2615,7 @@ impl Config {
                 .and_then(|config| config.path.as_ref())
                 .or_else(|| base.and_then(|config| config.path.as_ref()))
                 .cloned()
+                .or_else(|| Some("/ps/mcp".to_string()))
         } else {
             None
         };
