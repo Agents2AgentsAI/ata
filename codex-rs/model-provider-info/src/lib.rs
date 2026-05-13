@@ -34,6 +34,17 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
+
+/// Version string sent in the `version` request header to OpenAI's Responses
+/// API (and `/models`). Upstream Codex sends `env!("CARGO_PKG_VERSION")` here,
+/// which for them is a recent Codex release (e.g. `0.130.x`). ATA's own crate
+/// version is far lower, and OpenAI's backend gates newer models on the
+/// reported Codex version — e.g. requesting `gpt-5.5` with a low version yields
+/// `"The 'gpt-5.5' model requires a newer version of Codex."`. So we report the
+/// upstream Codex version this tree is based on instead of ATA's version. Bump
+/// this on every upstream merge (the `verify-openai-model-override` justfile
+/// recipe is the reminder); keep it >= the upstream version we merged.
+pub const OPENAI_CLIENT_VERSION_OVERRIDE: &str = "0.130.0";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
@@ -346,9 +357,12 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "version".to_string(),
+                    OPENAI_CLIENT_VERSION_OVERRIDE.to_string(),
+                )]
+                .into_iter()
+                .collect(),
             ),
             env_http_headers: Some(
                 [
