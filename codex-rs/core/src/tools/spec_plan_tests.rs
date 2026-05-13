@@ -1709,7 +1709,7 @@ fn search_tool_requires_model_capability_and_enabled_feature() {
 }
 
 #[test]
-fn search_tool_is_hidden_when_only_deferred_namespace_tools_are_available() {
+fn no_search_tool_when_namespaces_disabled() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::ToolSearch);
@@ -2415,7 +2415,6 @@ fn build_specs_with_discoverable_tools(
             dynamic_tools,
             default_agent_type_description: DEFAULT_AGENT_TYPE_DESCRIPTION,
             wait_agent_timeouts: wait_agent_timeout_options(),
-            tool_search_entries: &[],
         },
     );
     builder.build()

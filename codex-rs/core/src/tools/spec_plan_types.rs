@@ -14,7 +14,6 @@ pub struct ToolRegistryBuildParams<'a> {
     pub dynamic_tools: &'a [DynamicToolSpec],
     pub default_agent_type_description: &'a str,
     pub wait_agent_timeouts: WaitAgentTimeoutOptions,
-    pub tool_search_entries: &'a [crate::tools::tool_search_entry::ToolSearchEntry],
 }
 
 pub(crate) fn agent_type_description(
