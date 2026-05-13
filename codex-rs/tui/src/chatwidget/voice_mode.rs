@@ -927,6 +927,10 @@ pub(crate) struct VoiceModeState {
     /// When true, this state was lazily created for on-demand TTS only,
     /// not full voice mode (no STT, no "Hold Space" prompt).
     pub(crate) tts_only: bool,
+    /// PID of the currently-spawned `say` subprocess (macOS TTS backend).
+    /// Shared with `say_worker_loop` so `pause_tts`/`resume_tts` can send
+    /// SIGSTOP/SIGCONT — the `say` backend has no cpal player to pause.
+    pub(crate) say_child_pid: Arc<std::sync::Mutex<Option<u32>>>,
     // ─── Reading view Space tap/hold ──────────────────────────────────
     /// When Space was pressed in the reading view (for tap/hold detection).
     pub(crate) space_press_at: Option<Instant>,
@@ -995,6 +999,7 @@ impl VoiceModeState {
             tts_data_complete: false,
             tts_block_break_pending: false,
             tts_only: false,
+            say_child_pid: Arc::new(std::sync::Mutex::new(None)),
             space_press_at: None,
             space_was_paused: false,
             #[cfg(test)]
@@ -1046,6 +1051,18 @@ impl VoiceModeState {
                 player.resume();
             }
         }
+        // For the `say` backend: wake any SIGSTOP'd child so its worker loop
+        // can finish waiting on it; the bumped generation below + the worker's
+        // cleanup path will then SIGKILL it on the way out.
+        #[cfg(target_os = "macos")]
+        if let Ok(g) = self.say_child_pid.lock()
+            && let Some(pid) = *g
+        {
+            // SAFETY: kill(2) is a well-defined POSIX syscall.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGCONT);
+            }
+        }
         // Bump generation so any in-flight tasks discard their audio.
         self.tts_generation.fetch_add(1, Ordering::SeqCst);
         // Replace the ordering lock so new tasks don't queue behind stale ones.
@@ -1077,6 +1094,17 @@ impl VoiceModeState {
         if let Some(ref player) = self.audio_player {
             player.pause();
         }
+        // macOS `say` backend has no cpal player. Pause the subprocess via SIGSTOP.
+        #[cfg(target_os = "macos")]
+        if let Ok(guard) = self.say_child_pid.lock()
+            && let Some(pid) = *guard
+        {
+            // SAFETY: kill(2) is a well-defined POSIX syscall; sending SIGSTOP to
+            // a pid we just spawned cannot violate any Rust safety invariant.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGSTOP);
+            }
+        }
         self.cancel_highlight_tick();
     }
 
@@ -1084,6 +1112,14 @@ impl VoiceModeState {
     pub(crate) fn resume_tts(&mut self) {
         if let Some(ref player) = self.audio_player {
             player.resume();
+        }
+        #[cfg(target_os = "macos")]
+        if let Ok(guard) = self.say_child_pid.lock()
+            && let Some(pid) = *guard
+        {
+            unsafe {
+                libc::kill(pid as i32, libc::SIGCONT);
+            }
         }
     }
 
@@ -2194,6 +2230,7 @@ impl super::ChatWidget {
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
                 let backend = vc.tts_backend.unwrap_or_default();
+                let say_pid = state.say_child_pid.clone();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
@@ -2201,7 +2238,7 @@ impl super::ChatWidget {
                 tokio::spawn(async move {
                     match backend {
                         TtsBackend::Say => {
-                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
                         }
                         TtsBackend::Elevenlabs => {
                             tts_worker_loop(
@@ -2267,6 +2304,7 @@ impl super::ChatWidget {
                 in_flight.fetch_add(1, Ordering::SeqCst);
                 let proxy = build_elevenlabs_proxy(&self.auth_manager);
                 let backend = vc.tts_backend.unwrap_or_default();
+                let say_pid = state.say_child_pid.clone();
 
                 let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
                 state.tts_worker_tx = Some(worker_tx);
@@ -2274,7 +2312,7 @@ impl super::ChatWidget {
                 tokio::spawn(async move {
                     match backend {
                         TtsBackend::Say => {
-                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
                         }
                         TtsBackend::Elevenlabs => {
                             tts_worker_loop(
@@ -4098,6 +4136,7 @@ impl super::ChatWidget {
             in_flight.fetch_add(1, Ordering::SeqCst);
             let proxy = build_elevenlabs_proxy(&self.auth_manager);
             let backend = vc.tts_backend.unwrap_or_default();
+            let say_pid = state.say_child_pid.clone();
 
             let (worker_tx, worker_rx) = tokio::sync::mpsc::unbounded_channel();
             state.tts_worker_tx = Some(worker_tx);
@@ -4105,7 +4144,7 @@ impl super::ChatWidget {
             tokio::spawn(async move {
                 match backend {
                     TtsBackend::Say => {
-                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen).await;
+                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
                     }
                     TtsBackend::Elevenlabs => {
                         tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
@@ -4655,6 +4694,7 @@ async fn say_worker_loop(
     in_flight: Arc<AtomicUsize>,
     gen_ref: Arc<AtomicUsize>,
     my_gen: usize,
+    say_child_pid: Arc<std::sync::Mutex<Option<u32>>>,
 ) {
     use tokio::process::Command;
 
@@ -4684,6 +4724,9 @@ async fn say_worker_loop(
                 // Wait for the previous sentence so playback is sequential.
                 if let Some(mut child) = current.take() {
                     let _ = child.wait().await;
+                    if let Ok(mut g) = say_child_pid.lock() {
+                        *g = None;
+                    }
                 }
                 tracing::info!(
                     "[TTS-TIMING] say_worker_loop: spawning say for {} chars",
@@ -4700,6 +4743,9 @@ async fn say_worker_loop(
                     .spawn();
                 match child {
                     Ok(c) => {
+                        if let (Some(pid), Ok(mut g)) = (c.id(), say_child_pid.lock()) {
+                            *g = Some(pid);
+                        }
                         current = Some(c);
                     }
                     Err(err) => {
@@ -4715,6 +4761,9 @@ async fn say_worker_loop(
                 tracing::info!("[TTS-TIMING] say_worker_loop: Finish/None received");
                 if let Some(mut child) = current.take() {
                     let _ = child.wait().await;
+                    if let Ok(mut g) = say_child_pid.lock() {
+                        *g = None;
+                    }
                 }
                 break;
             }
@@ -4722,10 +4771,21 @@ async fn say_worker_loop(
     }
 
     // If we exited due to generation change, kill any in-flight speech so the
-    // user hears the barge-in cleanly.
+    // user hears the barge-in cleanly. If the child was paused via SIGSTOP,
+    // start_kill won't be delivered until we resume it.
     if let Some(mut child) = current.take() {
+        #[cfg(target_os = "macos")]
+        if let Some(pid) = child.id() {
+            // SAFETY: kill(2) is a well-defined POSIX syscall.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGCONT);
+            }
+        }
         let _ = child.start_kill();
         let _ = child.wait().await;
+        if let Ok(mut g) = say_child_pid.lock() {
+            *g = None;
+        }
     }
 
     let last = in_flight.fetch_sub(1, Ordering::SeqCst) == 1;
