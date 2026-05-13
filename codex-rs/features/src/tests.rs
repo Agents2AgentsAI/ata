@@ -482,6 +482,8 @@ fn multi_agent_v2_feature_config_deserializes_table() {
 enabled = true
 max_concurrent_threads_per_session = 4
 min_wait_timeout_ms = 2500
+max_wait_timeout_ms = 120000
+default_wait_timeout_ms = 30000
 usage_hint_enabled = false
 usage_hint_text = "Custom delegation guidance."
 root_agent_usage_hint_text = "Root guidance."
@@ -502,6 +504,8 @@ non_code_mode_only = true
             enabled: Some(true),
             max_concurrent_threads_per_session: Some(4),
             min_wait_timeout_ms: Some(2500),
+            max_wait_timeout_ms: Some(120000),
+            default_wait_timeout_ms: Some(30000),
             usage_hint_enabled: Some(false),
             usage_hint_text: Some("Custom delegation guidance.".to_string()),
             root_agent_usage_hint_text: Some("Root guidance.".to_string()),
@@ -538,6 +542,8 @@ usage_hint_enabled = false
             enabled: None,
             max_concurrent_threads_per_session: None,
             min_wait_timeout_ms: None,
+            max_wait_timeout_ms: None,
+            default_wait_timeout_ms: None,
             usage_hint_enabled: Some(false),
             usage_hint_text: None,
             root_agent_usage_hint_text: None,

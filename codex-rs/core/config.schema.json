@@ -1465,6 +1465,12 @@
     "MultiAgentV2ConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "default_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "enabled": {
           "type": "boolean"
         },
@@ -1476,10 +1482,16 @@
           "minimum": 1.0,
           "type": "integer"
         },
+        "max_wait_timeout_ms": {
+          "format": "int64",
+          "maximum": 3600000.0,
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "min_wait_timeout_ms": {
           "format": "int64",
           "maximum": 3600000.0,
-          "minimum": 1.0,
+          "minimum": 0.0,
           "type": "integer"
         },
         "non_code_mode_only": {
