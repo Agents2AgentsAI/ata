@@ -2238,7 +2238,10 @@ impl super::ChatWidget {
                 tokio::spawn(async move {
                     match backend {
                         TtsBackend::Say => {
-                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
+                            say_worker_loop(
+                                vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid,
+                            )
+                            .await;
                         }
                         TtsBackend::Elevenlabs => {
                             tts_worker_loop(
@@ -2312,7 +2315,10 @@ impl super::ChatWidget {
                 tokio::spawn(async move {
                     match backend {
                         TtsBackend::Say => {
-                            say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
+                            say_worker_loop(
+                                vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid,
+                            )
+                            .await;
                         }
                         TtsBackend::Elevenlabs => {
                             tts_worker_loop(
@@ -4144,7 +4150,8 @@ impl super::ChatWidget {
             tokio::spawn(async move {
                 match backend {
                     TtsBackend::Say => {
-                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid).await;
+                        say_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, say_pid)
+                            .await;
                     }
                     TtsBackend::Elevenlabs => {
                         tts_worker_loop(vc, worker_rx, tx, in_flight, gen_ref, spawn_gen, proxy)
