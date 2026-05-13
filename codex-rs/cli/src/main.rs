@@ -46,6 +46,7 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod desktop_app;
+mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
@@ -53,6 +54,7 @@ mod wsl_paths;
 
 use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use doctor::DoctorCommand;
 
 use codex_core::build_models_manager;
 use codex_core::config::ConfigBuilder;
@@ -141,6 +143,9 @@ enum Subcommand {
 
     /// Update Codex to the latest version.
     Update,
+
+    /// Diagnose local Codex installation, config, auth, and runtime health.
+    Doctor(DoctorCommand),
 
     /// Run commands within a Codex-provided sandbox.
     Sandbox(SandboxArgs),
@@ -1163,6 +1168,20 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             )?;
             run_update_command()?;
         }
+        Some(Subcommand::Doctor(doctor_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "doctor",
+            )?;
+            doctor::run_doctor(
+                doctor_cli,
+                root_config_overrides.clone(),
+                &interactive,
+                &arg0_paths,
+            )
+            .await?;
+        }
         Some(Subcommand::Cloud(mut cloud_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1688,7 +1707,8 @@ fn unsupported_subcommand_name_for_strict_config(
         | Some(Subcommand::Review(_))
         | Some(Subcommand::McpServer(_))
         | Some(Subcommand::Resume(_))
-        | Some(Subcommand::Fork(_)) => None,
+        | Some(Subcommand::Fork(_))
+        | Some(Subcommand::Doctor(_)) => None,
         Some(Subcommand::AppServer(app_server)) if app_server.subcommand.is_none() => None,
         Some(Subcommand::AppServer(app_server)) => {
             Some(app_server_subcommand_name(app_server.subcommand.as_ref()))
