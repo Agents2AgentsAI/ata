@@ -154,8 +154,12 @@ verify-openai-model-override release_version="0.1.0-rc.1":
 
     cargo test -p codex-core config_schema_matches_fixture -- --nocapture
     cargo test -p codex-core test_precedence_fixture_with_gpt5_profile -- --nocapture
-    cargo test -p codex-core refresh_available_models_uses_default_client_version -- --nocapture
-    cargo test -p codex-core refresh_available_models_refetches_when_version_mismatch -- --nocapture
+    # The OpenAI `version` request header must report OPENAI_CLIENT_VERSION_OVERRIDE
+    # (the upstream Codex version this tree is based on), not ATA's crate version —
+    # otherwise OpenAI's backend rejects newer models ("... requires a newer version
+    # of Codex."). This is the regression upstream merges keep re-introducing.
+    cargo test -p codex-model-provider-info openai_provider_version_header_uses_override_not_crate_version -- --nocapture
+    cargo test -p codex-models-manager refresh_available_models_refetches_when_version_mismatch -- --nocapture
 
     node --check ../codex-cli/bin/ata.js
 

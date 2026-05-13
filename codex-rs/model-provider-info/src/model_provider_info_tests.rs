@@ -464,3 +464,25 @@ fn built_in_model_providers_registers_login_targets() {
         );
     }
 }
+
+#[test]
+fn openai_provider_version_header_uses_override_not_crate_version() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let version = provider
+        .http_headers
+        .as_ref()
+        .and_then(|h| h.get("version"))
+        .map(String::as_str);
+    assert_eq!(
+        version,
+        Some(OPENAI_CLIENT_VERSION_OVERRIDE),
+        "the OpenAI `version` header must report the upstream Codex version override, \
+         not ATA's crate version — otherwise OpenAI rejects newer models \
+         (\"... requires a newer version of Codex\")"
+    );
+    assert_ne!(
+        version,
+        Some(env!("CARGO_PKG_VERSION")),
+        "the OpenAI `version` header must NOT be env!(\"CARGO_PKG_VERSION\")"
+    );
+}
