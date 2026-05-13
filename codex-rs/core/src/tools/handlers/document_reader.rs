@@ -1377,27 +1377,18 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 }
 
-                // Mirror the patch in the cache.
+                // Capture the reopen payload from the PRE-patch cache so the
+                // frontend can re-open a closed reader and then apply the
+                // subsequent PatchDocumentSection event exactly once. If we
+                // built reopen_payload from the post-patch cache, an already-
+                // open reader would apply the change twice (once via the
+                // PresentDocument re-open, once via the patch event).
                 let (streaming_reminder, reopen_payload) = {
                     let mut cache = doc_cache.lock();
-                    let reminder = if let Some(doc) = cache.get_mut(&args.document_id) {
-                        if let Some(section) = doc.sections.get_mut(args.section_index)
-                            && section.content.contains(&args.old_text)
-                        {
-                            section.content =
-                                section.content.replacen(&args.old_text, &args.new_text, 1);
-                            // Patch defaults to foldable so an inserted answer
-                            // is collapsible with `f` — see
-                            // READING_VIEW_FOLDABLE_GUIDANCE.
-                            section.foldable = args.foldable.unwrap_or(true);
-                            section.summary = args.summary.clone();
-                        }
-                        streaming_unfilled_reminder(doc)
-                    } else {
-                        String::new()
-                    };
-                    // When not streaming, capture payload to re-open the
-                    // reading view in case the user closed it.
+                    let reminder = cache
+                        .get(&args.document_id)
+                        .map(streaming_unfilled_reminder)
+                        .unwrap_or_default();
                     let reopen = if reminder.is_empty() {
                         cache
                             .get(&args.document_id)
@@ -1405,6 +1396,19 @@ impl ToolHandler for DocumentReaderHandler {
                     } else {
                         None
                     };
+                    // Now mirror the patch in the cache so subsequent reads
+                    // (e.g. for streaming reminders, future reopens) see it.
+                    if let Some(doc) = cache.get_mut(&args.document_id)
+                        && let Some(section) = doc.sections.get_mut(args.section_index)
+                        && section.content.contains(&args.old_text)
+                    {
+                        section.content =
+                            section.content.replacen(&args.old_text, &args.new_text, 1);
+                        // Patch defaults to foldable so an inserted answer is
+                        // collapsible with `f` — see READING_VIEW_FOLDABLE_GUIDANCE.
+                        section.foldable = args.foldable.unwrap_or(true);
+                        section.summary = args.summary.clone();
+                    }
                     (reminder, reopen)
                 };
 
