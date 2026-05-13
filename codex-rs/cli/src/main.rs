@@ -1496,6 +1496,7 @@ async fn run_debug_prompt_input_command(
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe,
         show_raw_agent_reasoning: shared.oss.then_some(true),
         ephemeral: Some(true),
+        bypass_hook_trust: shared.bypass_hook_trust.then_some(true),
         additional_writable_roots: shared.add_dir,
         ..Default::default()
     };
@@ -2364,6 +2365,18 @@ mod tests {
             .as_ref(),
         );
         assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_merges_bypass_hook_trust_flag() {
+        let interactive = finalize_resume_from_args(
+            ["codex", "resume", "--dangerously-bypass-hook-trust"].as_ref(),
+        );
+
+        assert!(interactive.bypass_hook_trust);
         assert!(interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id, None);
