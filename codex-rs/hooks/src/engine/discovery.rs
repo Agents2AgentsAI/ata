@@ -106,7 +106,7 @@ pub(crate) fn discover_handlers(
             if !policy.allows(&policy_source) {
                 continue;
             }
-            let json_hooks = load_hooks_json(layer.config_folder().as_deref(), &mut warnings);
+            let json_hooks = load_hooks_json(layer.hooks_config_folder().as_deref(), &mut warnings);
             let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
 
             if let (Some((json_source_path, json_events)), Some((toml_source_path, toml_events))) =
@@ -346,7 +346,10 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         ConfigLayerSource::System { file }
         | ConfigLayerSource::User { file }
         | ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => file.clone(),
-        ConfigLayerSource::Project { dot_codex_folder } => dot_codex_folder.join(CONFIG_TOML_FILE),
+        ConfigLayerSource::Project { dot_codex_folder } => layer
+            .hooks_config_folder()
+            .unwrap_or_else(|| dot_codex_folder.clone())
+            .join(CONFIG_TOML_FILE),
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
