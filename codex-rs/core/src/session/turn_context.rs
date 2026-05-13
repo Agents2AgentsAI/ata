@@ -69,6 +69,7 @@ pub struct TurnContext {
     /// The session's absolute working directory. All relative paths provided
     /// by the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
+    #[deprecated(note = "use the selected turn environment cwd instead")]
     pub(crate) cwd: AbsolutePathBuf,
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
@@ -118,6 +119,7 @@ impl TurnContext {
             &self.permission_profile,
             &file_system_sandbox_policy,
             network_sandbox_policy,
+            #[allow(deprecated)]
             &self.cwd,
         )
     }
@@ -253,6 +255,7 @@ impl TurnContext {
             session_source: self.session_source.clone(),
             thread_source: self.thread_source,
             environments: self.environments.clone(),
+            #[allow(deprecated)]
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -288,7 +291,9 @@ impl TurnContext {
         }
     }
 
+    #[deprecated(note = "resolve paths from the selected turn environment cwd instead")]
     pub(crate) fn resolve_path(&self, path: Option<String>) -> AbsolutePathBuf {
+        #[allow(deprecated)]
         path.as_ref()
             .map_or_else(|| self.cwd.clone(), |path| self.cwd.join(path))
     }
@@ -314,6 +319,7 @@ impl TurnContext {
         );
         FileSystemSandboxContext {
             permissions,
+            #[allow(deprecated)]
             cwd: Some(self.cwd.clone()),
             windows_sandbox_level: self.windows_sandbox_level,
             windows_sandbox_private_desktop: self
@@ -332,6 +338,7 @@ impl TurnContext {
         let legacy_file_system_sandbox_policy =
             FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
                 &self.sandbox_policy(),
+                #[allow(deprecated)]
                 &self.cwd,
             );
         let file_system_sandbox_policy = self.file_system_sandbox_policy();
@@ -349,6 +356,7 @@ impl TurnContext {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             trace_id: self.trace_id.clone(),
+            #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -566,6 +574,7 @@ impl Session {
             session_source,
             thread_source: session_configuration.thread_source,
             environments,
+            #[allow(deprecated)]
             cwd,
             current_date: Some(current_date),
             timezone: Some(timezone),

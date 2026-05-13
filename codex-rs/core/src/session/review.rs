@@ -107,6 +107,7 @@ pub(super) async fn spawn_review_thread(
         sess.thread_id().to_string(),
         parent_turn_context.thread_source,
         review_turn_id.clone(),
+        #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
@@ -143,6 +144,7 @@ pub(super) async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
+        #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
