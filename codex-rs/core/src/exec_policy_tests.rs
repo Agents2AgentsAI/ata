@@ -612,6 +612,7 @@ async fn loads_policies_from_multiple_config_layers() -> anyhow::Result<()> {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: user_config_toml,
+                profile: None,
             },
             TomlValue::Table(Default::default()),
         ),

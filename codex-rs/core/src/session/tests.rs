@@ -12,6 +12,7 @@ use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
+use codex_config::LoaderOverrides;
 use codex_config::NetworkConstraints;
 use codex_config::NetworkDomainPermissionToml;
 use codex_config::NetworkDomainPermissionsToml;
@@ -1208,6 +1209,70 @@ async fn reload_user_config_layer_updates_effective_apps_config() {
 
     assert!(!app.enabled);
     assert_eq!(app.destructive_enabled, Some(false));
+}
+
+#[tokio::test]
+async fn reload_user_config_layer_updates_base_and_selected_profile_layers() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let codex_home = session.codex_home().await;
+    std::fs::create_dir_all(&codex_home).expect("create codex home");
+    let base_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let profile_config_path = codex_home.join("work.config.toml");
+    std::fs::write(
+        &base_config_path,
+        "model = \"base\"\napproval_policy = \"on-failure\"\n",
+    )
+    .expect("write base user config");
+    std::fs::write(&profile_config_path, "model = \"profile-old\"\n")
+        .expect("write profile user config");
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(profile_config_path.abs()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await
+        .expect("load profile config");
+    {
+        let mut state = session.state.lock().await;
+        state.session_configuration.original_config_do_not_use = Arc::new(config);
+    }
+    std::fs::write(
+        &base_config_path,
+        "model = \"base\"\napproval_policy = \"never\"\n",
+    )
+    .expect("update base user config");
+    std::fs::write(&profile_config_path, "model = \"profile-new\"\n")
+        .expect("update profile user config");
+
+    session.reload_user_config_layer().await;
+
+    let config = session.get_config().await;
+    assert_eq!(
+        config
+            .config_layer_stack
+            .get_user_config_file()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::as_path),
+        Some(profile_config_path.as_path())
+    );
+    let effective_user_config = config
+        .config_layer_stack
+        .effective_user_config()
+        .expect("merged user config");
+    assert_eq!(
+        effective_user_config
+            .get("model")
+            .and_then(toml::Value::as_str),
+        Some("profile-new")
+    );
+    assert_eq!(
+        effective_user_config
+            .get("approval_policy")
+            .and_then(toml::Value::as_str),
+        Some("never")
+    );
 }
 
 #[tokio::test]

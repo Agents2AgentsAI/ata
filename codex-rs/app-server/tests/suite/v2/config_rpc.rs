@@ -82,6 +82,7 @@ sandbox_mode = "workspace-write"
         origins.get("model").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     let layers = layers.expect("layers present");
@@ -144,6 +145,7 @@ allowed_domains = ["example.com"]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -153,6 +155,7 @@ allowed_domains = ["example.com"]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     let layers = layers.expect("layers present");
@@ -297,6 +300,7 @@ default_tools_approval_mode = "prompt"
         origins.get("apps.app1.enabled").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -306,6 +310,7 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
     assert_eq!(
@@ -315,6 +320,7 @@ default_tools_approval_mode = "prompt"
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -459,6 +465,7 @@ writable_roots = [{}]
         origins.get("sandbox_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -485,6 +492,7 @@ writable_roots = [{}]
             .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
+            profile: None,
         }
     );
 
@@ -728,7 +736,10 @@ fn assert_layers_user_then_optional_system(
     assert_eq!(layers.len(), first_index + 2);
     assert_eq!(
         layers[first_index].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 1].name,
@@ -756,7 +767,10 @@ fn assert_layers_managed_user_then_optional_system(
     );
     assert_eq!(
         layers[first_index + 1].name,
-        ConfigLayerSource::User { file: user_file }
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None
+        }
     );
     assert!(matches!(
         layers[first_index + 2].name,

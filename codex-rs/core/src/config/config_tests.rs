@@ -7,6 +7,7 @@ use crate::config::edit::apply_blocking;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
+use codex_config::ProfileV2Name;
 use codex_config::RequirementSource;
 use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
@@ -3334,6 +3335,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
             ConfigLayerEntry::new(
                 codex_app_server_protocol::ConfigLayerSource::User {
                     file: user_file.clone(),
+                    profile: None,
                 },
                 toml::toml! {
                     [mcp_servers.session_overrides_user]
@@ -3388,6 +3390,7 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
             ConfigLayerEntry::new(
                 codex_app_server_protocol::ConfigLayerSource::User {
                     file: user_file.clone(),
+                    profile: None,
                 },
                 toml::toml! {
                     [mcp_servers.session_overrides_user]
@@ -3518,6 +3521,7 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
         vec![ConfigLayerEntry::new(
             codex_app_server_protocol::ConfigLayerSource::User {
                 file: user_file.clone(),
+                profile: None,
             },
             toml::toml! {
                 [features]
@@ -3544,7 +3548,10 @@ async fn rebuild_preserving_session_layers_refreshes_plugin_derived_mcp_config()
     .await?;
     let thread_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            codex_app_server_protocol::ConfigLayerSource::User { file: user_file },
+            codex_app_server_protocol::ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
             toml::toml! {
                 [features]
                 plugins = false
@@ -5490,6 +5497,52 @@ async fn set_model_updates_defaults() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn for_config_writes_selected_user_config_file() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let base_config = codex_home.path().join(CONFIG_TOML_FILE);
+    let selected_config = codex_home.path().join("work.config.toml");
+    tokio::fs::write(&base_config, r#"model_provider = "openai""#).await?;
+    tokio::fs::write(&selected_config, r#"model = "gpt-old""#).await?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(LoaderOverrides {
+            user_config_path: Some(selected_config.abs()),
+            user_config_profile: Some("work".parse().expect("profile-v2 name")),
+            ..LoaderOverrides::without_managed_config_for_tests()
+        })
+        .build()
+        .await?;
+
+    ConfigEditsBuilder::for_config(&config)
+        .set_model(Some("gpt-new"), Some(ReasoningEffort::High))
+        .apply()
+        .await?;
+
+    let selected_serialized = tokio::fs::read_to_string(&selected_config).await?;
+    let selected: ConfigToml = toml::from_str(&selected_serialized)?;
+    assert_eq!(selected.model.as_deref(), Some("gpt-new"));
+    assert_eq!(selected.model_reasoning_effort, Some(ReasoningEffort::High));
+    assert_eq!(
+        tokio::fs::read_to_string(&base_config).await?,
+        r#"model_provider = "openai""#
+    );
+
+    Ok(())
+}
+
+#[test]
+fn profile_v2_config_path_resolves_validated_names() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+    let profile_name: ProfileV2Name = "work".parse()?;
+    assert_eq!(
+        resolve_profile_v2_config_path(codex_home.path(), &profile_name),
+        codex_home.path().join("work.config.toml").abs()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn set_model_overwrites_existing_model() -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
     let config_path = codex_home.path().join(CONFIG_TOML_FILE);
@@ -6080,6 +6133,7 @@ config_file = "./agents/researcher.toml"
         vec![codex_config::ConfigLayerEntry::new(
             codex_app_server_protocol::ConfigLayerSource::User {
                 file: codex_home.path().join(CONFIG_TOML_FILE).abs(),
+                profile: None,
             },
             layer_config,
         )],
