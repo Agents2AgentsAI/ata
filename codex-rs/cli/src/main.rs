@@ -50,11 +50,13 @@ mod desktop_app;
 mod doctor;
 mod marketplace_cmd;
 mod mcp_cmd;
+mod plugin_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
-use crate::marketplace_cmd::MarketplaceCli;
 use crate::mcp_cmd::McpCli;
+use crate::plugin_cmd::PluginCli;
+use crate::plugin_cmd::PluginSubcommand;
 use doctor::DoctorCommand;
 
 use codex_config::LoaderOverrides;
@@ -187,22 +189,6 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
-}
-
-#[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin")]
-struct PluginCli {
-    #[clap(flatten)]
-    pub config_overrides: CliConfigOverrides,
-
-    #[command(subcommand)]
-    subcommand: PluginSubcommand,
-}
-
-#[derive(Debug, clap::Subcommand)]
-enum PluginSubcommand {
-    /// Manage plugin marketplaces for Codex.
-    Marketplace(MarketplaceCli),
 }
 
 #[derive(Debug, Parser)]
@@ -947,9 +933,27 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             } = plugin_cli;
             prepend_config_flags(&mut config_overrides, root_config_overrides.clone());
             match subcommand {
+                PluginSubcommand::Add(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_add(overrides, args).await?;
+                }
+                PluginSubcommand::List(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_list(overrides, args).await?;
+                }
                 PluginSubcommand::Marketplace(mut marketplace_cli) => {
                     prepend_config_flags(&mut marketplace_cli.config_overrides, config_overrides);
                     marketplace_cli.run().await?;
+                }
+                PluginSubcommand::Remove(args) => {
+                    let overrides = config_overrides
+                        .parse_overrides()
+                        .map_err(anyhow::Error::msg)?;
+                    plugin_cmd::run_plugin_remove(overrides, args).await?;
                 }
             }
         }
@@ -2339,6 +2343,7 @@ mod tests {
 
         for (subcommand, usage) in [
             ("add", "Usage: codex plugin marketplace add"),
+            ("list", "Usage: codex plugin marketplace list"),
             ("upgrade", "Usage: codex plugin marketplace upgrade"),
             ("remove", "Usage: codex plugin marketplace remove"),
         ] {
@@ -2361,6 +2366,45 @@ mod tests {
         let cli =
             MultitoolCli::try_parse_from(["codex", "plugin", "marketplace", "upgrade", "debug"])
                 .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_add_parses_under_plugin() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "plugin",
+            "add",
+            "sample",
+            "--marketplace",
+            "debug",
+        ])
+        .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_list_parses_under_plugin() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "plugin", "list", "--marketplace", "debug"])
+                .expect("parse");
+
+        assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_remove_parses_under_plugin() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "plugin",
+            "remove",
+            "sample",
+            "--marketplace",
+            "debug",
+        ])
+        .expect("parse");
 
         assert!(matches!(cli.subcommand, Some(Subcommand::Plugin(_))));
     }
