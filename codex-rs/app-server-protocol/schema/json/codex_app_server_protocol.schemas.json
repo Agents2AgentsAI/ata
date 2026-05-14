@@ -7126,9 +7126,13 @@
             ]
           },
           "forced_chatgpt_workspace_id": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ForcedChatgptWorkspaceIds"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "forced_login_method": {
@@ -8696,6 +8700,20 @@
           "path"
         ],
         "type": "object"
+      },
+      "ForcedChatgptWorkspaceIds": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "description": "Backward-compatible API shape for ChatGPT workspace login restrictions."
       },
       "ForcedLoginMethod": {
         "enum": [
