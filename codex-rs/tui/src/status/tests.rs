@@ -32,6 +32,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
@@ -298,7 +300,9 @@ async fn status_permissions_named_read_only_profile_shows_builtin_label() {
         .permissions
         .set_permission_profile_with_active_profile(
             PermissionProfile::read_only(),
-            Some(ActivePermissionProfile::new(":read-only")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
         )
         .expect("set permission profile");
 
@@ -329,11 +333,12 @@ async fn status_permissions_read_only_profile_shows_additional_writable_roots() 
                 NetworkSandboxPolicy::Restricted,
             ),
             Some(
-                ActivePermissionProfile::new(":read-only").with_modifications(vec![
-                    ActivePermissionProfileModification::AdditionalWritableRoot {
-                        path: extra_root,
-                    },
-                ]),
+                ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY)
+                    .with_modifications(vec![
+                        ActivePermissionProfileModification::AdditionalWritableRoot {
+                            path: extra_root,
+                        },
+                    ]),
             ),
         )
         .expect("set permission profile");
@@ -357,7 +362,9 @@ async fn status_permissions_named_workspace_profile_shows_builtin_label() {
         .permissions
         .set_permission_profile_with_active_profile(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
         )
         .expect("set permission profile");
 
@@ -381,7 +388,9 @@ async fn status_permissions_workspace_auto_review_shows_reviewer_label() {
         .permissions
         .set_permission_profile_with_active_profile(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
         )
         .expect("set permission profile");
 
@@ -411,11 +420,12 @@ async fn status_permissions_named_profile_shows_additional_writable_roots() {
                 /*exclude_slash_tmp*/ false,
             ),
             Some(
-                ActivePermissionProfile::new(":workspace").with_modifications(vec![
-                    ActivePermissionProfileModification::AdditionalWritableRoot {
-                        path: extra_root,
-                    },
-                ]),
+                ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
+                    .with_modifications(vec![
+                        ActivePermissionProfileModification::AdditionalWritableRoot {
+                            path: extra_root,
+                        },
+                    ]),
             ),
         )
         .expect("set permission profile");
@@ -444,7 +454,9 @@ async fn status_permissions_broadened_workspace_profile_shows_builtin_label() {
                 /*exclude_tmpdir_env_var*/ false,
                 /*exclude_slash_tmp*/ false,
             ),
-            Some(ActivePermissionProfile::new(":workspace")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
         )
         .expect("set permission profile");
 
@@ -580,7 +592,9 @@ async fn status_snapshot_shows_auto_review_permissions() {
         .permissions
         .set_permission_profile_with_active_profile(
             PermissionProfile::workspace_write(),
-            Some(ActivePermissionProfile::new(":workspace")),
+            Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
+            )),
         )
         .expect("set permission profile");
 

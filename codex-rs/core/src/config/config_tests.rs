@@ -70,6 +70,9 @@ use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ActivePermissionProfileModification;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
@@ -719,7 +722,7 @@ default_permissions = "workspace"
 [permissions.workspace.filesystem]
 ":minimal" = "read"
 
-[permissions.workspace.filesystem.":project_roots"]
+[permissions.workspace.filesystem.":workspace_roots"]
 "." = "write"
 "docs" = "read"
 
@@ -750,7 +753,7 @@ allow_upstream_proxy = false
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
                             ),
                             (
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("docs".to_string(), FileSystemAccessMode::Read),
@@ -1304,7 +1307,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                                 FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
                             ),
                             (
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("docs".to_string(), FileSystemAccessMode::Read),
@@ -1604,7 +1607,7 @@ async fn permission_profile_override_preserves_configured_network_policy_without
 }
 
 #[tokio::test]
-async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
+async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     tokio::fs::write(cwd.path().join(".git"), "gitdir: nowhere").await?;
@@ -1619,7 +1622,7 @@ async fn project_root_glob_none_compiles_to_filesystem_pattern_entry() -> std::i
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: Some(2),
                             entries: BTreeMap::from([(
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([
                                     (".".to_string(), FileSystemAccessMode::Write),
                                     ("**/*.env".to_string(), FileSystemAccessMode::None),
@@ -1729,7 +1732,7 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
+            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
             ..Default::default()
         },
         ConfigOverrides {
@@ -1747,7 +1750,7 @@ async fn default_permissions_can_select_builtin_profile_without_permissions_tabl
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some(":workspace")
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
     );
     assert!(
         policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
@@ -1770,7 +1773,7 @@ async fn default_permissions_read_only_applies_additional_writable_roots_as_modi
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some(":read-only".to_string()),
+            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string()),
             ..Default::default()
         },
         ConfigOverrides {
@@ -1790,9 +1793,13 @@ async fn default_permissions_read_only_applies_additional_writable_roots_as_modi
     assert_eq!(
         config.permissions.active_permission_profile(),
         Some(
-            ActivePermissionProfile::new(":read-only").with_modifications(vec![
-                ActivePermissionProfileModification::AdditionalWritableRoot { path: extra_root },
-            ])
+            ActivePermissionProfile::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY).with_modifications(
+                vec![
+                    ActivePermissionProfileModification::AdditionalWritableRoot {
+                        path: extra_root,
+                    },
+                ]
+            )
         )
     );
     Ok(())
@@ -1807,7 +1814,7 @@ async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_setti
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some(":workspace".to_string()),
+            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
                 writable_roots: vec![extra_root.path().abs()],
                 network_access: true,
@@ -1872,9 +1879,9 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
             .as_ref()
             .map(|active| active.id.as_str()),
         Some(if cfg!(target_os = "windows") {
-            ":read-only"
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY
         } else {
-            ":workspace"
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE
         })
     );
     if cfg!(target_os = "windows") {
@@ -2043,13 +2050,13 @@ async fn empty_config_defaults_to_builtin_read_only_without_trust_decision() -> 
 }
 
 #[tokio::test]
-async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io::Result<()> {
+async fn default_permissions_can_select_builtin_full_access_profile() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
 
     let config = Config::load_from_base_config_with_overrides(
         ConfigToml {
-            default_permissions: Some(":danger-no-sandbox".to_string()),
+            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
         },
         ConfigOverrides {
@@ -2070,7 +2077,33 @@ async fn default_permissions_can_select_builtin_no_sandbox_profile() -> std::io:
             .active_permission_profile()
             .as_ref()
             .map(|active| active.id.as_str()),
-        Some(":danger-no-sandbox")
+        Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn legacy_danger_no_sandbox_is_rejected() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some(":danger-no-sandbox".to_string()),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("legacy full-access alias should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "default_permissions refers to unknown built-in profile `:danger-no-sandbox`"
     );
     Ok(())
 }
@@ -2195,7 +2228,8 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> std::io::Result<()> {
+async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -2230,7 +2264,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_project_roots() -> s
         codex_home.abs(),
     )
     .await
-    .expect_err("nested entries outside :project_roots should be rejected");
+    .expect_err("nested entries outside :workspace_roots should be rejected");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
@@ -2397,7 +2431,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
 }
 
 #[tokio::test]
-async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io::Result<()> {
+async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
@@ -2412,7 +2446,7 @@ async fn permissions_profiles_reject_project_root_parent_traversal() -> std::io:
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
                             entries: BTreeMap::from([(
-                                ":project_roots".to_string(),
+                                ":workspace_roots".to_string(),
                                 FilesystemPermissionToml::Scoped(BTreeMap::from([(
                                     "../sibling".to_string(),
                                     FileSystemAccessMode::Read,
@@ -7319,7 +7353,9 @@ async fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-                active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
+                active_permission_profile: Some(ActivePermissionProfile::new(
+                    BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+                )),
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -7766,7 +7802,9 @@ async fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -7927,7 +7965,9 @@ async fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -8073,7 +8113,9 @@ async fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             permission_profile: Constrained::allow_any(PermissionProfile::read_only()),
-            active_permission_profile: Some(ActivePermissionProfile::new(":read-only")),
+            active_permission_profile: Some(ActivePermissionProfile::new(
+                BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
+            )),
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -9040,7 +9082,7 @@ async fn active_profile_is_cleared_when_requirements_force_fallback() -> std::io
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .harness_overrides(ConfigOverrides {
-            default_permissions: Some(":danger-no-sandbox".to_string()),
+            default_permissions: Some(BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string()),
             ..Default::default()
         })
         .cloud_requirements(CloudRequirementsLoader::new(async move {
