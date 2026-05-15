@@ -4795,6 +4795,57 @@ approval_mode = "approve"
     );
 }
 
+#[test]
+fn desktop_toml_round_trips_opaque_nested_values() -> anyhow::Result<()> {
+    let parsed = toml::from_str::<ConfigToml>(
+        r#"
+[desktop]
+appearanceTheme = "dark"
+selected-avatar-id = "codex"
+recentViews = ["threads", "settings"]
+
+[desktop.workspace]
+collapsed = true
+width = 320
+pane = { selected = "console", expanded = false }
+"#,
+    )?;
+
+    let desktop = parsed
+        .desktop
+        .as_ref()
+        .expect("desktop settings should deserialize");
+    assert_eq!(
+        desktop.get("appearanceTheme"),
+        Some(&serde_json::json!("dark"))
+    );
+    assert_eq!(
+        desktop.get("selected-avatar-id"),
+        Some(&serde_json::json!("codex"))
+    );
+    assert_eq!(
+        desktop.get("recentViews"),
+        Some(&serde_json::json!(["threads", "settings"]))
+    );
+    assert_eq!(
+        desktop.get("workspace"),
+        Some(&serde_json::json!({
+            "collapsed": true,
+            "width": 320,
+            "pane": {
+                "selected": "console",
+                "expanded": false,
+            },
+        }))
+    );
+
+    let serialized = toml::to_string(&parsed)?;
+    let reparsed = toml::from_str::<ConfigToml>(&serialized)?;
+    assert_eq!(reparsed.desktop, parsed.desktop);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

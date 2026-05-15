@@ -3475,6 +3475,13 @@
             "null"
           ]
         },
+        "desktop": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "developer_instructions": {
           "type": [
             "string",
