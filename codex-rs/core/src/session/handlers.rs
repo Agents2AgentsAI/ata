@@ -319,7 +319,9 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
-    sess.enqueue_mailbox_communication(communication);
+    sess.input_queue
+        .enqueue_mailbox_communication(communication)
+        .await;
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -961,7 +963,9 @@ Approved action:
     }];
 
     if let Err(items) = sess.inject_response_items(items).await {
-        sess.queue_response_items_for_next_turn(items).await;
+        sess.input_queue
+            .queue_response_items_for_next_turn(items)
+            .await;
     }
 }
 
