@@ -2829,6 +2829,7 @@ dependencies = [
 name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-protocol",
  "codex-tools",
 ]
@@ -2962,6 +2963,7 @@ dependencies = [
 name = "codex-guardian"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
