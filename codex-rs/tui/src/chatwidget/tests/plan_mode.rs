@@ -819,6 +819,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         }],
         ReplayKind::ResumeInitialMessages,
     );
@@ -857,6 +858,7 @@ async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_com
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         }],
         ReplayKind::ResumeInitialMessages,
     );
@@ -1137,6 +1139,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 started_at: Some(0),
                 completed_at: None,
                 duration_ms: None,
+                background: None,
             },
         }),
         /*replay_kind*/ None,
@@ -1182,6 +1185,7 @@ async fn submit_user_message_queues_while_compaction_turn_is_running() {
                 started_at: None,
                 completed_at: Some(0),
                 duration_ms: None,
+                background: None,
             },
         }),
         /*replay_kind*/ None,

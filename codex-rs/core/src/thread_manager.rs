@@ -1244,6 +1244,8 @@ impl ThreadManagerState {
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
+            // Root session: constructs its own scheduling registries.
+            parent_scheduling: None,
         })
         .await?;
         let new_thread = self

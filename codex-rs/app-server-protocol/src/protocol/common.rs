@@ -538,6 +538,21 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadCompactStartResponse,
     },
+    // ATA scheduling: request a snapshot of cron/monitor/loop tasks for the
+    // thread. Response is empty; the actual snapshot arrives as a
+    // `SchedulingTasksSnapshot` notification.
+    SchedulingTasksList => "scheduling/tasks/list" {
+        params: v2::SchedulingTasksListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SchedulingTasksListResponse,
+    },
+    // ATA scheduling: delete one cron/monitor/loop task. Response is empty;
+    // the next `SchedulingTasksSnapshot` notification reflects the removal.
+    SchedulingTaskDelete => "scheduling/tasks/delete" {
+        params: v2::SchedulingTaskDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SchedulingTaskDeleteResponse,
+    },
     ThreadShellCommand => "thread/shellCommand" {
         params: v2::ThreadShellCommandParams,
         serialization: thread_id(params.thread_id),
@@ -1509,6 +1524,15 @@ server_notification_definitions! {
     AppendDocumentSection => "document/section/append" (v2::AppendDocumentSectionNotification),
     AddDocumentSection => "document/section/add" (v2::AddDocumentSectionNotification),
     PatchDocumentSection => "document/section/patch" (v2::PatchDocumentSectionNotification),
+
+    // ATA scheduling: snapshot response to `Op::ListSchedulingTasks` used by
+    // the `/scheduling` TUI panel.
+    SchedulingTasksSnapshot => "scheduling/tasks/snapshot" (v2::SchedulingTasksSnapshotNotification),
+    // ATA scheduling: per-line streamed output from a running monitor.
+    // Ephemeral — the TUI renders these for the user only; the LLM does not
+    // see them. Replaces the previous design of injecting each line as a
+    // user message into the conversation.
+    SchedulingMonitorOutputDelta => "scheduling/monitor/outputDelta" (v2::SchedulingMonitorOutputDeltaNotification),
 }
 
 client_notification_definitions! {

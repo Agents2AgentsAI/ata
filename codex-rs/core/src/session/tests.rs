@@ -3717,6 +3717,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -3740,6 +3741,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
             /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        tx_sub,
+        None,
     )
     .await;
 
@@ -3951,10 +3954,11 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
     let session = Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        tx_event,
+        tx_event: tx_event.clone(),
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
@@ -3971,6 +3975,13 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         services,
         document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
         next_internal_sub_id: AtomicU64::new(0),
+        cron_registry: None,
+        monitor_runtime: None,
+        loop_runtime: None,
+        scheduling_state_path: None,
+        submission_tx: tx_sub,
+        scheduling_is_root: false,
+        scheduling_event_tx: tx_event,
     };
 
     (session, turn_context)
@@ -4064,6 +4075,7 @@ async fn make_session_with_config_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
 
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -4087,6 +4099,8 @@ async fn make_session_with_config_and_rx(
             /*state_db*/ None,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        tx_sub,
+        None,
     )
     .await?;
 
@@ -4166,6 +4180,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         /*bundled_skills_enabled*/ true,
     ));
 
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
     let session = Session::new(
         session_configuration,
         Arc::clone(&config),
@@ -4196,6 +4211,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             ),
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
+        tx_sub,
+        None,
     )
     .await?;
 
@@ -5677,10 +5694,11 @@ where
     ));
 
     let (mailbox, mailbox_rx) = crate::agent::Mailbox::new();
+    let (tx_sub, _rx_sub) = async_channel::bounded(1);
     let session = Arc::new(Session {
         conversation_id: thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
-        tx_event,
+        tx_event: tx_event.clone(),
         agent_status: agent_status_tx,
         out_of_band_elicitation_paused: watch::channel(false).0,
         state: Mutex::new(state),
@@ -5697,6 +5715,13 @@ where
         services,
         document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
         next_internal_sub_id: AtomicU64::new(0),
+        cron_registry: None,
+        monitor_runtime: None,
+        loop_runtime: None,
+        scheduling_state_path: None,
+        submission_tx: tx_sub,
+        scheduling_is_root: false,
+        scheduling_event_tx: tx_event,
     });
 
     (session, turn_context, rx_event)

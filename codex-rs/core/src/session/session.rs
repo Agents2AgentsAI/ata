@@ -40,6 +40,51 @@ pub(crate) struct Session {
     /// its full body.
     pub(crate) document_cache: crate::tools::handlers::document_reader::DocumentCache,
     pub(super) next_internal_sub_id: AtomicU64,
+    /// Session-scoped registry of active cron jobs. `None` when
+    /// `Feature::Scheduling` is disabled — tool handlers surface a clear
+    /// "feature not enabled" error in that case rather than silently
+    /// no-opping.
+    pub(crate) cron_registry: Option<Arc<codex_scheduling::CronRegistry>>,
+    /// Session-scoped Monitor runtime (registry + per-monitor abort handles).
+    /// `None` when `Feature::Scheduling` is disabled.
+    pub(crate) monitor_runtime: Option<Arc<crate::scheduling_runtime::MonitorRuntime>>,
+    /// Session-scoped Loop runtime (registry + per-loop abort handles).
+    /// `None` when `Feature::Scheduling` is disabled.
+    pub(crate) loop_runtime: Option<Arc<crate::scheduling_runtime::LoopRuntime>>,
+    /// Phase 4: sidecar path where this session's cron/monitor/loop state is
+    /// persisted so it survives `/quit` + `ata resume`. `None` when scheduling
+    /// is disabled, or for sub-agent sessions whose registries are inherited
+    /// from the root (only the root persists; sub-agents share its view).
+    pub(crate) scheduling_state_path: Option<std::path::PathBuf>,
+    /// Submission sender, cloned into the session so handlers running on the
+    /// session's tokio runtime can inject `Op::UserInput` back into the
+    /// running session (e.g., to surface a Monitor's stdout line as a turn).
+    pub(crate) submission_tx: Sender<Submission>,
+    /// True only on the session that *owns* its scheduling registries — i.e.,
+    /// constructed without a `ParentSchedulingHandle`. The cron firing engine
+    /// in `Codex::spawn` runs only when this is set, so a sub-agent that
+    /// inherits the parent's registry does not start a duplicate firing loop.
+    pub(crate) scheduling_is_root: bool,
+    /// Event channel that streams scheduling-related events (e.g. per-line
+    /// monitor output) to the **user-facing** TUI. For root sessions this is
+    /// just our own `tx_event`. For spawned sub-agents this is inherited
+    /// from the parent so events appear in the user's chat, not the
+    /// sub-agent's invisible session.
+    pub(crate) scheduling_event_tx: Sender<Event>,
+}
+
+/// Handle exposed by a session for spawned sub-agents to inherit, so the whole
+/// spawn tree shares one set of scheduling registries. Cloning the handle clones
+/// the inner `Arc`s — no deep state copy.
+#[derive(Clone)]
+pub(crate) struct ParentSchedulingHandle {
+    pub(crate) cron_registry: Option<Arc<codex_scheduling::CronRegistry>>,
+    pub(crate) monitor_runtime: Option<Arc<crate::scheduling_runtime::MonitorRuntime>>,
+    pub(crate) loop_runtime: Option<Arc<crate::scheduling_runtime::LoopRuntime>>,
+    pub(crate) submission_tx: Sender<Submission>,
+    /// Root session's event channel — sub-agents inherit this so monitor
+    /// streaming events surface in the user-facing chat.
+    pub(crate) scheduling_event_tx: Sender<Event>,
 }
 
 #[derive(Clone)]
@@ -350,6 +395,81 @@ impl Session {
         self.services.agent_control.session_id()
     }
 
+    /// Returns the cron registry when scheduling is enabled for this session.
+    pub(crate) fn cron_registry(&self) -> Option<&Arc<codex_scheduling::CronRegistry>> {
+        self.cron_registry.as_ref()
+    }
+
+    /// Snapshots the scheduling state this session is using (whether owned or
+    /// inherited) so a spawned sub-agent can keep using the same registries +
+    /// the same root submission channel.
+    pub(crate) fn scheduling_handle(&self) -> ParentSchedulingHandle {
+        ParentSchedulingHandle {
+            cron_registry: self.cron_registry.clone(),
+            monitor_runtime: self.monitor_runtime.clone(),
+            loop_runtime: self.loop_runtime.clone(),
+            submission_tx: self.submission_tx.clone(),
+            scheduling_event_tx: self.scheduling_event_tx.clone(),
+        }
+    }
+
+    /// Phase 4: write the current cron/monitor/loop state to the session's
+    /// sidecar file. No-op when scheduling is disabled or for sub-agent
+    /// sessions whose registries are inherited from the root (the root owns
+    /// persistence). Errors are logged but not propagated.
+    pub(crate) fn persist_scheduling_state(&self) {
+        let Some(path) = self.scheduling_state_path.as_ref() else {
+            return;
+        };
+        let cron_jobs = self
+            .cron_registry
+            .as_ref()
+            .map(|r| r.list())
+            .unwrap_or_default();
+        let monitors = self
+            .monitor_runtime
+            .as_ref()
+            .map(|r| r.registry.list())
+            .unwrap_or_default();
+        let loops = self
+            .loop_runtime
+            .as_ref()
+            .map(|r| r.registry.list())
+            .unwrap_or_default();
+        let snap = codex_scheduling::SchedulingSnapshot::new(cron_jobs, monitors, loops);
+        if let Err(err) = codex_scheduling::save_scheduling_state(path, &snap) {
+            tracing::warn!(
+                target: "codex_scheduling::persist",
+                error = %err,
+                path = %path.display(),
+                "scheduling.persist.save_failed"
+            );
+        }
+    }
+
+    /// Event channel for scheduling streaming events (monitor lines, etc.).
+    pub(crate) fn scheduling_event_tx(&self) -> Sender<Event> {
+        self.scheduling_event_tx.clone()
+    }
+
+    /// Returns the Monitor runtime when scheduling is enabled.
+    pub(crate) fn monitor_runtime(
+        &self,
+    ) -> Option<&Arc<crate::scheduling_runtime::MonitorRuntime>> {
+        self.monitor_runtime.as_ref()
+    }
+
+    /// Returns the Loop runtime when scheduling is enabled.
+    pub(crate) fn loop_runtime(&self) -> Option<&Arc<crate::scheduling_runtime::LoopRuntime>> {
+        self.loop_runtime.as_ref()
+    }
+
+    /// Clone of the session submission sender, for handlers that need to
+    /// inject `Op::UserInput` back into the running session.
+    pub(crate) fn submission_tx(&self) -> Sender<Submission> {
+        self.submission_tx.clone()
+    }
+
     #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     #[expect(
@@ -376,6 +496,8 @@ impl Session {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
+        submission_tx: Sender<Submission>,
+        parent_scheduling: Option<ParentSchedulingHandle>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -923,6 +1045,105 @@ impl Session {
                 watch::channel(false);
 
             let (mailbox, mailbox_rx) = Mailbox::new();
+            let scheduling_on = config
+                .features
+                .enabled(codex_features::Feature::Scheduling);
+            // Option A: when this session is a spawned sub-agent of a parent
+            // that already has scheduling state, inherit the parent's
+            // registries + root submission tx. Jobs and monitors registered by
+            // this sub-agent then outlive the sub-agent and fire into the
+            // root user-facing session. Root sessions (no handle) create fresh.
+            let (
+                cron_registry,
+                monitor_runtime,
+                loop_runtime,
+                effective_submission_tx,
+                effective_scheduling_event_tx,
+                is_root,
+                scheduling_state_path,
+            ) = match parent_scheduling {
+                Some(handle) => (
+                    handle.cron_registry,
+                    handle.monitor_runtime,
+                    handle.loop_runtime,
+                    handle.submission_tx,
+                    handle.scheduling_event_tx,
+                    false,
+                    None,
+                ),
+                None => {
+                    let cron = if scheduling_on {
+                        Some(Arc::new(codex_scheduling::CronRegistry::new()))
+                    } else {
+                        None
+                    };
+                    let mon = if scheduling_on {
+                        Some(Arc::new(crate::scheduling_runtime::MonitorRuntime::new()))
+                    } else {
+                        None
+                    };
+                    let lp = if scheduling_on {
+                        Some(Arc::new(crate::scheduling_runtime::LoopRuntime::new()))
+                    } else {
+                        None
+                    };
+                    let path = if scheduling_on {
+                        Some(codex_scheduling::scheduling_state_path(
+                            &config.codex_home,
+                            &thread_id.to_string(),
+                        ))
+                    } else {
+                        None
+                    };
+                    if let (Some(path), Some(cron_reg), Some(mon_rt), Some(lp_rt)) =
+                        (path.as_ref(), cron.as_ref(), mon.as_ref(), lp.as_ref())
+                    {
+                        match codex_scheduling::load_scheduling_state(path) {
+                            Ok(Some(snap)) => {
+                                let cron_n = snap.cron_jobs.len();
+                                cron_reg.hydrate(snap.cron_jobs);
+                                let mut interrupted_n = 0usize;
+                                let monitors = snap
+                                    .monitors
+                                    .into_iter()
+                                    .map(|mut m| {
+                                        if !m.status.is_terminal() {
+                                            m.status =
+                                                codex_scheduling::TaskStatus::Interrupted;
+                                            m.stopped_at = Some(chrono::Utc::now());
+                                            interrupted_n += 1;
+                                        }
+                                        m
+                                    })
+                                    .collect::<Vec<_>>();
+                                let mon_n = monitors.len();
+                                mon_rt.registry.hydrate(monitors);
+                                let loop_n = snap.loops.len();
+                                lp_rt.registry.hydrate(snap.loops);
+                                tracing::info!(
+                                    target: "codex_scheduling::persist",
+                                    thread_id = %thread_id,
+                                    cron_count = cron_n,
+                                    monitor_count = mon_n,
+                                    monitors_marked_interrupted = interrupted_n,
+                                    loop_count = loop_n,
+                                    "scheduling.resume.hydrated"
+                                );
+                            }
+                            Ok(None) => {}
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: "codex_scheduling::persist",
+                                    error = %err,
+                                    path = %path.display(),
+                                    "scheduling.persist.load_failed"
+                                );
+                            }
+                        }
+                    }
+                    (cron, mon, lp, submission_tx, tx_event.clone(), true, path)
+                }
+            };
             let sess = Arc::new(Session {
                 conversation_id: thread_id,
                 installation_id,
@@ -942,7 +1163,14 @@ impl Session {
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
-            next_internal_sub_id: AtomicU64::new(0),
+                next_internal_sub_id: AtomicU64::new(0),
+                cron_registry,
+                monitor_runtime,
+                loop_runtime,
+                scheduling_state_path,
+                submission_tx: effective_submission_tx,
+                scheduling_is_root: is_root,
+                scheduling_event_tx: effective_scheduling_event_tx,
             });
             #[cfg(feature = "lsp")]
             super::code_intel::setup_lsp_install_callback(&sess).await;

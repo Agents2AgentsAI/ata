@@ -94,6 +94,7 @@ mod command_popup;
 pub(crate) mod custom_prompt_view;
 pub(crate) mod document_reader;
 mod experimental_features_view;
+mod scheduling_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
@@ -197,6 +198,7 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
+pub(crate) use scheduling_view::SchedulingView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
 
@@ -1246,6 +1248,19 @@ impl BottomPane {
     pub(crate) fn notify_turn_complete(&mut self) {
         if let Some(view) = self.view_stack.last_mut() {
             view.handle_turn_complete();
+            self.request_redraw();
+        }
+    }
+
+    /// Forward a `/scheduling` snapshot to the active view (if it owns the
+    /// scheduling panel). Non-scheduling views ignore the call via the
+    /// `BottomPaneView` default impl.
+    pub(crate) fn notify_scheduling_snapshot(
+        &mut self,
+        snapshot: codex_protocol::protocol::SchedulingTasksSnapshotEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_scheduling_snapshot(snapshot);
             self.request_redraw();
         }
     }

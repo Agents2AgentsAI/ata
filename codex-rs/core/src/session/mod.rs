@@ -430,6 +430,11 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    /// If Some, this session is a sub-agent spawn and inherits its parent's
+    /// scheduling registries + root submission tx (Option A). If None, this is
+    /// a root session and constructs its own registries + starts the cron
+    /// firing engine.
+    pub(crate) parent_scheduling: Option<crate::session::session::ParentSchedulingHandle>,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -489,6 +494,7 @@ impl Codex {
             environment_selections,
             analytics_events_client,
             thread_store,
+            parent_scheduling,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -674,6 +680,8 @@ impl Codex {
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
+            tx_sub.clone(),
+            parent_scheduling,
         )
         .await
         .map_err(|e| {
@@ -689,6 +697,198 @@ impl Codex {
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
         });
+        // Two cron mechanisms now coexist:
+        //
+        // 1. OS cron (persistent across ata exit) — fired by the system
+        //    crontab daemon, see `codex_scheduling::os_cron`. Nothing to
+        //    spawn here for that path.
+        //
+        // 2. In-session cron (this block) — clock-aligned schedules that
+        //    live inside the running ata session and die when it closes.
+        //    Spawned ONLY for root sessions.
+        if session.scheduling_is_root
+            && let Some(cron_registry) = session.cron_registry.clone()
+        {
+            let tx_sub_for_cron = session.submission_tx.clone();
+            let session_weak = Arc::downgrade(&session);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+                tick.tick().await; // skip the immediate first tick
+                loop {
+                    tick.tick().await;
+                    let Some(session_alive) = session_weak.upgrade() else {
+                        break;
+                    };
+                    let due = cron_registry.take_due(chrono::Utc::now());
+                    let any_fired = !due.is_empty();
+                    for (id, prompt, background) in due {
+                        tracing::info!(
+                            target: "codex_scheduling::cron",
+                            task_id = %id,
+                            background = background,
+                            "cron.fired (in-session)"
+                        );
+                        let op = Op::UserInput {
+                            items: vec![UserInput::Text {
+                                text: prompt,
+                                text_elements: Vec::new(),
+                            }],
+                            environments: None,
+                            final_output_json_schema: None,
+                            responsesapi_client_metadata: None,
+                        };
+                        let prefix = if background { "cronbg" } else { "cron" };
+                        let sub = Submission {
+                            id: format!("{prefix}__{id}__{}", Uuid::now_v7()),
+                            op,
+                            trace: None,
+                        };
+                        if tx_sub_for_cron.send(sub).await.is_err() {
+                            return;
+                        }
+                    }
+                    if any_fired {
+                        session_alive.persist_scheduling_state();
+                    }
+                }
+            });
+        }
+
+        // Phase 4: re-spawn per-loop tokio tasks for any loops that came
+        // back from the persisted snapshot.
+        if session.scheduling_is_root
+            && let Some(loop_runtime) = session.loop_runtime.clone()
+        {
+            let resumed = loop_runtime
+                .registry
+                .list()
+                .into_iter()
+                .filter(|task| !task.status.is_terminal())
+                .collect::<Vec<_>>();
+            let respawned_n = resumed.len();
+            for task in resumed {
+                let task_id = task.id.clone();
+                let prompt = task.prompt.clone();
+                let background = task.background;
+                let registry = loop_runtime.registry.clone();
+                let tx_sub_for_loop = session.submission_tx.clone();
+                let join_handle = match task.interval {
+                    Some(interval) => {
+                        tracing::info!(
+                            target: "codex_scheduling::loop",
+                            task_id = %task_id,
+                            mode = "fixed",
+                            interval_seconds = interval.as_secs(),
+                            iteration_count = task.iteration_count,
+                            background = background,
+                            "loop.resumed"
+                        );
+                        tokio::spawn(async move {
+                            crate::tools::handlers::loop_tool::run_loop(
+                                task_id,
+                                prompt,
+                                interval,
+                                background,
+                                registry,
+                                tx_sub_for_loop,
+                            )
+                            .await;
+                        })
+                    }
+                    None => {
+                        tracing::info!(
+                            target: "codex_scheduling::loop",
+                            task_id = %task_id,
+                            mode = "dynamic",
+                            next_wakeup_at = ?task.next_wakeup_at,
+                            iteration_count = task.iteration_count,
+                            background = background,
+                            "loop.resumed"
+                        );
+                        let task_id_for_run = task.id.clone();
+                        tokio::spawn(async move {
+                            crate::tools::handlers::loop_tool::run_loop_dynamic(
+                                task_id_for_run,
+                                background,
+                                registry,
+                                tx_sub_for_loop,
+                            )
+                            .await;
+                        })
+                    }
+                };
+                loop_runtime.store_handle(task.id.clone(), join_handle.abort_handle());
+            }
+            if respawned_n > 0 {
+                tracing::info!(
+                    target: "codex_scheduling::loop",
+                    count = respawned_n,
+                    "scheduling.resume.loops_respawned"
+                );
+            }
+        }
+
+        // Re-spawn any monitors that were marked `Interrupted` by hydration
+        // *and* opted into `restart_on_resume`.
+        if session.scheduling_is_root
+            && let Some(mon_runtime) = session.monitor_runtime().cloned()
+        {
+            let to_restart = mon_runtime
+                .registry
+                .list()
+                .into_iter()
+                .filter(|m| {
+                    matches!(m.status, codex_scheduling::TaskStatus::Interrupted)
+                        && m.restart_on_resume
+                })
+                .collect::<Vec<_>>();
+            let restarted_n = to_restart.len();
+            for task in to_restart {
+                let task_id = task.id.clone();
+                let command = task.command.clone();
+                let background = task.background;
+                tracing::info!(
+                    target: "codex_scheduling::monitor",
+                    task_id = %task_id,
+                    command = %command,
+                    background = background,
+                    "monitor.resumed"
+                );
+                mon_runtime.registry.reset_for_restart(&task_id);
+                let watch_tx = mon_runtime.register_watcher_channel(task_id.clone());
+                let registry = mon_runtime.registry.clone();
+                let runtime_for_task = mon_runtime.clone();
+                let tx_sub_for_mon = session.submission_tx.clone();
+                let session_for_task = session.clone();
+                let task_id_for_task = task_id.clone();
+                let join_handle = tokio::spawn(async move {
+                    crate::tools::handlers::monitor::run_monitor(
+                        task_id_for_task,
+                        command,
+                        registry,
+                        runtime_for_task,
+                        tx_sub_for_mon,
+                        session_for_task,
+                        background,
+                        watch_tx,
+                    )
+                    .await;
+                });
+                mon_runtime.store_handle(task_id, join_handle.abort_handle());
+            }
+            if restarted_n > 0 {
+                tracing::info!(
+                    target: "codex_scheduling::monitor",
+                    count = restarted_n,
+                    "scheduling.resume.monitors_respawned"
+                );
+            }
+        }
+
+        // Phase 4: persist once after hydration so subsequent restarts see
+        // the corrected monitor statuses (Running → Interrupted).
+        session.persist_scheduling_state();
+
         let codex = Codex {
             tx_sub,
             rx_event,

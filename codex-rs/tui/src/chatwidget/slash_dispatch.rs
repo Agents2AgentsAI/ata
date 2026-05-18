@@ -306,6 +306,9 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
+            SlashCommand::Scheduling => {
+                self.open_scheduling_popup();
+            }
             SlashCommand::AutoReview => {
                 self.open_auto_review_denials_popup();
             }
@@ -971,6 +974,7 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
+            | SlashCommand::Scheduling
             | SlashCommand::AutoReview
             | SlashCommand::Account
             | SlashCommand::ReadingView

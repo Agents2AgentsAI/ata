@@ -153,6 +153,12 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::PatchDocumentSection(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::SchedulingTasksSnapshot(notification) => {
+            Some(notification.thread_id.as_str())
+        }
+        ServerNotification::SchedulingMonitorOutputDelta(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::SkillsChanged(_)
         | ServerNotification::McpServerStatusUpdated(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)

@@ -2275,7 +2275,6 @@ dependencies = [
  "codex-rmcp-client",
  "codex-rollout-trace",
  "codex-sandboxing",
- "codex-scheduler",
  "codex-state",
  "codex-stdio-to-uds",
  "codex-terminal-detection",
@@ -2547,6 +2546,7 @@ dependencies = [
  "codex-rollout",
  "codex-rollout-trace",
  "codex-sandboxing",
+ "codex-scheduling",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -3689,24 +3689,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-scheduler"
+name = "codex-scheduling"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "chrono",
- "clap",
- "codex-utils-home-dir",
  "cron",
- "libc",
- "notify",
- "pretty_assertions",
- "reqwest",
  "serde",
  "serde_json",
- "sqlx",
- "tiny_http",
- "tokio",
- "toml 0.9.12+spec-1.1.0",
+ "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "uuid",
 ]

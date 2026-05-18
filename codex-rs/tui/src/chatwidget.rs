@@ -908,6 +908,11 @@ pub(crate) struct ChatWidget {
     dismissed_plan_mode_nudge_scopes: HashSet<PlanModeNudgeScope>,
     last_turn_id: Option<String>,
     budget_limited_turn_ids: HashSet<String>,
+    /// ATA scheduling (Slice 5): turns whose `turn.background = Some(true)`.
+    /// Used by the history rendering to hide the synthetic user prompt and
+    /// agent reply for background cron / loop firings so the chat scrollback
+    /// stays readable.
+    background_turn_ids: HashSet<String>,
     thread_name: Option<String>,
     thread_rename_block_message: Option<String>,
     active_side_conversation: bool,
@@ -5134,6 +5139,7 @@ impl ChatWidget {
             dismissed_plan_mode_nudge_scopes: HashSet::new(),
             last_turn_id: None,
             budget_limited_turn_ids: HashSet::new(),
+            background_turn_ids: HashSet::new(),
             thread_name: None,
             thread_rename_block_message: None,
             active_side_conversation: false,
@@ -6228,10 +6234,22 @@ impl ChatWidget {
                 started_at,
                 completed_at,
                 duration_ms,
+                background,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
                 self.on_task_started();
+            }
+            // ATA scheduling (Slice 5): preserve background-turn hiding across
+            // resume/replay by mirroring the live TurnStarted handling. The
+            // app-server tags `Turn.background` based on the submission id
+            // prefix; rollout replay may not preserve that, so fall back to
+            // the same prefix check used in bespoke_event_handling.
+            let is_background = matches!(background, Some(true))
+                || turn_id.starts_with("cronbg__")
+                || turn_id.starts_with("loopbg__");
+            if is_background {
+                self.background_turn_ids.insert(turn_id.clone());
             }
             for item in items {
                 self.replay_thread_item(item, turn_id.clone(), replay_kind);
@@ -6252,6 +6270,7 @@ impl ChatWidget {
                             started_at,
                             completed_at,
                             duration_ms,
+                            background,
                         },
                     },
                     Some(replay_kind),
@@ -6277,6 +6296,23 @@ impl ChatWidget {
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
+        // ATA scheduling (Slice 5): for background cron/loop turns, hide
+        // the chat-only items (the injected user prompt, the agent's text
+        // reply, and the reasoning summary). Tool calls and approvals fall
+        // through so users still see any explicit `echo` alerts or shell
+        // outputs the prompt asked for. The check is short-circuit cheap
+        // when the set is empty (no scheduling firings in flight).
+        if !self.background_turn_ids.is_empty()
+            && self.background_turn_ids.contains(&turn_id)
+            && matches!(
+                item,
+                ThreadItem::UserMessage { .. }
+                    | ThreadItem::AgentMessage { .. }
+                    | ThreadItem::Reasoning { .. }
+            )
+        {
+            return;
+        }
         match item {
             ThreadItem::UserMessage { content, .. } => {
                 self.on_committed_user_message(&content, from_replay);
@@ -6488,6 +6524,10 @@ impl ChatWidget {
                 self.on_thread_goal_cleared(notification.thread_id.as_str());
             }
             ServerNotification::TurnStarted(notification) => {
+                if matches!(notification.turn.background, Some(true)) {
+                    self.background_turn_ids
+                        .insert(notification.turn.id.clone());
+                }
                 self.last_turn_id = Some(notification.turn.id);
                 self.last_non_retry_error = None;
                 if !matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages)) {
@@ -6504,14 +6544,24 @@ impl ChatWidget {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::AgentMessageDelta(notification) => {
-                self.on_agent_message_delta(notification.delta);
+                // ATA scheduling (Slice 5): suppress streaming chunks of
+                // the agent's natural-language reply for background firings
+                // so chat doesn't flicker with partial text we'll never
+                // render anyway.
+                if !self.background_turn_ids.contains(&notification.turn_id) {
+                    self.on_agent_message_delta(notification.delta);
+                }
             }
             ServerNotification::PlanDelta(notification) => self.on_plan_delta(notification.delta),
             ServerNotification::ReasoningSummaryTextDelta(notification) => {
-                self.on_agent_reasoning_delta(notification.delta);
+                if !self.background_turn_ids.contains(&notification.turn_id) {
+                    self.on_agent_reasoning_delta(notification.delta);
+                }
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                if self.config.show_raw_agent_reasoning {
+                if self.config.show_raw_agent_reasoning
+                    && !self.background_turn_ids.contains(&notification.turn_id)
+                {
                     self.on_agent_reasoning_delta(notification.delta);
                 }
             }
@@ -6691,6 +6741,47 @@ impl ChatWidget {
             ServerNotification::PatchDocumentSection(notification) => {
                 self.on_patch_document_section(notification.event);
             }
+            ServerNotification::SchedulingTasksSnapshot(notification) => {
+                self.on_scheduling_tasks_snapshot(notification.event);
+            }
+            ServerNotification::SchedulingMonitorOutputDelta(notification) => {
+                self.on_scheduling_monitor_output_delta(notification.event);
+            }
+        }
+    }
+
+    /// ATA scheduling: push the latest snapshot into the active `/scheduling`
+    /// panel (if open). The panel ignores the call when it isn't on top of
+    /// the view stack.
+    pub(crate) fn on_scheduling_tasks_snapshot(
+        &mut self,
+        snapshot: codex_protocol::protocol::SchedulingTasksSnapshotEvent,
+    ) {
+        self.bottom_pane.notify_scheduling_snapshot(snapshot);
+    }
+
+    /// ATA scheduling: render one streamed monitor output line as an info
+    /// message. The line is ephemeral — not persisted to rollouts and not
+    /// fed to the LLM. Stderr lines colorize the payload red so build
+    /// errors / test failures pop visually; stdout stays plain.
+    pub(crate) fn on_scheduling_monitor_output_delta(
+        &mut self,
+        event: codex_protocol::protocol::SchedulingMonitorOutputDeltaEvent,
+    ) {
+        let short_id: String = event.task_id.chars().take(6).collect();
+        let is_stderr = event.stream == "stderr";
+        let tag = if is_stderr { "err" } else { "out" };
+        let line = event.line.trim_end_matches('\n');
+        if line.is_empty() {
+            return;
+        }
+        if is_stderr {
+            self.add_plain_history_lines(vec![Line::from(vec![
+                format!("[m {short_id} {tag}] ").into(),
+                line.to_string().red(),
+            ])]);
+        } else {
+            self.add_info_message(format!("[m {short_id} {tag}] {line}"), None);
         }
     }
 
@@ -6703,6 +6794,9 @@ impl ChatWidget {
         notification: TurnCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        // ATA scheduling (Slice 5): drop the bg flag now that the turn is
+        // done so a future non-background turn with a recycled id renders.
+        self.background_turn_ids.remove(&notification.turn.id);
         // ATA reading-view: notify the active overlay so it can clear any
         // pending follow-up indicators if the agent ended the turn without
         // calling an update_section tool.
@@ -8794,6 +8888,27 @@ impl ChatWidget {
 
         let view = ExperimentalFeaturesView::new(features, self.app_event_tx.clone());
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    /// ATA scheduling: open the `/scheduling` panel showing live cron / monitor
+    /// / loop rows. The view subscribes to `SchedulingTasksSnapshot` events and
+    /// auto-refreshes every second.
+    pub(crate) fn open_scheduling_popup(&mut self) {
+        if !self.config.features.enabled(codex_features::Feature::Scheduling) {
+            self.add_info_message(
+                "Scheduling is not enabled. Toggle it on in /experimental first.".to_string(),
+                None,
+            );
+            return;
+        }
+        let view = crate::bottom_pane::SchedulingView::new()
+            .with_auto_refresh(self.app_event_tx.clone(), self.frame_requester.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        // Kick off the snapshot fetch. The reply arrives as a
+        // `ServerNotification::SchedulingTasksSnapshot`. The view's
+        // auto-refresh keeps subsequent requests flowing every second.
+        self.app_event_tx
+            .send(crate::app_event::AppEvent::CodexOp(AppCommand::ListSchedulingTasks));
     }
 
     fn approval_preset_actions(
