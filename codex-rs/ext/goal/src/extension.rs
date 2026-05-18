@@ -9,7 +9,11 @@ use codex_extension_api::NoopExtensionEventSink;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TokenUsageContributor;
+use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolContributor;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
@@ -21,6 +25,7 @@ use codex_protocol::protocol::TurnAbortReason;
 
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
+use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::tool::CreateGoalRequest;
 use crate::tool::GoalToolExecutor;
 
@@ -221,6 +226,25 @@ where
     }
 }
 
+impl<C> ToolLifecycleContributor for GoalExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            let _should_count_for_goal_progress = goal_enabled(input.thread_store)
+                && tool_attempt_counts_for_goal_progress(input.outcome)
+                && !(input.tool_name.namespace.is_none()
+                    && input.tool_name.name == UPDATE_GOAL_TOOL_NAME);
+
+            // TODO: commit active goal progress through host goal storage and emit
+            // ThreadGoalUpdated when the persisted goal changes. This replaces
+            // GoalRuntimeEvent::ToolCompleted once the goal extension owns runtime
+            // accounting.
+        })
+    }
+}
+
 // TODO: app-server initiated goal set/clear operations need a contributor or
 // backend callback here. They currently happen outside thread/turn/token
 // lifecycle, but the goal extension must observe them to account before
@@ -288,6 +312,7 @@ pub fn install_with_backend<C>(
     registry.config_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());
+    registry.tool_lifecycle_contributor(extension.clone());
     registry.tool_contributor(extension);
 }
 
@@ -299,4 +324,18 @@ fn goal_enabled(thread_store: &ExtensionData) -> bool {
 
 fn accounting_state(thread_store: &ExtensionData) -> Arc<GoalAccountingState> {
     thread_store.get_or_init::<GoalAccountingState>(GoalAccountingState::default)
+}
+
+fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
+    match outcome {
+        ToolCallOutcome::Completed { .. } => true,
+        ToolCallOutcome::Failed {
+            handler_executed: true,
+        } => true,
+        ToolCallOutcome::Blocked
+        | ToolCallOutcome::Failed {
+            handler_executed: false,
+        }
+        | ToolCallOutcome::Aborted => false,
+    }
 }
