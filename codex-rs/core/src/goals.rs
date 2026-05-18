@@ -26,13 +26,11 @@ use codex_otel::GOAL_USAGE_LIMITED_METRIC;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::ThreadGoalUpdatedEvent;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_rollout::state_db::reconcile_rollout;
 use codex_thread_store::LocalThreadStore;
@@ -156,7 +154,6 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     MaybeContinueIfIdle,
     TaskAborted {
         turn_context: Option<&'a TurnContext>,
-        reason: TurnAbortReason,
     },
     UsageLimitReached {
         turn_context: &'a TurnContext,
@@ -337,8 +334,8 @@ impl Session {
     /// starts capture the active goal and token baseline, tool completions
     /// account usage and may inject budget steering, completion accounting
     /// suppresses that steering, external mutations account best-effort before
-    /// changing state, interrupts pause active goals, thread resumes restore
-    /// runtime state for already-active goals, explicit maybe-continue events
+    /// changing state, thread resumes restore runtime state for already-active
+    /// goals, explicit maybe-continue events
     /// start idle goal continuation turns, and continuation turns with no counted
     /// autonomous activity suppress the next automatic continuation until
     /// user/tool/external activity resets it.
@@ -390,12 +387,8 @@ impl Session {
                 self.maybe_continue_goal_if_idle_runtime().await;
                 Ok(())
             }),
-            GoalRuntimeEvent::TaskAborted {
-                turn_context,
-                reason,
-            } => Box::pin(async move {
-                self.handle_thread_goal_task_abort(turn_context, reason)
-                    .await;
+            GoalRuntimeEvent::TaskAborted { turn_context } => Box::pin(async move {
+                self.handle_thread_goal_task_abort(turn_context).await;
                 Ok(())
             }),
             GoalRuntimeEvent::UsageLimitReached { turn_context } => Box::pin(async move {
@@ -947,11 +940,7 @@ impl Session {
         }
     }
 
-    async fn handle_thread_goal_task_abort(
-        &self,
-        turn_context: Option<&TurnContext>,
-        reason: TurnAbortReason,
-    ) {
+    async fn handle_thread_goal_task_abort(&self, turn_context: Option<&TurnContext>) {
         if let Some(turn_context) = turn_context {
             self.take_thread_goal_continuation_turn(&turn_context.sub_id)
                 .await;
@@ -973,12 +962,6 @@ impl Session {
             {
                 accounting.turn = None;
             }
-        }
-
-        if reason == TurnAbortReason::Interrupted
-            && let Err(err) = self.pause_active_thread_goal_for_interrupt().await
-        {
-            tracing::warn!("failed to pause active thread goal after interrupt: {err}");
         }
     }
 
@@ -1185,57 +1168,6 @@ impl Session {
                 Ok(None)
             }
         }
-    }
-
-    async fn pause_active_thread_goal_for_interrupt(&self) -> anyhow::Result<()> {
-        if should_ignore_goal_for_mode(self.collaboration_mode().await.mode) {
-            return Ok(());
-        }
-
-        if !self.enabled(Feature::Goals) {
-            return Ok(());
-        }
-
-        let _continuation_guard = self
-            .goal_runtime
-            .continuation_lock
-            .acquire()
-            .await
-            .context("goal continuation semaphore closed")?;
-        let Some(state_db) = self.state_db_for_thread_goals().await? else {
-            return Ok(());
-        };
-        self.account_thread_goal_wall_clock_usage(
-            &state_db,
-            codex_state::ThreadGoalAccountingMode::ActiveStatusOnly,
-            TerminalMetricEmission::Emit,
-        )
-        .await?;
-        let Some(goal) = state_db
-            .thread_goals()
-            .pause_active_thread_goal(self.conversation_id)
-            .await?
-        else {
-            return Ok(());
-        };
-        let goal = protocol_goal_from_state(goal);
-        *self.goal_runtime.budget_limit_reported_goal_id.lock().await = None;
-        self.goal_runtime
-            .accounting
-            .lock()
-            .await
-            .wall_clock
-            .clear_active_goal();
-        self.send_event_raw(Event {
-            id: uuid::Uuid::new_v4().to_string(),
-            msg: EventMsg::ThreadGoalUpdated(ThreadGoalUpdatedEvent {
-                thread_id: self.conversation_id,
-                turn_id: None,
-                goal,
-            }),
-        })
-        .await;
-        Ok(())
     }
 
     async fn usage_limit_active_thread_goal_for_turn(
