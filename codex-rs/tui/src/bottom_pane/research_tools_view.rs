@@ -125,6 +125,15 @@ impl ResearchToolsView {
         }
     }
 
+    pub(crate) fn select_feature(&mut self, feature: Feature) {
+        let Some(idx) = self.items.iter().position(|item| item.feature == feature) else {
+            return;
+        };
+        self.state.selected_idx = Some(idx);
+        let len = self.visible_len();
+        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+    }
+
     fn visible_len(&self) -> usize {
         self.items.len()
     }
@@ -139,12 +148,7 @@ impl ResearchToolsView {
                 ' '
             };
             let name = if let Some(mode) = item.reading_view_mode {
-                let mode_label = match mode {
-                    crate::app_event::ReadingViewMode::Tui => "tui",
-                    crate::app_event::ReadingViewMode::Browser => "browser",
-                    crate::app_event::ReadingViewMode::Disabled => "off",
-                };
-                format!("{prefix} [{mode_label}] {}", item.name)
+                format!("{prefix} [{}] {}", mode.label(), item.name)
             } else {
                 let marker = if item.enabled { 'x' } else { ' ' };
                 format!("{prefix} [{marker}] {}", item.name)
@@ -279,6 +283,7 @@ impl BottomPaneView for ResearchToolsView {
             let mut updates: Vec<(Feature, bool)> = self
                 .items
                 .iter()
+                .filter(|item| item.feature != Feature::ReadingView)
                 .map(|item| (item.feature, item.enabled))
                 .collect();
             // Clear master research flag so per-category flags take sole authority.
@@ -416,4 +421,80 @@ fn research_popup_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Enter).into(),
         " to save for next conversation".into(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn reading_view_mode_is_not_persisted_as_feature_flag() {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut view = ResearchToolsView::new(
+            vec![
+                ResearchToolItem {
+                    feature: Feature::ReadingView,
+                    name: "Reading View",
+                    description: "Display long research syntheses",
+                    setup_hint: "",
+                    enabled: false,
+                    reading_view_mode: Some(crate::app_event::ReadingViewMode::Disabled),
+                },
+                ResearchToolItem {
+                    feature: Feature::ResearchPaperSearch,
+                    name: "Paper Search",
+                    description: "Search papers",
+                    setup_hint: "",
+                    enabled: true,
+                    reading_view_mode: None,
+                },
+            ],
+            app_event_tx,
+        );
+
+        view.on_ctrl_c();
+
+        let first = rx.try_recv().expect("feature flag update");
+        let AppEvent::UpdateFeatureFlags { updates } = first else {
+            panic!("expected UpdateFeatureFlags");
+        };
+        assert!(
+            !updates
+                .iter()
+                .any(|(feature, _)| *feature == Feature::ReadingView)
+        );
+        assert!(updates.contains(&(Feature::ResearchPaperSearch, true)));
+        assert!(updates.contains(&(Feature::Research, false)));
+
+        let second = rx.try_recv().expect("reading view mode update");
+        assert!(matches!(
+            second,
+            AppEvent::ReadingViewModeChanged(crate::app_event::ReadingViewMode::Disabled)
+        ));
+    }
+
+    #[test]
+    fn select_feature_focuses_reading_view_row() {
+        let (tx, _rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut view = ResearchToolsView::new(
+            build_research_tool_items(
+                &codex_features::Features::with_defaults(),
+                crate::app_event::ReadingViewMode::Tui,
+            ),
+            app_event_tx,
+        );
+
+        view.select_feature(Feature::ReadingView);
+
+        let selected_idx = view.state.selected_idx.expect("selected row");
+        assert_eq!(view.items[selected_idx].feature, Feature::ReadingView);
+        assert!(
+            view.build_rows()[selected_idx]
+                .name
+                .starts_with("› [tui] Reading View")
+        );
+    }
 }

@@ -313,13 +313,7 @@ impl ChatWidget {
                 self.open_account_popup();
             }
             SlashCommand::ReadingView => {
-                self.add_info_message(
-                    "Reading-view setup popup will land in a follow-up. \
-                     For now configure `[reading_view] mode = \"tui\"|\"browser\"|\"disabled\"` \
-                     in ~/.codex/config.toml."
-                        .to_string(),
-                    None,
-                );
+                self.open_reading_view_popup();
             }
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => {

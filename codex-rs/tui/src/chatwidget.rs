@@ -5037,6 +5037,7 @@ impl ChatWidget {
             &chat_keymap.edit_queued_message,
             current_terminal_info,
         );
+        let reading_view_mode = crate::app_event::ReadingViewMode::from_config(&config);
         #[cfg(not(target_os = "linux"))]
         let tts_manager = crate::tts::ElevenLabsTtsManager::try_new(&config);
         let mut widget = Self {
@@ -5206,7 +5207,7 @@ impl ChatWidget {
             reading_view_pending_browser_info: false,
             reading_view_pending_events: Vec::new(),
             reading_view_pending_section_updates: Vec::new(),
-            reading_view_mode: crate::app_event::ReadingViewMode::default(),
+            reading_view_mode,
             last_turn_was_local_submit: false,
             #[cfg(not(target_os = "linux"))]
             voice_mode_state: None,
@@ -10446,11 +10447,22 @@ impl ChatWidget {
     /// or disable individual research integrations (Paper Search, Zotero,
     /// HN, Patents, Repo Analysis, Reading View, Knowledge Base).
     pub(crate) fn open_research_popup(&mut self) {
+        self.open_research_popup_focused(None);
+    }
+
+    pub(crate) fn open_reading_view_popup(&mut self) {
+        self.open_research_popup_focused(Some(codex_features::Feature::ReadingView));
+    }
+
+    fn open_research_popup_focused(&mut self, focused_feature: Option<codex_features::Feature>) {
         let items = crate::bottom_pane::build_research_tool_items(
             &self.config.features,
             self.reading_view_mode,
         );
-        let view = crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
+        let mut view = crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
+        if let Some(feature) = focused_feature {
+            view.select_feature(feature);
+        }
         self.bottom_pane.show_view(Box::new(view));
     }
 
