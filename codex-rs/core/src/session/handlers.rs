@@ -42,6 +42,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -184,20 +185,9 @@ pub(super) async fn user_input_or_turn_inner(
             personality,
             environments,
         } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
+            let mut updates = thread_settings_update(
+                sess,
+                ThreadSettingsOverrides {
                     cwd,
                     workspace_roots,
                     profile_workspace_roots,
@@ -207,32 +197,35 @@ pub(super) async fn user_input_or_turn_inner(
                     permission_profile,
                     active_permission_profile,
                     windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
+                    model,
+                    effort,
+                    summary,
                     service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
+                    collaboration_mode,
                     personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
                 },
-                responsesapi_client_metadata,
             )
+            .await;
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (items, updates, responsesapi_client_metadata)
         }
         Op::UserInput {
             items,
             environments,
             final_output_json_schema,
             responsesapi_client_metadata,
-        } => (
-            items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
-                environments,
-                ..Default::default()
-            },
-            responsesapi_client_metadata,
-        ),
+            thread_settings,
+        } => {
+            let mut updates = if thread_settings == ThreadSettingsOverrides::default() {
+                SessionSettingsUpdate::default()
+            } else {
+                thread_settings_update(sess, thread_settings).await
+            };
+            updates.final_output_json_schema = Some(final_output_json_schema);
+            updates.environments = environments;
+            (items, updates, responsesapi_client_metadata)
+        }
         _ => unreachable!(),
     };
 
@@ -286,6 +279,56 @@ pub(super) async fn user_input_or_turn_inner(
     };
     if let (Some(items), Some(())) = (accepted_items, mirror_user_text_to_realtime) {
         self::mirror_user_text_to_realtime(sess, &items).await;
+    }
+}
+
+async fn thread_settings_update(
+    sess: &Session,
+    thread_settings: ThreadSettingsOverrides,
+) -> SessionSettingsUpdate {
+    let ThreadSettingsOverrides {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        model,
+        effort,
+        summary,
+        service_tier,
+        collaboration_mode,
+        personality,
+    } = thread_settings;
+    let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+        collaboration_mode
+    } else {
+        let state = sess.state.lock().await;
+        // Model and reasoning effort live in CollaborationMode settings today, so
+        // partial thread-settings updates refresh those fields on the active mode.
+        state
+            .session_configuration
+            .collaboration_mode
+            .with_updates(model, effort, /*developer_instructions*/ None)
+    };
+    SessionSettingsUpdate {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        collaboration_mode: Some(collaboration_mode),
+        reasoning_summary: summary,
+        service_tier,
+        personality,
+        ..Default::default()
     }
 }
 

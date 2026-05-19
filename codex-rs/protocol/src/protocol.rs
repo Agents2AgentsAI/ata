@@ -396,6 +396,80 @@ pub struct ConversationTextParams {
     pub text: String,
 }
 
+/// Persistent thread-settings overrides that can be applied before user input.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct ThreadSettingsOverrides {
+    /// Updated `cwd` for sandbox/tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+
+    /// Updated runtime workspace roots used to materialize symbolic
+    /// `:workspace_roots` filesystem permissions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
+
+    /// Updated profile-defined workspace roots for status summaries and
+    /// per-turn config reconstruction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
+
+    /// Updated command approval policy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<AskForApproval>,
+
+    /// Updated approval reviewer for future approval prompts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+
+    /// Updated sandbox policy for tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
+
+    /// Updated permissions profile for tool calls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<PermissionProfile>,
+
+    /// Named or built-in profile that produced `permission_profile`, if the
+    /// update selected a profile rather than supplying raw permissions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
+
+    /// Updated Windows sandbox mode for tool execution.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_sandbox_level: Option<WindowsSandboxLevel>,
+
+    /// Updated model slug. When set, the model info is derived automatically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// Updated reasoning effort (honored only for reasoning-capable models).
+    ///
+    /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear the
+    /// effort, or `None` to leave the existing value unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Option<ReasoningEffortConfig>>,
+
+    /// Updated reasoning summary preference (honored only for reasoning-capable models).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ReasoningSummaryConfig>,
+
+    /// Updated service tier preference for future turns.
+    ///
+    /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
+    /// preference, or `None` to leave the existing value unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
+
+    /// EXPERIMENTAL - set a pre-set collaboration mode.
+    /// Takes precedence over model, effort, and developer instructions if set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<CollaborationMode>,
+
+    /// Updated personality preference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Personality>,
+}
+
 /// Submission operation
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -425,10 +499,7 @@ pub enum Op {
     /// Request the list of voices supported by realtime conversation streams.
     RealtimeConversationListVoices,
 
-    /// Legacy user input.
-    ///
-    /// Prefer [`Op::UserTurn`] so the caller provides full turn context
-    /// (cwd/approval/sandbox/model/etc.) for each turn.
+    /// User input, optionally with thread-settings overrides applied first.
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
@@ -441,9 +512,13 @@ pub enum Op {
         /// Optional turn-scoped Responses API `client_metadata`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+
+        /// Persistent thread-settings overrides to apply before the input.
+        #[serde(default, flatten)]
+        thread_settings: ThreadSettingsOverrides,
     },
 
-    /// Similar to [`Op::UserInput`], but first applies persistent turn-context
+    /// Similar to [`Op::UserInput`], but first applies persistent thread-settings
     /// overrides in the same queued operation. This preserves submission order
     /// and prevents the input from starting if the overrides are rejected.
     UserInputWithTurnContext {
@@ -606,11 +681,11 @@ pub enum Op {
         communication: InterAgentCommunication,
     },
 
-    /// Override parts of the persistent turn context for subsequent turns.
+    /// Override parts of the persistent thread settings for subsequent turns.
     ///
     /// All fields are optional; when omitted, the existing value is preserved.
     /// This does not enqueue any input – it only updates defaults used for
-    /// turns that rely on persistent session-level context (for example,
+    /// turns that rely on persistent session-level settings (for example,
     /// [`Op::UserInput`]).
     OverrideTurnContext {
         /// Updated `cwd` for sandbox/tool calls.
@@ -790,6 +865,7 @@ impl From<Vec<UserInput>> for Op {
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: ThreadSettingsOverrides::default(),
         }
     }
 }
@@ -5028,6 +5104,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5047,6 +5124,7 @@ mod tests {
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                thread_settings: Default::default(),
             }
         );
 
@@ -5068,6 +5146,7 @@ mod tests {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -5093,6 +5172,7 @@ mod tests {
                 "fiber_run_id".to_string(),
                 "fiber-123".to_string(),
             )])),
+            thread_settings: Default::default(),
         };
 
         let json_op = serde_json::to_value(&op)?;
