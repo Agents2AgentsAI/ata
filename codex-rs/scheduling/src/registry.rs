@@ -61,7 +61,10 @@ impl CronRegistry {
     }
 
     pub fn len(&self) -> usize {
-        self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -76,7 +79,10 @@ impl CronRegistry {
     /// job whose `next_fire_at` is `None` is left untouched — the engine
     /// will compute the next firing time on its next tick if appropriate.
     pub fn hydrate(&self, jobs: Vec<CronJob>) {
-        let mut map = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.clear();
         for job in jobs {
             map.insert(job.id.clone(), job);
@@ -93,7 +99,10 @@ impl CronRegistry {
     /// the background flag in the submission id (`cronbg-...` vs `cron-...`)
     /// for the TUI's chat-cell filter.
     pub fn take_due(&self, now: DateTime<Utc>) -> Vec<(TaskId, String, bool)> {
-        let mut jobs = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut fired = Vec::new();
         for (id, job) in jobs.iter_mut() {
             if !matches!(job.status, TaskStatus::Pending | TaskStatus::Running) {

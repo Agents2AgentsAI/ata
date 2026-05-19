@@ -101,7 +101,10 @@ impl MonitorRegistry {
             map.insert(task.id.clone(), task);
         }
         // Tail buffers don't survive a process restart; start fresh.
-        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut tails = self
+            .tails
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         tails.clear();
     }
 
@@ -119,7 +122,10 @@ impl MonitorRegistry {
     /// Append a line to the per-monitor tail ring buffer. Older lines beyond
     /// `MONITOR_TAIL_CAPACITY` are discarded.
     pub fn record_tail_line(&self, id: &TaskId, line: String) {
-        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut tails = self
+            .tails
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let buf = tails.entry(id.clone()).or_default();
         if buf.len() == MONITOR_TAIL_CAPACITY {
             buf.pop_front();
@@ -180,7 +186,10 @@ impl MonitorRegistry {
             task.lines_emitted = 0;
         }
         // Tail buffer also belongs to the prior, dead subprocess — drop it.
-        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut tails = self
+            .tails
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         tails.remove(id);
     }
 }
