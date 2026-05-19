@@ -12,15 +12,15 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use notify::Config as NotifyConfig;
+use notify::ErrorKind as NotifyErrorKind;
 use notify::Event;
 use notify::EventKind;
-use notify::ErrorKind as NotifyErrorKind;
+#[cfg(test)]
+use notify::NullWatcher;
 use notify::PollWatcher;
 use notify::RecursiveMode;
 use notify::Watcher;
-#[cfg(test)]
-use notify::NullWatcher;
-use notify::Config as NotifyConfig;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
