@@ -30,4 +30,13 @@ completedAt: number | null,
 /**
  * Duration between turn start and completion in milliseconds, if known.
  */
-durationMs: number | null, };
+durationMs: number | null,
+/**
+ * ATA scheduling (Slice 5): this turn was started by a background
+ * cron/loop firing. The TUI hides the user-prompt and agent-reply
+ * items for these turns so periodic scheduled work doesn't flood the
+ * chat. Tool call items still render so explicit `echo` alerts come
+ * through. `None` for non-scheduling turns; omitted from the wire
+ * when absent so existing tooling stays compatible.
+ */
+background?: boolean | null, };

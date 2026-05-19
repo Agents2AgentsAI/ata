@@ -1,0 +1,180 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SchedulingCronRow": {
+      "description": "ATA: per-cron-job row in [`SchedulingTasksSnapshotEvent`]. Timestamps are RFC 3339 strings (rather than i64) so the TUI can render them without pulling in chrono on the wire.",
+      "properties": {
+        "cron_expr": {
+          "type": "string"
+        },
+        "fire_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "last_fired_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_fire_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cron_expr",
+        "fire_count",
+        "prompt",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingLoopRow": {
+      "description": "ATA: per-loop row in [`SchedulingTasksSnapshotEvent`].",
+      "properties": {
+        "interval_seconds": {
+          "description": "Fixed-interval loops report their interval here in seconds; dynamic / model-paced loops are `None`.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "iteration_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "last_iter_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_wakeup_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "iteration_count",
+        "prompt",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorRow": {
+      "description": "ATA: per-monitor row in [`SchedulingTasksSnapshotEvent`].",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "lines_emitted": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "stopped_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "lines_emitted",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingTasksSnapshotEvent": {
+      "description": "ATA: response payload for `Op::ListSchedulingTasks`. Always non-null — when scheduling is disabled or no tasks exist, the lists are empty rather than the whole event being omitted.",
+      "properties": {
+        "cron_jobs": {
+          "items": {
+            "$ref": "#/definitions/SchedulingCronRow"
+          },
+          "type": "array"
+        },
+        "loops": {
+          "items": {
+            "$ref": "#/definitions/SchedulingLoopRow"
+          },
+          "type": "array"
+        },
+        "monitors": {
+          "items": {
+            "$ref": "#/definitions/SchedulingMonitorRow"
+          },
+          "type": "array"
+        },
+        "scheduling_enabled": {
+          "description": "True iff `Feature::Scheduling` is enabled for the session. Lets the TUI distinguish \"scheduling off\" from \"scheduling on but no tasks\".",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cron_jobs",
+        "loops",
+        "monitors",
+        "scheduling_enabled"
+      ],
+      "type": "object"
+    }
+  },
+  "properties": {
+    "event": {
+      "$ref": "#/definitions/SchedulingTasksSnapshotEvent"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "threadId"
+  ],
+  "title": "SchedulingTasksSnapshotNotification",
+  "type": "object"
+}

@@ -1332,6 +1332,54 @@
             },
             "method": {
               "enum": [
+                "scheduling/tasks/list"
+              ],
+              "title": "Scheduling/tasks/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SchedulingTasksListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "scheduling/tasks/delete"
+              ],
+              "title": "Scheduling/tasks/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SchedulingTaskDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/shellCommand"
               ],
               "title": "Thread/shellCommandRequestMethod",
@@ -11533,6 +11581,276 @@
       },
       "type": "object"
     },
+    "SchedulingCronRow": {
+      "description": "ATA: per-cron-job row in [`SchedulingTasksSnapshotEvent`]. Timestamps are RFC 3339 strings (rather than i64) so the TUI can render them without pulling in chrono on the wire.",
+      "properties": {
+        "cron_expr": {
+          "type": "string"
+        },
+        "fire_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "last_fired_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_fire_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cron_expr",
+        "fire_count",
+        "prompt",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingLoopRow": {
+      "description": "ATA: per-loop row in [`SchedulingTasksSnapshotEvent`].",
+      "properties": {
+        "interval_seconds": {
+          "description": "Fixed-interval loops report their interval here in seconds; dynamic / model-paced loops are `None`.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "iteration_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "last_iter_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_wakeup_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "iteration_count",
+        "prompt",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorOutputDeltaEvent": {
+      "description": "ATA: a single streamed line from a running monitor command. The `stream` field is `\"stdout\"` or `\"stderr\"`. Emitted per-line for live TUI display. Not persisted to rollouts and never fed back to the LLM — see [`EventMsg::SchedulingMonitorOutputDelta`].",
+      "properties": {
+        "line": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line",
+        "stream",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorOutputDeltaNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "Streamed line of output from a running monitor. The TUI renders this for the user only; the LLM never sees it. See `codex_protocol::protocol::SchedulingMonitorOutputDeltaEvent`.",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/SchedulingMonitorOutputDeltaEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "SchedulingMonitorOutputDeltaNotification",
+      "type": "object"
+    },
+    "SchedulingMonitorRow": {
+      "description": "ATA: per-monitor row in [`SchedulingTasksSnapshotEvent`].",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "lines_emitted": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "stopped_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "lines_emitted",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingTaskDeleteParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "description": "ATA: delete one scheduling task (cron job, monitor, or loop) from a thread's registry. Used by the `/scheduling` TUI panel's `d` shortcut. Server aborts the task first if it's still running. Response is empty; the panel observes the removal via the next `SchedulingTasksSnapshot` notification, which the server emits immediately after the delete.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/SchedulingTaskKind"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "taskId",
+        "threadId"
+      ],
+      "title": "SchedulingTaskDeleteParams",
+      "type": "object"
+    },
+    "SchedulingTaskDeleteResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SchedulingTaskDeleteResponse",
+      "type": "object"
+    },
+    "SchedulingTaskKind": {
+      "description": "ATA: discriminator for the three scheduling task families, used on the wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.",
+      "enum": [
+        "cron",
+        "monitor",
+        "loop"
+      ],
+      "type": "string"
+    },
+    "SchedulingTasksListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "SchedulingTasksListParams",
+      "type": "object"
+    },
+    "SchedulingTasksListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SchedulingTasksListResponse",
+      "type": "object"
+    },
+    "SchedulingTasksSnapshotEvent": {
+      "description": "ATA: response payload for `Op::ListSchedulingTasks`. Always non-null — when scheduling is disabled or no tasks exist, the lists are empty rather than the whole event being omitted.",
+      "properties": {
+        "cron_jobs": {
+          "items": {
+            "$ref": "#/definitions/SchedulingCronRow"
+          },
+          "type": "array"
+        },
+        "loops": {
+          "items": {
+            "$ref": "#/definitions/SchedulingLoopRow"
+          },
+          "type": "array"
+        },
+        "monitors": {
+          "items": {
+            "$ref": "#/definitions/SchedulingMonitorRow"
+          },
+          "type": "array"
+        },
+        "scheduling_enabled": {
+          "description": "True iff `Feature::Scheduling` is enabled for the session. Lets the TUI distinguish \"scheduling off\" from \"scheduling on but no tasks\".",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cron_jobs",
+        "loops",
+        "monitors",
+        "scheduling_enabled"
+      ],
+      "type": "object"
+    },
+    "SchedulingTasksSnapshotNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/SchedulingTasksSnapshotEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "title": "SchedulingTasksSnapshotNotification",
+      "type": "object"
+    },
     "SendAddCreditsNudgeEmailParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -12929,6 +13247,46 @@
             "params"
           ],
           "title": "Document/section/patchNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "scheduling/tasks/snapshot"
+              ],
+              "title": "Scheduling/tasks/snapshotNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SchedulingTasksSnapshotNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/snapshotNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "scheduling/monitor/outputDelta"
+              ],
+              "title": "Scheduling/monitor/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SchedulingMonitorOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/monitor/outputDeltaNotification",
           "type": "object"
         }
       ],
@@ -16080,6 +16438,13 @@
     },
     "Turn": {
       "properties": {
+        "background": {
+          "description": "ATA scheduling (Slice 5): this turn was started by a background cron/loop firing. The TUI hides the user-prompt and agent-reply items for these turns so periodic scheduled work doesn't flood the chat. Tool call items still render so explicit `echo` alerts come through. `None` for non-scheduling turns; omitted from the wire when absent so existing tooling stays compatible.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "completedAt": {
           "description": "Unix timestamp (in seconds) when the turn completed.",
           "format": "int64",

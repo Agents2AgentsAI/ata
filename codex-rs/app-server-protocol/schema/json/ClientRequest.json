@@ -3342,6 +3342,46 @@
         }
       ]
     },
+    "SchedulingTaskDeleteParams": {
+      "description": "ATA: delete one scheduling task (cron job, monitor, or loop) from a thread's registry. Used by the `/scheduling` TUI panel's `d` shortcut. Server aborts the task first if it's still running. Response is empty; the panel observes the removal via the next `SchedulingTasksSnapshot` notification, which the server emits immediately after the delete.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/SchedulingTaskKind"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "taskId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "SchedulingTaskKind": {
+      "description": "ATA: discriminator for the three scheduling task families, used on the wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.",
+      "enum": [
+        "cron",
+        "monitor",
+        "loop"
+      ],
+      "type": "string"
+    },
+    "SchedulingTasksListParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "SendAddCreditsNudgeEmailParams": {
       "properties": {
         "creditType": {
@@ -4886,6 +4926,54 @@
         "params"
       ],
       "title": "Thread/compact/startRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "scheduling/tasks/list"
+          ],
+          "title": "Scheduling/tasks/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingTasksListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/tasks/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "scheduling/tasks/delete"
+          ],
+          "title": "Scheduling/tasks/deleteRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingTaskDeleteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/tasks/deleteRequest",
       "type": "object"
     },
     {
