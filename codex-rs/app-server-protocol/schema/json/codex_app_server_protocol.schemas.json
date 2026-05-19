@@ -9624,6 +9624,7 @@
           "postCompact",
           "sessionStart",
           "userPromptSubmit",
+          "subagentStart",
           "stop"
         ],
         "type": "string"
@@ -10514,6 +10515,12 @@
             },
             "type": "array"
           },
+          "SubagentStart": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "UserPromptSubmit": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -10541,6 +10548,7 @@
           "PreToolUse",
           "SessionStart",
           "Stop",
+          "SubagentStart",
           "UserPromptSubmit"
         ],
         "type": "object"
