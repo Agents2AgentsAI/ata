@@ -470,6 +470,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     missing_model_capability.assert_visible_lacks(&["tool_search"]);
 
     let missing_deferred_tools = probe(|turn| {
+        set_feature(turn, Feature::Collab, /*enabled*/ false);
         turn.model_info.supports_search_tool = true;
     })
     .await;
@@ -651,6 +652,39 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn v1_multi_agent_tools_defer_when_tool_search_available() {
+    let plan = probe(|turn| {
+        turn.model_info.supports_search_tool = true;
+        set_feature(turn, Feature::Collab, /*enabled*/ true);
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ false);
+    })
+    .await;
+
+    plan.assert_visible_contains(&["tool_search"]);
+    plan.assert_visible_lacks(&[
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ]);
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        plan.assert_registered_contains(&[tool_name]);
+        assert_eq!(plan.exposure(tool_name), ToolExposure::Deferred);
+    }
+    let ToolSpec::ToolSearch { description, .. } = plan.visible_spec("tool_search") else {
+        panic!("expected visible tool_search spec");
+    };
+    assert!(description.contains("- Multi-agent tools: Spawn and manage sub-agents."));
 }
 
 #[tokio::test]

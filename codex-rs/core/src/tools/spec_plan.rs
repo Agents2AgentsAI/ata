@@ -610,23 +610,35 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
         } else {
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
-            planned_tools.add_runtime(SpawnAgentHandler::new(SpawnAgentToolOptions {
-                available_models: turn_context.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: turn_context
-                    .config
-                    .multi_agent_v2
-                    .hide_spawn_agent_metadata,
-                include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
-                usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                max_concurrent_threads_per_session: max_concurrent_threads_per_session(
-                    turn_context,
-                ),
-            }));
-            planned_tools.add_runtime(SendInputHandler);
-            planned_tools.add_runtime(ResumeAgentHandler);
-            planned_tools.add_runtime(WaitAgentHandler::new(context.wait_agent_timeouts));
-            planned_tools.add_runtime(CloseAgentHandler);
+            let exposure =
+                if search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context) {
+                    ToolExposure::Deferred
+                } else {
+                    ToolExposure::Direct
+                };
+            planned_tools.add_runtime_arc(multi_agent_v1_handler(
+                SpawnAgentHandler::new(SpawnAgentToolOptions {
+                    available_models: turn_context.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: turn_context
+                        .config
+                        .multi_agent_v2
+                        .hide_spawn_agent_metadata,
+                    include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
+                    usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: max_concurrent_threads_per_session(
+                        turn_context,
+                    ),
+                }),
+                exposure,
+            ));
+            planned_tools.add_runtime_arc(multi_agent_v1_handler(SendInputHandler, exposure));
+            planned_tools.add_runtime_arc(multi_agent_v1_handler(ResumeAgentHandler, exposure));
+            planned_tools.add_runtime_arc(multi_agent_v1_handler(
+                WaitAgentHandler::new(context.wait_agent_timeouts),
+                exposure,
+            ));
+            planned_tools.add_runtime_arc(multi_agent_v1_handler(CloseAgentHandler, exposure));
         }
     }
 
@@ -755,6 +767,13 @@ fn append_extension_tool_executors(
         }
         planned_tools.add_runtime(ExtensionToolAdapter::new(executor));
     }
+}
+
+fn multi_agent_v1_handler(
+    handler: impl CoreToolRuntime + 'static,
+    exposure: ToolExposure,
+) -> Arc<dyn CoreToolRuntime> {
+    override_tool_exposure(Arc::new(handler), exposure)
 }
 
 fn multi_agent_v2_handler(
