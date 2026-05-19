@@ -14,9 +14,13 @@ pub mod persist;
 pub mod registry;
 pub mod task;
 
+pub use cron_job::CRON_FIRE_HISTORY_CAPACITY;
 pub use cron_job::CronError;
+pub use cron_job::CronFireRecord;
 pub use cron_job::CronJob;
 pub use loop_registry::LoopRegistry;
+pub use loop_task::LOOP_ITERATION_HISTORY_CAPACITY;
+pub use loop_task::LoopIterationRecord;
 pub use loop_task::LoopTask;
 pub use monitor::MonitorTask;
 pub use monitor_registry::MonitorRegistry;

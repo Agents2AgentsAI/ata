@@ -64,9 +64,11 @@ impl ToolHandler for CronCreateHandler {
             FunctionCallError::RespondToModel(format!("cron_create rejected: {err}"))
         })?;
 
-        let job = CronJob::new(normalized_expr.clone(), args.prompt).map_err(|err| {
-            FunctionCallError::RespondToModel(format!("cron_create rejected: {err}"))
-        })?;
+        let job = CronJob::new(normalized_expr.clone(), args.prompt)
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("cron_create rejected: {err}"))
+            })?
+            .with_name(args.name);
 
         os_cron::insert(&job).map_err(|err| {
             FunctionCallError::RespondToModel(format!("cron_create failed to write crontab: {err}"))

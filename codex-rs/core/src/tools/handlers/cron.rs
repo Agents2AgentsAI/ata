@@ -21,6 +21,11 @@ pub use list::CronListHandler;
 struct CronCreateArgs {
     cron_expr: String,
     prompt: String,
+    /// Optional. Short human-readable label for the `/scheduling` panel
+    /// (e.g. "HN stories puller"). Omitted/empty values fall back to the
+    /// short task id.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -52,6 +52,13 @@ pub fn create_monitor_start_tool() -> ToolSpec {
                     .to_string(),
             )),
         ),
+        (
+            "name".to_string(),
+            JsonSchema::string(Some(
+                "Optional but strongly recommended. A short human-readable label (2-5 words, e.g. \"Disk monitor\", \"Build tail\") shown alongside the monitor in the user's `/scheduling` panel. Falls back to the short task id when omitted."
+                    .to_string(),
+            )),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {

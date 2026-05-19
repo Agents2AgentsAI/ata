@@ -36,6 +36,10 @@ pub struct MonitorTask {
     /// destructive commands (`cargo build`, `git push`, batch jobs).
     #[serde(default)]
     pub restart_on_resume: bool,
+    /// Optional human-readable label assigned by the agent at creation time
+    /// (e.g. `"Disk monitor"`). Surfaced in the `/scheduling` panel.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 fn default_background() -> bool {
@@ -62,7 +66,14 @@ impl MonitorTask {
             lines_emitted: 0,
             background,
             restart_on_resume,
+            name: None,
         }
+    }
+
+    /// Builder-style helper: set the agent-supplied human-readable name.
+    pub fn with_name(mut self, name: Option<String>) -> Self {
+        self.name = crate::cron_job::normalize_optional_name(name);
+        self
     }
 }
 

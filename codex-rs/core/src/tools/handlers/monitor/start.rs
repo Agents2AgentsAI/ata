@@ -74,7 +74,8 @@ impl ToolHandler for MonitorStartHandler {
             args.command.clone(),
             args.background,
             args.restart_on_resume,
-        );
+        )
+        .with_name(args.name);
         let task_id = runtime.registry.insert(task);
         tracing::info!(
             target: "codex_scheduling::monitor",

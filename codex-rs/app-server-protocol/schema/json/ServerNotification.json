@@ -3049,6 +3049,13 @@
             "null"
           ]
         },
+        "name": {
+          "description": "Optional agent-supplied human-readable label. Empty/whitespace strings collapse to `None`; the TUI then falls back to the short id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "next_fire_at": {
           "type": [
             "string",
@@ -3057,6 +3064,13 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "recent_events": {
+          "description": "Pre-formatted history records (newest last) for the `/scheduling` detail view. For in-session crons this is the per-fire ring buffer; for OS-cron rows the host leaves this empty (the TUI reads the log file directly when the user opens the detail view).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "status": {
           "type": "string"
@@ -3097,6 +3111,13 @@
             "null"
           ]
         },
+        "name": {
+          "description": "Optional agent-supplied human-readable label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "next_wakeup_at": {
           "type": [
             "string",
@@ -3105,6 +3126,13 @@
         },
         "prompt": {
           "type": "string"
+        },
+        "recent_events": {
+          "description": "Pre-formatted iteration history (newest last) for the detail view.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "status": {
           "type": "string"
@@ -3168,6 +3196,13 @@
           "minimum": 0.0,
           "type": "integer"
         },
+        "name": {
+          "description": "Optional agent-supplied human-readable label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "started_at": {
           "type": [
             "string",
@@ -3182,6 +3217,13 @@
             "string",
             "null"
           ]
+        },
+        "tail": {
+          "description": "Tail of recent output lines (already prefixed with `[stdout]` or `[stderr]`). Used by the detail view.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "task_id": {
           "type": "string"

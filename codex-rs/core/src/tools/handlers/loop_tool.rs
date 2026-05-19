@@ -41,6 +41,9 @@ struct LoopStartArgs {
     /// `false` for chatty diagnostic loops where you want every reply.
     #[serde(default = "default_background")]
     background: bool,
+    /// Optional. Short human-readable label for the `/scheduling` panel.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 fn default_background() -> bool {

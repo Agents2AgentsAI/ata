@@ -31,6 +31,9 @@ struct CronSessionCreateArgs {
     until: Option<String>,
     #[serde(default)]
     timezone: Option<String>,
+    /// Optional. Short human-readable label for the `/scheduling` panel.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 fn default_background() -> bool {

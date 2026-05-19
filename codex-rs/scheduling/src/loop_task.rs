@@ -5,10 +5,24 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use crate::task::TaskId;
 use crate::task::TaskStatus;
+
+/// Maximum number of recent iteration events retained on each [`LoopTask`]
+/// for the `/scheduling` detail view. Mirrors
+/// [`crate::cron_job::CRON_FIRE_HISTORY_CAPACITY`].
+pub const LOOP_ITERATION_HISTORY_CAPACITY: usize = 50;
+
+/// One iteration event for an in-session loop. Captured each time the
+/// per-loop tokio task fires the prompt. Ephemeral — not persisted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopIterationRecord {
+    pub fired_at: DateTime<Utc>,
+    pub outcome: String,
+}
 
 /// One model-driven loop iteration target. `interval == None` means the
 /// model picks the next wakeup delay after each iteration (dynamic pacing,
@@ -30,6 +44,14 @@ pub struct LoopTask {
     /// the user can see explicit outputs the prompt asked for.
     #[serde(default = "default_background")]
     pub background: bool,
+    /// Optional human-readable label assigned by the agent at creation time
+    /// (e.g. `"Build watcher"`). Surfaced in the `/scheduling` panel.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Ring buffer of the most recent iteration events. Ephemeral — not
+    /// persisted to the sidecar.
+    #[serde(default, skip_serializing)]
+    pub recent_iterations: VecDeque<LoopIterationRecord>,
 }
 
 fn default_background() -> bool {
@@ -60,11 +82,19 @@ impl LoopTask {
             next_wakeup_at: None,
             iteration_count: 0,
             background,
+            name: None,
+            recent_iterations: VecDeque::new(),
         }
     }
 
     pub fn is_dynamic(&self) -> bool {
         self.interval.is_none()
+    }
+
+    /// Builder-style helper: set the agent-supplied human-readable name.
+    pub fn with_name(mut self, name: Option<String>) -> Self {
+        self.name = crate::cron_job::normalize_optional_name(name);
+        self
     }
 }
 

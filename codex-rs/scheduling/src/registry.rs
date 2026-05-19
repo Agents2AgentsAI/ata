@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 
+use crate::cron_job::CRON_FIRE_HISTORY_CAPACITY;
+use crate::cron_job::CronFireRecord;
 use crate::cron_job::CronJob;
 use crate::task::TaskId;
 use crate::task::TaskStatus;
@@ -115,6 +117,13 @@ impl CronRegistry {
                 fired.push((id.clone(), job.prompt.clone(), job.background));
                 job.last_fired_at = Some(now);
                 job.fire_count = job.fire_count.saturating_add(1);
+                push_fire_record(
+                    &mut job.recent_fires,
+                    CronFireRecord {
+                        fired_at: now,
+                        outcome: "fired".to_string(),
+                    },
+                );
                 let candidate_next =
                     next_fire_after_in_tz(&job.cron_expr, now, job.timezone.as_deref());
                 // Apply end conditions: max_firings caps total firings;
@@ -137,6 +146,15 @@ impl CronRegistry {
         }
         fired
     }
+}
+
+/// Push a record onto the bounded ring buffer, evicting the oldest entry
+/// when capacity is exceeded.
+fn push_fire_record(buf: &mut std::collections::VecDeque<CronFireRecord>, record: CronFireRecord) {
+    if buf.len() == CRON_FIRE_HISTORY_CAPACITY {
+        buf.pop_front();
+    }
+    buf.push_back(record);
 }
 
 /// Compute the next firing time, optionally interpreting the cron

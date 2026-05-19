@@ -16,6 +16,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -52,6 +53,24 @@ pub(crate) struct SchedulingView {
     /// Index into the flattened row list (cron → monitor → loop). Used by the
     /// `j`/`k`/arrow keys and the `d` shortcut.
     selected_index: usize,
+    /// `None` = list view (default); `Some(_)` = drill-down detail for one
+    /// selected row. Esc returns to list, Enter on a row enters detail.
+    detail: Option<DetailState>,
+}
+
+/// Drill-down state for the `/scheduling` detail view. Captures the row
+/// identity (so we can pull the latest snapshot data on each render) plus a
+/// vertical scroll offset for long log / history payloads.
+#[derive(Debug, Clone)]
+struct DetailState {
+    kind: SchedulingTaskKind,
+    task_id: String,
+    /// Lines to scroll down past. Page-up/page-down adjusts this; clamped on
+    /// render so resizing or shrinking content can't strand the user.
+    scroll: u16,
+    /// Loaded once on entry for OS-cron entries. `None` for other kinds, or
+    /// when the log file doesn't exist / can't be read.
+    os_cron_log: Option<String>,
 }
 
 struct AutoRefresh {
@@ -70,6 +89,7 @@ impl SchedulingView {
             footer_hint: scheduling_popup_hint_line(),
             auto_refresh: None,
             selected_index: 0,
+            detail: None,
         }
     }
 
@@ -116,6 +136,58 @@ impl SchedulingView {
         self.selected_index = next;
     }
 
+    /// Open the detail view for the currently-selected row. For OS-cron
+    /// rows we synchronously read the log file from `~/.ata/cron/` so the
+    /// content is available immediately on render.
+    fn open_detail(&mut self) {
+        let rows = self.flat_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let idx = self.clamped_selected_index();
+        let (kind, task_id) = rows[idx].clone();
+        let os_cron_log =
+            if matches!(kind, SchedulingTaskKind::Cron) && self.row_is_os_cron(&task_id) {
+                read_os_cron_log(&task_id)
+            } else {
+                None
+            };
+        self.detail = Some(DetailState {
+            kind,
+            task_id,
+            scroll: 0,
+            os_cron_log,
+        });
+    }
+
+    /// `true` if the cron row with `task_id` came from the OS crontab
+    /// (vs. an in-session cron job). The session handler tags OS-cron rows
+    /// with `status = "Scheduled"`; in-session jobs use the debug-formatted
+    /// `TaskStatus` enum variants (`"Pending"`, `"Running"`, …). That's
+    /// load-bearing only here; if it ever changes, the detail view falls
+    /// back to the in-session ring buffer which renders empty for OS cron.
+    fn row_is_os_cron(&self, task_id: &str) -> bool {
+        let Some(snapshot) = &self.snapshot else {
+            return false;
+        };
+        snapshot
+            .cron_jobs
+            .iter()
+            .find(|r| r.task_id == task_id)
+            .is_some_and(|r| r.status == "Scheduled")
+    }
+
+    fn close_detail(&mut self) {
+        self.detail = None;
+    }
+
+    fn scroll_detail(&mut self, delta: i32) {
+        if let Some(state) = self.detail.as_mut() {
+            let next = (state.scroll as i32 + delta).max(0) as u16;
+            state.scroll = next;
+        }
+    }
+
     fn delete_selected(&mut self) {
         let rows = self.flat_rows();
         if rows.is_empty() {
@@ -157,6 +229,19 @@ impl SchedulingView {
 
     fn set_snapshot(&mut self, snapshot: SchedulingTasksSnapshotEvent) {
         self.snapshot = Some(snapshot);
+        // If the detail view is open for an OS-cron row, re-read the log
+        // from disk so it picks up output written between fires without the
+        // user having to close and reopen the detail.
+        let refresh_for = self.detail.as_ref().and_then(|detail| {
+            (matches!(detail.kind, SchedulingTaskKind::Cron)
+                && self.row_is_os_cron(&detail.task_id))
+            .then(|| detail.task_id.clone())
+        });
+        if let Some(task_id) = refresh_for
+            && let Some(detail) = self.detail.as_mut()
+        {
+            detail.os_cron_log = read_os_cron_log(&task_id);
+        }
     }
 
     /// Send a new snapshot request if we have an auto-refresh handle and the
@@ -214,6 +299,13 @@ impl SchedulingView {
             return Box::new(body);
         }
 
+        // Detail-view mode: render header + body for the focused row,
+        // pulling fresh data out of the latest snapshot each render.
+        if let Some(state) = &self.detail {
+            self.render_detail(snapshot, state, &mut body);
+            return Box::new(body);
+        }
+
         // Index that increments across cron → monitor → loop so the
         // selection marker tracks the same flat order as `flat_rows()`.
         let selected = self.clamped_selected_index();
@@ -266,20 +358,240 @@ impl SchedulingView {
 
         Box::new(body)
     }
+
+    /// Render the drill-down view for one selected row into `body`.
+    fn render_detail(
+        &self,
+        snapshot: &SchedulingTasksSnapshotEvent,
+        state: &DetailState,
+        body: &mut ColumnRenderable,
+    ) {
+        body.push(Line::from(""));
+        match state.kind {
+            SchedulingTaskKind::Cron => {
+                let Some(row) = snapshot
+                    .cron_jobs
+                    .iter()
+                    .find(|r| r.task_id == state.task_id)
+                else {
+                    body.push(Line::from("(task no longer exists)".dim()));
+                    return;
+                };
+                let label = display_label(row.name.as_deref(), &row.task_id);
+                body.push(Line::from(format!("Cron · {label}").bold()));
+                body.push(Line::from(
+                    format!("  id {}  ·  expr {}", row.task_id, row.cron_expr).dim(),
+                ));
+                body.push(Line::from(
+                    format!(
+                        "  status {} · fired {} · next {}",
+                        row.status,
+                        row.fire_count,
+                        row.next_fire_at
+                            .as_deref()
+                            .and_then(relative_time)
+                            .unwrap_or_else(|| "—".to_string()),
+                    )
+                    .dim(),
+                ));
+                body.push(Line::from(""));
+                body.push(Line::from(format!("prompt: {}", row.prompt)));
+                body.push(Line::from(""));
+                // OS-cron uses log file; in-session uses recent_events.
+                if let Some(log) = state.os_cron_log.as_deref() {
+                    body.push(Line::from("Log (~/.ata/cron/<task_id>.log):".bold()));
+                    push_scrolled_lines(body, log, state.scroll);
+                } else if state.os_cron_log.is_none() && self.row_is_os_cron(&row.task_id) {
+                    body.push(Line::from("Log (~/.ata/cron/<task_id>.log):".bold()));
+                    body.push(Line::from("  (no log file yet — job has not fired)".dim()));
+                } else {
+                    body.push(Line::from("Recent firings:".bold()));
+                    if row.recent_events.is_empty() {
+                        body.push(Line::from("  (none yet)".dim()));
+                    } else {
+                        for ev in &row.recent_events {
+                            body.push(Line::from(format!("  {ev}")));
+                        }
+                    }
+                }
+            }
+            SchedulingTaskKind::Monitor => {
+                let Some(row) = snapshot
+                    .monitors
+                    .iter()
+                    .find(|r| r.task_id == state.task_id)
+                else {
+                    body.push(Line::from("(task no longer exists)".dim()));
+                    return;
+                };
+                let label = display_label(row.name.as_deref(), &row.task_id);
+                body.push(Line::from(format!("Monitor · {label}").bold()));
+                body.push(Line::from(
+                    format!("  id {}  ·  status {}", row.task_id, row.status).dim(),
+                ));
+                body.push(Line::from(format!("  lines {}", row.lines_emitted).dim()));
+                body.push(Line::from(""));
+                body.push(Line::from(format!("command: {}", row.command)));
+                body.push(Line::from(""));
+                body.push(Line::from("Recent output tail:".bold()));
+                if row.tail.is_empty() {
+                    body.push(Line::from("  (no lines captured yet)".dim()));
+                } else {
+                    let joined = row.tail.join("\n");
+                    push_scrolled_lines(body, &joined, state.scroll);
+                }
+            }
+            SchedulingTaskKind::Loop => {
+                let Some(row) = snapshot.loops.iter().find(|r| r.task_id == state.task_id) else {
+                    body.push(Line::from("(task no longer exists)".dim()));
+                    return;
+                };
+                let label = display_label(row.name.as_deref(), &row.task_id);
+                let interval = match row.interval_seconds {
+                    Some(s) => format!("every {s}s"),
+                    None => "dynamic".to_string(),
+                };
+                body.push(Line::from(format!("Loop · {label}").bold()));
+                body.push(Line::from(
+                    format!("  id {}  ·  {}", row.task_id, interval).dim(),
+                ));
+                body.push(Line::from(
+                    format!(
+                        "  status {} · iter {} · next {}",
+                        row.status,
+                        row.iteration_count,
+                        row.next_wakeup_at
+                            .as_deref()
+                            .and_then(relative_time)
+                            .unwrap_or_else(|| "—".to_string()),
+                    )
+                    .dim(),
+                ));
+                body.push(Line::from(""));
+                body.push(Line::from(format!("prompt: {}", row.prompt)));
+                body.push(Line::from(""));
+                body.push(Line::from("Recent iterations:".bold()));
+                if row.recent_events.is_empty() {
+                    body.push(Line::from("  (none yet)".dim()));
+                } else {
+                    for ev in &row.recent_events {
+                        body.push(Line::from(format!("  {ev}")));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Read the OS-cron log file synchronously. Returns `None` if the file
+/// doesn't exist (job has not fired yet) or can't be read for any reason.
+/// Logs are typically small (a few KB per fire), so blocking the render
+/// thread for the one-shot read on Enter is acceptable.
+fn read_os_cron_log(task_id: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path: PathBuf = PathBuf::from(home)
+        .join(".ata")
+        .join("cron")
+        .join(format!("{task_id}.log"));
+    std::fs::read_to_string(&path).ok()
+}
+
+/// Format the display label for a row: prefer the agent-supplied `name`;
+/// fall back to the short task id when name is absent.
+fn display_label(name: Option<&str>, task_id: &str) -> String {
+    match name {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => short_task_id(task_id),
+    }
+}
+
+/// Push raw text into `body` skipping the first `scroll` lines. Long
+/// payloads (OS-cron logs, monitor tails) flow vertically inside the
+/// scrollable detail view.
+fn push_scrolled_lines(body: &mut ColumnRenderable, text: &str, scroll: u16) {
+    let skip = scroll as usize;
+    for line in text.lines().skip(skip) {
+        body.push(Line::from(format!("  {line}")));
+    }
 }
 
 impl BottomPaneView for SchedulingView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        // Detail view: Esc returns to list; ↑/↓ scroll. Other keys are
+        // swallowed so they don't accidentally delete tasks or navigate
+        // the underlying list.
+        if self.detail.is_some() {
+            match key_event {
+                KeyEvent {
+                    code: KeyCode::Esc, ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Left,
+                    ..
+                } => {
+                    self.close_detail();
+                }
+                KeyEvent {
+                    code: KeyCode::Down,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('j'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    self.scroll_detail(1);
+                }
+                KeyEvent {
+                    code: KeyCode::Up, ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('k'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => {
+                    self.scroll_detail(-1);
+                }
+                KeyEvent {
+                    code: KeyCode::PageDown,
+                    ..
+                } => {
+                    self.scroll_detail(10);
+                }
+                KeyEvent {
+                    code: KeyCode::PageUp,
+                    ..
+                } => {
+                    self.scroll_detail(-10);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
+            } => {
+                self.complete = true;
             }
-            | KeyEvent {
+            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::Right,
+                ..
             } => {
-                self.complete = true;
+                // Open detail when there's something to show; otherwise
+                // close the panel (preserves the old "Enter closes empty
+                // panel" muscle memory).
+                if self.flat_rows().is_empty() {
+                    self.complete = true;
+                } else {
+                    self.open_detail();
+                }
             }
             KeyEvent {
                 code: KeyCode::Down,
@@ -380,6 +692,8 @@ fn scheduling_popup_hint_line() -> Line<'static> {
         "/".into(),
         key_hint::plain(KeyCode::Down).into(),
         " select · ".into(),
+        key_hint::plain(KeyCode::Enter).into(),
+        " details · ".into(),
         key_hint::plain(KeyCode::Char('d')).into(),
         " delete · ".into(),
         key_hint::plain(KeyCode::Esc).into(),
@@ -423,9 +737,9 @@ fn status_span(status: &str) -> Span<'static> {
 }
 
 fn cron_row_lines(row: &SchedulingCronRow, selected: bool) -> [Line<'static>; 2] {
-    let short_id = short_task_id(&row.task_id);
+    let label = row_label(row.name.as_deref(), &row.task_id);
     let prompt = truncate(&row.prompt, 50);
-    let head = row_head(row_marker(selected), &short_id, &row.status, &prompt);
+    let head = row_head(row_marker(selected), &label, &row.status, &prompt);
     let next = row
         .next_fire_at
         .as_deref()
@@ -436,17 +750,17 @@ fn cron_row_lines(row: &SchedulingCronRow, selected: bool) -> [Line<'static>; 2]
 }
 
 fn monitor_row_lines(row: &SchedulingMonitorRow, selected: bool) -> [Line<'static>; 2] {
-    let short_id = short_task_id(&row.task_id);
+    let label = row_label(row.name.as_deref(), &row.task_id);
     let cmd = truncate(&row.command, 60);
-    let head = row_head(row_marker(selected), &short_id, &row.status, &cmd);
+    let head = row_head(row_marker(selected), &label, &row.status, &cmd);
     let details = Line::from(format!("      lines {}", row.lines_emitted).dim());
     [head, details]
 }
 
 fn loop_row_lines(row: &SchedulingLoopRow, selected: bool) -> [Line<'static>; 2] {
-    let short_id = short_task_id(&row.task_id);
+    let label = row_label(row.name.as_deref(), &row.task_id);
     let prompt = truncate(&row.prompt, 50);
-    let head = row_head(row_marker(selected), &short_id, &row.status, &prompt);
+    let head = row_head(row_marker(selected), &label, &row.status, &prompt);
     let interval = match row.interval_seconds {
         Some(s) => format!("{s}s"),
         None => "dynamic".to_string(),
@@ -464,6 +778,17 @@ fn loop_row_lines(row: &SchedulingLoopRow, selected: bool) -> [Line<'static>; 2]
         .dim(),
     );
     [head, details]
+}
+
+/// Compute the head-line label for a row: agent-supplied name when
+/// present, otherwise the short task id. Truncated to keep the row layout
+/// stable across long names.
+fn row_label(name: Option<&str>, task_id: &str) -> String {
+    let raw = match name {
+        Some(n) if !n.is_empty() => n.to_string(),
+        _ => return short_task_id(task_id),
+    };
+    truncate(&raw, 24)
 }
 
 fn short_task_id(id: &str) -> String {
@@ -562,6 +887,8 @@ mod tests {
                 fire_count: 3,
                 last_fired_at: None,
                 next_fire_at: Some("2026-05-12T12:00:00Z".into()),
+                name: None,
+                recent_events: Vec::new(),
             }],
             monitors: vec![SchedulingMonitorRow {
                 task_id: "m1".into(),
@@ -570,6 +897,8 @@ mod tests {
                 lines_emitted: 42,
                 started_at: None,
                 stopped_at: None,
+                name: None,
+                tail: Vec::new(),
             }],
             loops: vec![SchedulingLoopRow {
                 task_id: "l1".into(),
@@ -579,6 +908,8 @@ mod tests {
                 iteration_count: 7,
                 last_iter_at: None,
                 next_wakeup_at: None,
+                name: None,
+                recent_events: Vec::new(),
             }],
             scheduling_enabled: true,
         });

@@ -183,12 +183,20 @@ pub fn format_entry(
     log_file: &Path,
 ) -> Result<String, OsCronError> {
     let five_field = six_field_to_five(&job.cron_expr)?;
-    let comment = format!(
+    // Tag line: prefix + task_id + key/value pairs separated by ` | `. Names
+    // are URL-encoded so they can safely carry spaces and `|` characters
+    // without confusing the parser. Whitespace-only names are dropped at
+    // construction time, so `Some(s)` here is always non-empty.
+    let mut comment = format!(
         "{prefix}{id} | created={created}",
         prefix = TAG_PREFIX,
         id = job.id,
         created = job.created_at.to_rfc3339(),
     );
+    if let Some(name) = job.name.as_deref() {
+        comment.push_str(" | name=");
+        comment.push_str(&encode_tag_value(name));
+    }
     // Cron runs with a minimal PATH (typically `/usr/bin:/bin`). If `ata`
     // is a wrapper script (the npm distribution is a node shebang), the
     // interpreter it shells out to (e.g. `node`) must be discoverable.
@@ -218,6 +226,43 @@ pub fn format_entry(
         log = shell_quote_path(log_file),
     );
     Ok(format!("{comment}\n{command}\n"))
+}
+
+/// Percent-encode characters that would conflict with the crontab tag
+/// parser (newlines, `|`, `%`). Spaces are left alone so the tag stays
+/// readable when the user runs `crontab -l`.
+fn encode_tag_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '%' => out.push_str("%25"),
+            '|' => out.push_str("%7C"),
+            '\n' | '\r' => out.push_str("%0A"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Inverse of [`encode_tag_value`]. Best-effort: unknown escapes pass
+/// through unchanged so callers don't have to deal with errors here.
+fn decode_tag_value(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
 }
 
 /// Minimal shell quoting for paths: wrap in single quotes if the path
@@ -334,6 +379,10 @@ pub struct AtaCronEntry {
     pub prompt: String,
     pub created_at: Option<DateTime<Utc>>,
     pub log_path: PathBuf,
+    /// Optional human-readable label parsed from the tag line's
+    /// `name=<percent-encoded>` field. `None` for older entries written
+    /// before this metadata existed.
+    pub name: Option<String>,
 }
 
 /// List all ata-managed cron entries currently in the user's crontab.
@@ -361,6 +410,12 @@ fn parse_crontab(content: &str) -> Result<Vec<AtaCronEntry>, OsCronError> {
                 .find_map(|kv| kv.strip_prefix("created="))
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&Utc));
+
+            let name = metadata
+                .split(" | ")
+                .find_map(|kv| kv.strip_prefix("name="))
+                .map(decode_tag_value)
+                .filter(|s| !s.is_empty());
 
             // The next non-blank line is the schedule line.
             let schedule_idx = (i + 1..lines.len()).find(|&j| !lines[j].trim().is_empty());
@@ -398,6 +453,7 @@ fn parse_crontab(content: &str) -> Result<Vec<AtaCronEntry>, OsCronError> {
                 prompt,
                 created_at,
                 log_path: log,
+                name,
             });
             i = j + 1;
         } else {

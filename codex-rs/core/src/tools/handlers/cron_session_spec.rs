@@ -61,6 +61,13 @@ pub fn create_cron_session_create_tool() -> ToolSpec {
                     .to_string(),
             )),
         ),
+        (
+            "name".to_string(),
+            JsonSchema::string(Some(
+                "Optional but strongly recommended. A short human-readable label (2-5 words, e.g. \"HN stories puller\") shown alongside the task in the user's `/scheduling` panel. Falls back to the short task id when omitted."
+                    .to_string(),
+            )),
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {

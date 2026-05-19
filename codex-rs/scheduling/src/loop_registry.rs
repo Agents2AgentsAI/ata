@@ -7,8 +7,11 @@
 use chrono::DateTime;
 use chrono::Utc;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use crate::loop_task::LOOP_ITERATION_HISTORY_CAPACITY;
+use crate::loop_task::LoopIterationRecord;
 use crate::loop_task::LoopTask;
 use crate::task::TaskId;
 use crate::task::TaskStatus;
@@ -103,6 +106,13 @@ impl LoopRegistry {
             {
                 task.next_wakeup_at = Some(fired_at + interval_chrono);
             }
+            push_iter_record(
+                &mut task.recent_iterations,
+                LoopIterationRecord {
+                    fired_at,
+                    outcome: "fired".to_string(),
+                },
+            );
             // Return to `Pending` between firings so `/scheduling` reads as
             // "waiting for next interval tick" rather than stuck on `Running`
             // forever. Mirrors the cron registry fix. Terminal transitions
@@ -160,6 +170,13 @@ impl LoopRegistry {
             task.last_iter_at = Some(stopped_at);
         }
     }
+}
+
+fn push_iter_record(buf: &mut VecDeque<LoopIterationRecord>, record: LoopIterationRecord) {
+    if buf.len() == LOOP_ITERATION_HISTORY_CAPACITY {
+        buf.pop_front();
+    }
+    buf.push_back(record);
 }
 
 #[cfg(test)]

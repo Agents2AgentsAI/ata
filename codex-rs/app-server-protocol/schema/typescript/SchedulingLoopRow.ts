@@ -10,4 +10,12 @@ export type SchedulingLoopRow = { task_id: string, prompt: string,
  * Fixed-interval loops report their interval here in seconds; dynamic /
  * model-paced loops are `None`.
  */
-interval_seconds?: number | null, status: string, iteration_count: bigint, last_iter_at?: string | null, next_wakeup_at?: string | null, };
+interval_seconds?: number | null, status: string, iteration_count: bigint, last_iter_at?: string | null, next_wakeup_at?: string | null,
+/**
+ * Optional agent-supplied human-readable label.
+ */
+name?: string | null,
+/**
+ * Pre-formatted iteration history (newest last) for the detail view.
+ */
+recent_events?: Array<string>, };

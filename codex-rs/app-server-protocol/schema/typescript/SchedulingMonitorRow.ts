@@ -5,4 +5,13 @@
 /**
  * ATA: per-monitor row in [`SchedulingTasksSnapshotEvent`].
  */
-export type SchedulingMonitorRow = { task_id: string, command: string, status: string, lines_emitted: bigint, started_at?: string | null, stopped_at?: string | null, };
+export type SchedulingMonitorRow = { task_id: string, command: string, status: string, lines_emitted: bigint, started_at?: string | null, stopped_at?: string | null,
+/**
+ * Optional agent-supplied human-readable label.
+ */
+name?: string | null,
+/**
+ * Tail of recent output lines (already prefixed with `[stdout]` or
+ * `[stderr]`). Used by the detail view.
+ */
+tail?: Array<string>, };

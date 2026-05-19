@@ -7,4 +7,16 @@
  * RFC 3339 strings (rather than i64) so the TUI can render them without
  * pulling in chrono on the wire.
  */
-export type SchedulingCronRow = { task_id: string, cron_expr: string, prompt: string, status: string, fire_count: bigint, last_fired_at?: string | null, next_fire_at?: string | null, };
+export type SchedulingCronRow = { task_id: string, cron_expr: string, prompt: string, status: string, fire_count: bigint, last_fired_at?: string | null, next_fire_at?: string | null,
+/**
+ * Optional agent-supplied human-readable label. Empty/whitespace
+ * strings collapse to `None`; the TUI then falls back to the short id.
+ */
+name?: string | null,
+/**
+ * Pre-formatted history records (newest last) for the `/scheduling`
+ * detail view. For in-session crons this is the per-fire ring buffer;
+ * for OS-cron rows the host leaves this empty (the TUI reads the log
+ * file directly when the user opens the detail view).
+ */
+recent_events?: Array<string>, };

@@ -76,7 +76,8 @@ impl ToolHandler for CronSessionCreateHandler {
         )
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!("cron_create_session rejected: {err}"))
-        })?;
+        })?
+        .with_name(args.name);
 
         let now = Utc::now();
         let task_id = registry.insert(job, now);

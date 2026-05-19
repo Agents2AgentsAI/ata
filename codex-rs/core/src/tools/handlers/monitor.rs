@@ -36,6 +36,9 @@ struct MonitorStartArgs {
     /// long-running commands (`tail -F`, `watch`, dev servers).
     #[serde(default)]
     restart_on_resume: bool,
+    /// Optional. Short human-readable label for the `/scheduling` panel.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 fn default_background() -> bool {

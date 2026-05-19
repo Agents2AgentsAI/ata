@@ -5,6 +5,7 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -15,6 +16,22 @@ use crate::task::TaskStatus;
 pub enum CronError {
     #[error("invalid cron expression: {0}")]
     InvalidExpression(String),
+}
+
+/// Maximum number of recent firing events retained on each in-session
+/// [`CronJob`] for surfacing in the `/scheduling` detail view. Older entries
+/// are evicted FIFO. Kept tiny so memory stays predictable.
+pub const CRON_FIRE_HISTORY_CAPACITY: usize = 50;
+
+/// One firing event for an in-session cron job. Captured in
+/// [`CronJob::recent_fires`] each time the cron tick handler dispatches the
+/// job's prompt. `outcome` is a short human-readable string (e.g. `"fired"`,
+/// `"skipped (terminal)"`). The TUI detail view renders a few of the most
+/// recent records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CronFireRecord {
+    pub fired_at: DateTime<Utc>,
+    pub outcome: String,
 }
 
 /// One scheduled, recurring prompt. The cron expression is validated at
@@ -54,6 +71,18 @@ pub struct CronJob {
     /// twice a year (or pass UTC and compute the offset themselves).
     #[serde(default)]
     pub timezone: Option<String>,
+    /// Optional human-readable label assigned by the agent at creation time
+    /// (e.g. `"HN stories puller"`). Surfaced in the `/scheduling` panel
+    /// alongside the short task id. Old persisted snapshots without this
+    /// field load as `None` and the panel falls back to the short id.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Ring buffer of the most recent firing events. Push on each fire in
+    /// the cron tick handler; capped at [`CRON_FIRE_HISTORY_CAPACITY`].
+    /// Not persisted to the sidecar (ephemeral diagnostics) — the
+    /// `#[serde(default, skip_serializing)]` keeps the on-disk shape stable.
+    #[serde(default, skip_serializing)]
+    pub recent_fires: VecDeque<CronFireRecord>,
 }
 
 /// Parse a UTC-offset string into a `FixedOffset`. Accepts `+HH:MM`,
@@ -140,8 +169,24 @@ impl CronJob {
             max_firings,
             until,
             timezone,
+            name: None,
+            recent_fires: VecDeque::new(),
         })
     }
+
+    /// Builder-style helper: set the agent-supplied human-readable name.
+    /// Empty or whitespace-only strings collapse to `None` so the panel
+    /// falls back to the short id.
+    pub fn with_name(mut self, name: Option<String>) -> Self {
+        self.name = normalize_optional_name(name);
+        self
+    }
+}
+
+/// Trim and reject empty/whitespace-only strings so the rest of the code
+/// only has to deal with `Some(non-empty)` vs `None`.
+pub fn normalize_optional_name(name: Option<String>) -> Option<String> {
+    name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]

@@ -121,6 +121,10 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
                     fire_count: stats.fire_count,
                     last_fired_at: stats.last_fired_at.map(|t| t.to_rfc3339()),
                     next_fire_at,
+                    name: e.name,
+                    // OS-cron history lives in the log file; the TUI reads it
+                    // directly on detail open.
+                    recent_events: Vec::new(),
                 }
             })
             .collect()
@@ -130,6 +134,17 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
 
     if let Some(reg) = sess.cron_registry() {
         for job in reg.list() {
+            let recent_events = job
+                .recent_fires
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{}  {}",
+                        r.fired_at.with_timezone(&chrono::Local).format("%H:%M:%S"),
+                        r.outcome
+                    )
+                })
+                .collect();
             cron_jobs.push(SchedulingCronRow {
                 task_id: job.id.as_str().to_string(),
                 cron_expr: job.cron_expr,
@@ -138,6 +153,8 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
                 fire_count: job.fire_count,
                 last_fired_at: job.last_fired_at.map(|ts| ts.to_rfc3339()),
                 next_fire_at: job.next_fire_at.map(|ts| ts.to_rfc3339()),
+                name: job.name,
+                recent_events,
             });
         }
     }
@@ -148,13 +165,18 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
             rt.registry
                 .list()
                 .into_iter()
-                .map(|m| SchedulingMonitorRow {
-                    task_id: m.id.as_str().to_string(),
-                    command: m.command,
-                    status: format!("{:?}", m.status),
-                    lines_emitted: m.lines_emitted,
-                    started_at: m.started_at.map(|ts| ts.to_rfc3339()),
-                    stopped_at: m.stopped_at.map(|ts| ts.to_rfc3339()),
+                .map(|m| {
+                    let tail = rt.registry.tail_snapshot(&m.id);
+                    SchedulingMonitorRow {
+                        task_id: m.id.as_str().to_string(),
+                        command: m.command,
+                        status: format!("{:?}", m.status),
+                        lines_emitted: m.lines_emitted,
+                        started_at: m.started_at.map(|ts| ts.to_rfc3339()),
+                        stopped_at: m.stopped_at.map(|ts| ts.to_rfc3339()),
+                        name: m.name,
+                        tail,
+                    }
                 })
                 .collect()
         })
@@ -166,14 +188,29 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
             rt.registry
                 .list()
                 .into_iter()
-                .map(|l| SchedulingLoopRow {
-                    task_id: l.id.as_str().to_string(),
-                    prompt: l.prompt,
-                    interval_seconds: l.interval.map(|d| d.as_secs()),
-                    status: format!("{:?}", l.status),
-                    iteration_count: l.iteration_count,
-                    last_iter_at: l.last_iter_at.map(|ts| ts.to_rfc3339()),
-                    next_wakeup_at: l.next_wakeup_at.map(|ts| ts.to_rfc3339()),
+                .map(|l| {
+                    let recent_events = l
+                        .recent_iterations
+                        .iter()
+                        .map(|r| {
+                            format!(
+                                "{}  {}",
+                                r.fired_at.with_timezone(&chrono::Local).format("%H:%M:%S"),
+                                r.outcome
+                            )
+                        })
+                        .collect();
+                    SchedulingLoopRow {
+                        task_id: l.id.as_str().to_string(),
+                        prompt: l.prompt,
+                        interval_seconds: l.interval.map(|d| d.as_secs()),
+                        status: format!("{:?}", l.status),
+                        iteration_count: l.iteration_count,
+                        last_iter_at: l.last_iter_at.map(|ts| ts.to_rfc3339()),
+                        next_wakeup_at: l.next_wakeup_at.map(|ts| ts.to_rfc3339()),
+                        name: l.name,
+                        recent_events,
+                    }
                 })
                 .collect()
         })

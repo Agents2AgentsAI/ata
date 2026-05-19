@@ -109,7 +109,8 @@ impl ToolHandler for LoopStartHandler {
                 t.background = args.background;
                 t
             }
-        };
+        }
+        .with_name(args.name);
         let task_id = runtime.registry.insert(task);
         match mode {
             LoopMode::Fixed(interval) => tracing::info!(

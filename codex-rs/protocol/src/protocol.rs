@@ -3752,6 +3752,16 @@ pub struct SchedulingCronRow {
     pub last_fired_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_fire_at: Option<String>,
+    /// Optional agent-supplied human-readable label. Empty/whitespace
+    /// strings collapse to `None`; the TUI then falls back to the short id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Pre-formatted history records (newest last) for the `/scheduling`
+    /// detail view. For in-session crons this is the per-fire ring buffer;
+    /// for OS-cron rows the host leaves this empty (the TUI reads the log
+    /// file directly when the user opens the detail view).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_events: Vec<String>,
 }
 
 /// ATA: per-monitor row in [`SchedulingTasksSnapshotEvent`].
@@ -3765,6 +3775,13 @@ pub struct SchedulingMonitorRow {
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<String>,
+    /// Optional agent-supplied human-readable label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Tail of recent output lines (already prefixed with `[stdout]` or
+    /// `[stderr]`). Used by the detail view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tail: Vec<String>,
 }
 
 /// ATA: per-loop row in [`SchedulingTasksSnapshotEvent`].
@@ -3783,6 +3800,12 @@ pub struct SchedulingLoopRow {
     pub last_iter_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_wakeup_at: Option<String>,
+    /// Optional agent-supplied human-readable label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Pre-formatted iteration history (newest last) for the detail view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_events: Vec<String>,
 }
 
 /// ATA: a single streamed line from a running monitor command. The `stream`
