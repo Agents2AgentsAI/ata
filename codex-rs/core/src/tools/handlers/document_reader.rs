@@ -5,6 +5,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use codex_features::Feature;
 use codex_protocol::document_reader::AddDocumentSectionArgs;
 use codex_protocol::document_reader::AddDocumentSectionEvent;
 use codex_protocol::document_reader::AppendDocumentSectionEvent;
@@ -427,9 +428,23 @@ impl DocumentCache {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
-    match config
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadingViewConfigMode {
+    Tui,
+    Browser,
+    Disabled,
+}
+
+fn parse_reading_view_config_mode(mode: Option<&str>) -> ReadingViewConfigMode {
+    match mode.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("browser") => ReadingViewConfigMode::Browser,
+        Some("disabled" | "off") => ReadingViewConfigMode::Disabled,
+        _ => ReadingViewConfigMode::Tui,
+    }
+}
+
+fn reading_view_config_mode_from_config(config: &Config) -> ReadingViewConfigMode {
+    let configured_mode = config
         .config_layer_stack
         .effective_config()
         .as_table()
@@ -439,28 +454,31 @@ pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingV
                 .try_into::<crate::config::types::ReadingViewToml>()
                 .ok()
         })
-        .and_then(|rv| rv.mode)
-        .as_deref()
-    {
-        Some("browser") => ReadingViewDisplayMode::Browser,
+        .and_then(|rv| rv.mode);
+
+    if configured_mode.is_some() {
+        return parse_reading_view_config_mode(configured_mode.as_deref());
+    }
+
+    // Backward compatibility for configs written before `[reading_view].mode`
+    // became the source of truth.
+    if !config.features.enabled(Feature::ReadingView) {
+        return ReadingViewConfigMode::Disabled;
+    }
+
+    ReadingViewConfigMode::Tui
+}
+
+#[allow(dead_code)]
+pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
+    match reading_view_config_mode_from_config(config) {
+        ReadingViewConfigMode::Browser => ReadingViewDisplayMode::Browser,
         _ => ReadingViewDisplayMode::Tui,
     }
 }
 
 pub(crate) fn reading_view_tools_enabled(config: &Config) -> bool {
-    config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|t| t.get("reading_view"))
-        .and_then(|v| {
-            v.clone()
-                .try_into::<crate::config::types::ReadingViewToml>()
-                .ok()
-        })
-        .and_then(|rv| rv.mode)
-        .as_deref()
-        != Some("disabled")
+    reading_view_config_mode_from_config(config) != ReadingViewConfigMode::Disabled
 }
 
 // ---------------------------------------------------------------------------
@@ -1512,6 +1530,61 @@ mod tests {
             next_streaming_section(&doc),
             Some((1, "Method".to_string()))
         );
+    }
+
+    #[test]
+    fn parse_reading_view_config_mode_accepts_disabled_and_off() {
+        assert_eq!(
+            parse_reading_view_config_mode(Some("browser")),
+            ReadingViewConfigMode::Browser
+        );
+        assert_eq!(
+            parse_reading_view_config_mode(Some("disabled")),
+            ReadingViewConfigMode::Disabled
+        );
+        assert_eq!(
+            parse_reading_view_config_mode(Some("off")),
+            ReadingViewConfigMode::Disabled
+        );
+        assert_eq!(
+            parse_reading_view_config_mode(Some("tui")),
+            ReadingViewConfigMode::Tui
+        );
+    }
+
+    #[tokio::test]
+    async fn reading_view_mode_overrides_legacy_feature_flag() -> std::io::Result<()> {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"[reading_view]
+mode = "disabled"
+
+[features]
+reading_view = true
+"#,
+        )?;
+
+        let config = crate::config::ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .harness_overrides(crate::config::ConfigOverrides {
+                cwd: Some(tmp.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+
+        assert_eq!(
+            reading_view_config_mode_from_config(&config),
+            ReadingViewConfigMode::Disabled
+        );
+        assert!(!reading_view_tools_enabled(&config));
+        assert_eq!(
+            reading_view_display_mode_from_config(&config),
+            ReadingViewDisplayMode::Tui
+        );
+
+        Ok(())
     }
 
     #[test]

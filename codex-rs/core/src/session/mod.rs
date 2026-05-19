@@ -1492,6 +1492,11 @@ impl Session {
         };
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
+        self.document_cache.set_display_mode(
+            crate::tools::handlers::document_reader::reading_view_display_mode_from_config(
+                config.as_ref(),
+            ),
+        );
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),

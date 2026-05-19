@@ -36,6 +36,15 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 retries = 2
 
 [[profile.default.overrides]]
+# Generated-image rollback drives the image artifact path plus a second
+# rollback/replay turn. On full ARM CI this can cross the default 60s ceiling
+# before the mocked server responds, so give this exact integration test the
+# same timing headroom as other rollout-replay cases.
+filter = 'package(codex-core) & test(suite::model_switching::thread_rollback_after_generated_image_drops_entire_image_turn_history)'
+slow-timeout = { period = "120s", terminate-after = 2 }
+retries = 2
+
+[[profile.default.overrides]]
 # Nested rollout-resume tree tests are materially slower on Windows due to
 # filesystem and thread startup overhead.
 filter = 'test(resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdown) | test(resume_agent_from_rollout_uses_edge_data_when_descendant_metadata_source_is_stale)'

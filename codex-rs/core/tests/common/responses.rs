@@ -891,7 +891,7 @@ pub fn ev_apply_patch_call(
     match output_type {
         ApplyPatchModelOutput::Freeform => ev_apply_patch_custom_tool_call(call_id, patch),
         ApplyPatchModelOutput::Function => ev_apply_patch_function_call(call_id, patch),
-        ApplyPatchModelOutput::Shell => ev_apply_patch_shell_call(call_id, patch),
+        ApplyPatchModelOutput::ShellArgv => ev_apply_patch_shell_call(call_id, patch),
         ApplyPatchModelOutput::ShellViaHeredoc => {
             ev_apply_patch_shell_call_via_heredoc(call_id, patch)
         }

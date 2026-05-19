@@ -106,6 +106,7 @@ pub(crate) mod slash_commands;
 mod voice_setup_view;
 pub(crate) use account_view::AccountView;
 pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_reading_view_tool_items;
 pub(crate) use research_tools_view::build_research_tool_items;
 #[cfg(not(target_os = "linux"))]
 pub(crate) use voice_setup_view::VoiceSetupView;
