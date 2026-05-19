@@ -10445,24 +10445,19 @@ impl ChatWidget {
 
     /// /research opens the research-tools toggle popup so users can enable
     /// or disable individual research integrations (Paper Search, Zotero,
-    /// HN, Patents, Repo Analysis, Reading View, Knowledge Base).
+    /// HN, Patents, Repo Analysis, Knowledge Base).
     pub(crate) fn open_research_popup(&mut self) {
-        self.open_research_popup_focused(None);
+        let items = crate::bottom_pane::build_research_tool_items(&self.config.features);
+        let view = crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
     }
 
     pub(crate) fn open_reading_view_popup(&mut self) {
-        self.open_research_popup_focused(Some(codex_features::Feature::ReadingView));
-    }
-
-    fn open_research_popup_focused(&mut self, focused_feature: Option<codex_features::Feature>) {
-        let items = crate::bottom_pane::build_research_tool_items(
-            &self.config.features,
-            self.reading_view_mode,
+        let items = crate::bottom_pane::build_reading_view_tool_items(self.reading_view_mode);
+        let view = crate::bottom_pane::ResearchToolsView::new_reading_view(
+            items,
+            self.app_event_tx.clone(),
         );
-        let mut view = crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
-        if let Some(feature) = focused_feature {
-            view.select_feature(feature);
-        }
         self.bottom_pane.show_view(Box::new(view));
     }
 

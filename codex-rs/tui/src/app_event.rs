@@ -936,9 +936,8 @@ pub(crate) enum AppEvent {
     /// A message received from a browser WebSocket client connected to the
     /// reading-view server (e.g. follow-up question, read-aloud request).
     ReadingViewBrowserMessage(String),
-    /// The user changed the reading view mode via the research popup or the
-    /// reading-view setup popup. Currently emitted from
-    /// `bottom_pane::ResearchToolsView`.
+    /// The user changed the reading view mode via the reading-view setup
+    /// popup. Currently emitted from `bottom_pane::ResearchToolsView`.
     ReadingViewModeChanged(ReadingViewMode),
 
     /// `/workspace use <selector>` switched the active workspace. The app

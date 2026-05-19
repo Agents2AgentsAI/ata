@@ -14,9 +14,13 @@ use std::time::Duration;
 
 use notify::Event;
 use notify::EventKind;
-use notify::RecommendedWatcher;
+use notify::ErrorKind as NotifyErrorKind;
+use notify::PollWatcher;
 use notify::RecursiveMode;
 use notify::Watcher;
+#[cfg(test)]
+use notify::NullWatcher;
+use notify::Config as NotifyConfig;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::Notify;
@@ -217,8 +221,9 @@ impl PathWatchCounts {
 }
 
 struct FileWatcherInner {
-    watcher: RecommendedWatcher,
+    watcher: Box<dyn Watcher + Send>,
     watched_paths: HashMap<PathBuf, RecursiveMode>,
+    raw_tx: mpsc::UnboundedSender<notify::Result<Event>>,
 }
 
 /// Coalesces bursts of watch notifications and emits at most once per interval.
@@ -335,13 +340,14 @@ impl FileWatcher {
     /// on the current Tokio runtime.
     pub fn new() -> notify::Result<Self> {
         let (raw_tx, raw_rx) = mpsc::unbounded_channel();
-        let raw_tx_clone = raw_tx;
+        let raw_tx_clone = raw_tx.clone();
         let watcher = notify::recommended_watcher(move |res| {
             let _ = raw_tx_clone.send(res);
         })?;
         let inner = FileWatcherInner {
-            watcher,
+            watcher: Box::new(watcher),
             watched_paths: HashMap::new(),
+            raw_tx,
         };
         let state = Arc::new(RwLock::new(WatchState::default()));
         let file_watcher = Self {
@@ -357,6 +363,20 @@ impl FileWatcher {
     pub fn noop() -> Self {
         Self {
             inner: None,
+            state: Arc::new(RwLock::new(WatchState::default())),
+        }
+    }
+
+    #[cfg(test)]
+    fn recording_noop() -> Self {
+        let (raw_tx, _raw_rx) = mpsc::unbounded_channel();
+        let inner = FileWatcherInner {
+            watcher: Box::new(NullWatcher),
+            watched_paths: HashMap::new(),
+            raw_tx,
+        };
+        Self {
+            inner: Some(Arc::new(Mutex::new(inner))),
             state: Arc::new(RwLock::new(WatchState::default())),
         }
     }
@@ -558,10 +578,43 @@ impl FileWatcher {
         }
 
         if let Err(err) = guard.watcher.watch(path, next_mode) {
+            if matches!(err.kind, NotifyErrorKind::MaxFilesWatch) {
+                match Self::switch_to_poll_watcher(guard, path, next_mode) {
+                    Ok(()) => return,
+                    Err(fallback_err) => {
+                        warn!(
+                            "failed to fall back to polling watcher for {} after OS watch limit was reached: {fallback_err}",
+                            path.display()
+                        );
+                    }
+                }
+            }
             warn!("failed to watch {}: {err}", path.display());
             return;
         }
         guard.watched_paths.insert(path.to_path_buf(), next_mode);
+    }
+
+    fn switch_to_poll_watcher(
+        guard: &mut FileWatcherInner,
+        path: &Path,
+        next_mode: RecursiveMode,
+    ) -> notify::Result<()> {
+        let raw_tx = guard.raw_tx.clone();
+        let mut poll_watcher = PollWatcher::new(
+            move |res| {
+                let _ = raw_tx.send(res);
+            },
+            NotifyConfig::default().with_poll_interval(Duration::from_millis(250)),
+        )?;
+        let mut watched_paths = guard.watched_paths.clone();
+        watched_paths.insert(path.to_path_buf(), next_mode);
+        for (watched_path, mode) in &watched_paths {
+            poll_watcher.watch(watched_path, *mode)?;
+        }
+        guard.watcher = Box::new(poll_watcher);
+        guard.watched_paths = watched_paths;
+        Ok(())
     }
 
     fn apply_actual_watch_move<'a>(

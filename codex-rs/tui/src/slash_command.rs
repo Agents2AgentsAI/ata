@@ -152,7 +152,7 @@ impl SlashCommand {
                 "summarize the active workspace; manage with `ata workspace`"
             }
             SlashCommand::Jobs => "summarize scheduled jobs; manage with `ata jobs`",
-            SlashCommand::Research => "configure research tools and reading-view behavior",
+            SlashCommand::Research => "configure research tool integrations",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",

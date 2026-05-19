@@ -65,12 +65,6 @@ const RESEARCH_FEATURES: &[(Feature, &str, &str, &str)] = &[
         "",
     ),
     (
-        Feature::ReadingView,
-        "Reading View",
-        "Present output as a navigable document with foldable sections",
-        "",
-    ),
-    (
         Feature::ResearchKnowledgeBase,
         "Knowledge Base",
         "Persist research cards, journal entries, and cross-paper reports",
@@ -99,11 +93,35 @@ pub(crate) struct ResearchToolsView {
 
 impl ResearchToolsView {
     pub(crate) fn new(items: Vec<ResearchToolItem>, app_event_tx: AppEventSender) -> Self {
+        Self::with_header(
+            items,
+            app_event_tx,
+            "Research tools",
+            "Toggle research tool integrations. Changes are saved to config.toml.",
+        )
+    }
+
+    pub(crate) fn new_reading_view(
+        items: Vec<ResearchToolItem>,
+        app_event_tx: AppEventSender,
+    ) -> Self {
+        Self::with_header(
+            items,
+            app_event_tx,
+            "Reading view",
+            "Choose how long-form documents are displayed. Changes are saved to config.toml.",
+        )
+    }
+
+    fn with_header(
+        items: Vec<ResearchToolItem>,
+        app_event_tx: AppEventSender,
+        title: &'static str,
+        subtitle: &'static str,
+    ) -> Self {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Research tools".bold()));
-        header.push(Line::from(
-            "Toggle research tool integrations. Changes are saved to config.toml.".dim(),
-        ));
+        header.push(Line::from(title.bold()));
+        header.push(Line::from(subtitle.dim()));
 
         let mut view = Self {
             items,
@@ -125,6 +143,7 @@ impl ResearchToolsView {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn select_feature(&mut self, feature: Feature) {
         let Some(idx) = self.items.iter().position(|item| item.feature == feature) else {
             return;
@@ -286,10 +305,12 @@ impl BottomPaneView for ResearchToolsView {
                 .filter(|item| item.feature != Feature::ReadingView)
                 .map(|item| (item.feature, item.enabled))
                 .collect();
-            // Clear master research flag so per-category flags take sole authority.
-            updates.push((Feature::Research, false));
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+            if !updates.is_empty() {
+                // Clear master research flag so per-category flags take sole authority.
+                updates.push((Feature::Research, false));
+                self.app_event_tx
+                    .send(AppEvent::UpdateFeatureFlags { updates });
+            }
 
             // Propagate reading view mode change if present.
             if let Some(rv_item) = self
@@ -385,21 +406,14 @@ impl Renderable for ResearchToolsView {
 /// Build `ResearchToolItem`s from the hardcoded feature list, using current config state.
 pub(crate) fn build_research_tool_items(
     features: &codex_features::Features,
-    reading_view_mode: crate::app_event::ReadingViewMode,
 ) -> Vec<ResearchToolItem> {
     RESEARCH_FEATURES
         .iter()
         .map(|&(feature, name, description, setup_hint)| {
-            let (enabled, rv_mode) = if feature == Feature::ReadingView {
-                let enabled = reading_view_mode != crate::app_event::ReadingViewMode::Disabled;
-                (enabled, Some(reading_view_mode))
-            } else if feature == Feature::ResearchKnowledgeBase {
-                (features.enabled(feature), None)
+            let enabled = if feature == Feature::ResearchKnowledgeBase {
+                features.enabled(feature)
             } else {
-                (
-                    features.enabled(Feature::Research) || features.enabled(feature),
-                    None,
-                )
+                features.enabled(Feature::Research) || features.enabled(feature)
             };
             ResearchToolItem {
                 feature,
@@ -407,10 +421,23 @@ pub(crate) fn build_research_tool_items(
                 description,
                 setup_hint,
                 enabled,
-                reading_view_mode: rv_mode,
+                reading_view_mode: None,
             }
         })
         .collect()
+}
+
+pub(crate) fn build_reading_view_tool_items(
+    reading_view_mode: crate::app_event::ReadingViewMode,
+) -> Vec<ResearchToolItem> {
+    vec![ResearchToolItem {
+        feature: Feature::ReadingView,
+        name: "Reading View",
+        description: "Present output as a navigable document with foldable sections",
+        setup_hint: "",
+        enabled: reading_view_mode != crate::app_event::ReadingViewMode::Disabled,
+        reading_view_mode: Some(reading_view_mode),
+    }]
 }
 
 fn research_popup_hint_line() -> Line<'static> {
@@ -480,10 +507,7 @@ mod tests {
         let (tx, _rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(tx);
         let mut view = ResearchToolsView::new(
-            build_research_tool_items(
-                &codex_features::Features::with_defaults(),
-                crate::app_event::ReadingViewMode::Tui,
-            ),
+            build_reading_view_tool_items(crate::app_event::ReadingViewMode::Tui),
             app_event_tx,
         );
 
