@@ -473,7 +473,7 @@ $"#;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellArgv)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_output_is_structured(
     output_type: ApplyPatchModelOutput,
@@ -519,7 +519,7 @@ A {file_name}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellArgv)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_creates_file(
     output_type: ApplyPatchModelOutput,
@@ -567,7 +567,7 @@ A {file_name}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellArgv)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_updates_existing_file(
     output_type: ApplyPatchModelOutput,
@@ -620,7 +620,7 @@ M {file_name}
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellArgv)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_custom_tool_call_reports_failure_output(
     output_type: ApplyPatchModelOutput,
@@ -665,7 +665,7 @@ async fn apply_patch_custom_tool_call_reports_failure_output(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test_case(ApplyPatchModelOutput::Freeform)]
 #[test_case(ApplyPatchModelOutput::Function)]
-#[test_case(ApplyPatchModelOutput::Shell)]
+#[test_case(ApplyPatchModelOutput::ShellArgv)]
 #[test_case(ApplyPatchModelOutput::ShellViaHeredoc)]
 async fn apply_patch_function_call_output_is_structured(
     output_type: ApplyPatchModelOutput,

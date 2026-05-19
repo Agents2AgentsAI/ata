@@ -65,12 +65,6 @@ const RESEARCH_FEATURES: &[(Feature, &str, &str, &str)] = &[
         "",
     ),
     (
-        Feature::ReadingView,
-        "Reading View",
-        "Present output as a navigable document with foldable sections",
-        "",
-    ),
-    (
         Feature::ResearchKnowledgeBase,
         "Knowledge Base",
         "Persist research cards, journal entries, and cross-paper reports",
@@ -99,11 +93,35 @@ pub(crate) struct ResearchToolsView {
 
 impl ResearchToolsView {
     pub(crate) fn new(items: Vec<ResearchToolItem>, app_event_tx: AppEventSender) -> Self {
+        Self::with_header(
+            items,
+            app_event_tx,
+            "Research tools",
+            "Toggle research tool integrations. Changes are saved to config.toml.",
+        )
+    }
+
+    pub(crate) fn new_reading_view(
+        items: Vec<ResearchToolItem>,
+        app_event_tx: AppEventSender,
+    ) -> Self {
+        Self::with_header(
+            items,
+            app_event_tx,
+            "Reading view",
+            "Choose how long-form documents are displayed. Changes are saved to config.toml.",
+        )
+    }
+
+    fn with_header(
+        items: Vec<ResearchToolItem>,
+        app_event_tx: AppEventSender,
+        title: &'static str,
+        subtitle: &'static str,
+    ) -> Self {
         let mut header = ColumnRenderable::new();
-        header.push(Line::from("Research tools".bold()));
-        header.push(Line::from(
-            "Toggle research tool integrations. Changes are saved to config.toml.".dim(),
-        ));
+        header.push(Line::from(title.bold()));
+        header.push(Line::from(subtitle.dim()));
 
         let mut view = Self {
             items,
@@ -125,6 +143,16 @@ impl ResearchToolsView {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn select_feature(&mut self, feature: Feature) {
+        let Some(idx) = self.items.iter().position(|item| item.feature == feature) else {
+            return;
+        };
+        self.state.selected_idx = Some(idx);
+        let len = self.visible_len();
+        self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
+    }
+
     fn visible_len(&self) -> usize {
         self.items.len()
     }
@@ -139,12 +167,7 @@ impl ResearchToolsView {
                 ' '
             };
             let name = if let Some(mode) = item.reading_view_mode {
-                let mode_label = match mode {
-                    crate::app_event::ReadingViewMode::Tui => "tui",
-                    crate::app_event::ReadingViewMode::Browser => "browser",
-                    crate::app_event::ReadingViewMode::Disabled => "off",
-                };
-                format!("{prefix} [{mode_label}] {}", item.name)
+                format!("{prefix} [{}] {}", mode.label(), item.name)
             } else {
                 let marker = if item.enabled { 'x' } else { ' ' };
                 format!("{prefix} [{marker}] {}", item.name)
@@ -279,12 +302,15 @@ impl BottomPaneView for ResearchToolsView {
             let mut updates: Vec<(Feature, bool)> = self
                 .items
                 .iter()
+                .filter(|item| item.feature != Feature::ReadingView)
                 .map(|item| (item.feature, item.enabled))
                 .collect();
-            // Clear master research flag so per-category flags take sole authority.
-            updates.push((Feature::Research, false));
-            self.app_event_tx
-                .send(AppEvent::UpdateFeatureFlags { updates });
+            if !updates.is_empty() {
+                // Clear master research flag so per-category flags take sole authority.
+                updates.push((Feature::Research, false));
+                self.app_event_tx
+                    .send(AppEvent::UpdateFeatureFlags { updates });
+            }
 
             // Propagate reading view mode change if present.
             if let Some(rv_item) = self
@@ -380,21 +406,14 @@ impl Renderable for ResearchToolsView {
 /// Build `ResearchToolItem`s from the hardcoded feature list, using current config state.
 pub(crate) fn build_research_tool_items(
     features: &codex_features::Features,
-    reading_view_mode: crate::app_event::ReadingViewMode,
 ) -> Vec<ResearchToolItem> {
     RESEARCH_FEATURES
         .iter()
         .map(|&(feature, name, description, setup_hint)| {
-            let (enabled, rv_mode) = if feature == Feature::ReadingView {
-                let enabled = reading_view_mode != crate::app_event::ReadingViewMode::Disabled;
-                (enabled, Some(reading_view_mode))
-            } else if feature == Feature::ResearchKnowledgeBase {
-                (features.enabled(feature), None)
+            let enabled = if feature == Feature::ResearchKnowledgeBase {
+                features.enabled(feature)
             } else {
-                (
-                    features.enabled(Feature::Research) || features.enabled(feature),
-                    None,
-                )
+                features.enabled(Feature::Research) || features.enabled(feature)
             };
             ResearchToolItem {
                 feature,
@@ -402,10 +421,23 @@ pub(crate) fn build_research_tool_items(
                 description,
                 setup_hint,
                 enabled,
-                reading_view_mode: rv_mode,
+                reading_view_mode: None,
             }
         })
         .collect()
+}
+
+pub(crate) fn build_reading_view_tool_items(
+    reading_view_mode: crate::app_event::ReadingViewMode,
+) -> Vec<ResearchToolItem> {
+    vec![ResearchToolItem {
+        feature: Feature::ReadingView,
+        name: "Reading View",
+        description: "Present output as a navigable document with foldable sections",
+        setup_hint: "",
+        enabled: reading_view_mode != crate::app_event::ReadingViewMode::Disabled,
+        reading_view_mode: Some(reading_view_mode),
+    }]
 }
 
 fn research_popup_hint_line() -> Line<'static> {
@@ -416,4 +448,77 @@ fn research_popup_hint_line() -> Line<'static> {
         key_hint::plain(KeyCode::Enter).into(),
         " to save for next conversation".into(),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn reading_view_mode_is_not_persisted_as_feature_flag() {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut view = ResearchToolsView::new(
+            vec![
+                ResearchToolItem {
+                    feature: Feature::ReadingView,
+                    name: "Reading View",
+                    description: "Display long research syntheses",
+                    setup_hint: "",
+                    enabled: false,
+                    reading_view_mode: Some(crate::app_event::ReadingViewMode::Disabled),
+                },
+                ResearchToolItem {
+                    feature: Feature::ResearchPaperSearch,
+                    name: "Paper Search",
+                    description: "Search papers",
+                    setup_hint: "",
+                    enabled: true,
+                    reading_view_mode: None,
+                },
+            ],
+            app_event_tx,
+        );
+
+        view.on_ctrl_c();
+
+        let first = rx.try_recv().expect("feature flag update");
+        let AppEvent::UpdateFeatureFlags { updates } = first else {
+            panic!("expected UpdateFeatureFlags");
+        };
+        assert!(
+            !updates
+                .iter()
+                .any(|(feature, _)| *feature == Feature::ReadingView)
+        );
+        assert!(updates.contains(&(Feature::ResearchPaperSearch, true)));
+        assert!(updates.contains(&(Feature::Research, false)));
+
+        let second = rx.try_recv().expect("reading view mode update");
+        assert!(matches!(
+            second,
+            AppEvent::ReadingViewModeChanged(crate::app_event::ReadingViewMode::Disabled)
+        ));
+    }
+
+    #[test]
+    fn select_feature_focuses_reading_view_row() {
+        let (tx, _rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+        let mut view = ResearchToolsView::new(
+            build_reading_view_tool_items(crate::app_event::ReadingViewMode::Tui),
+            app_event_tx,
+        );
+
+        view.select_feature(Feature::ReadingView);
+
+        let selected_idx = view.state.selected_idx.expect("selected row");
+        assert_eq!(view.items[selected_idx].feature, Feature::ReadingView);
+        assert!(
+            view.build_rows()[selected_idx]
+                .name
+                .starts_with("› [tui] Reading View")
+        );
+    }
 }
