@@ -703,7 +703,7 @@ impl App {
             }
             AppCommand::DeleteSchedulingTask { task_id, kind } => {
                 app_server
-                    .scheduling_task_delete(thread_id, task_id.clone(), kind.clone())
+                    .scheduling_task_delete(thread_id, task_id.clone(), *kind)
                     .await?;
                 Ok(true)
             }

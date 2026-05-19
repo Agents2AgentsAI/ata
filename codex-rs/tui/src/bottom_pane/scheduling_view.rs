@@ -413,7 +413,7 @@ fn status_span(status: &str) -> Span<'static> {
     let padded = pad_status(status);
     match status {
         "Pending" => padded.cyan(),
-        "Running" => padded.yellow(),
+        "Running" => padded.cyan().bold(),
         "Completed" => padded.green().dim(),
         "Failed" => padded.red(),
         "Killed" => padded.dim(),
