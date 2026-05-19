@@ -479,14 +479,11 @@ async fn thread_start_params_include_user_thread_source() {
 
 #[test]
 fn active_profile_selection_uses_profile_id_only() {
-    let selection = permissions_selection_from_active_profile(ActivePermissionProfile::new(
+    let selection = permission_profile_id_from_active_profile(ActivePermissionProfile::new(
         BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
     ));
 
-    assert_eq!(
-        selection,
-        PermissionProfileSelectionParams::new(BUILT_IN_PERMISSION_PROFILE_WORKSPACE)
-    );
+    assert_eq!(selection, BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string());
 }
 
 #[tokio::test]
