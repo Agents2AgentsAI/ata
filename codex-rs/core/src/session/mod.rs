@@ -78,6 +78,7 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
 use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
@@ -288,6 +289,7 @@ use crate::rollout::map_session_init_error;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
+use crate::state::AutoCompactWindowSnapshot;
 use crate::state::PendingRequestPermissions;
 use crate::state::SessionServices;
 use crate::state::SessionState;
@@ -1089,6 +1091,11 @@ impl Session {
         state.get_total_token_usage(state.server_reasoning_included())
     }
 
+    pub(crate) async fn auto_compact_window_snapshot(&self) -> AutoCompactWindowSnapshot {
+        let state = self.state.lock().await;
+        state.auto_compact_window_snapshot()
+    }
+
     pub(crate) async fn get_total_token_usage_breakdown(&self) -> TotalTokenUsageBreakdown {
         let state = self.state.lock().await;
         state.history.get_total_token_usage_breakdown()
@@ -1247,9 +1254,39 @@ impl Session {
             reconstructed_rollout.reference_context_item,
         )
         .await;
+        let prefix_tokens = if matches!(
+            turn_context.config.model_auto_compact_token_limit_scope,
+            AutoCompactTokenLimitScope::BodyAfterPrefix
+        ) {
+            let history = self.clone_history().await;
+            let base_instructions = self.get_base_instructions().await;
+            history.estimate_token_count_with_base_instructions(&base_instructions)
+        } else {
+            None
+        };
+        if let Some(prefix_tokens) = prefix_tokens {
+            self.set_auto_compact_window_estimated_prefill_for_scope(turn_context, prefix_tokens)
+                .await;
+        }
         self.set_previous_turn_settings(previous_turn_settings.clone())
             .await;
         previous_turn_settings
+    }
+
+    async fn set_auto_compact_window_estimated_prefill_for_scope(
+        &self,
+        turn_context: &TurnContext,
+        tokens: i64,
+    ) {
+        if !matches!(
+            turn_context.config.model_auto_compact_token_limit_scope,
+            AutoCompactTokenLimitScope::BodyAfterPrefix
+        ) {
+            return;
+        }
+
+        let mut state = self.state.lock().await;
+        state.set_auto_compact_window_estimated_prefill(tokens);
     }
 
     fn last_token_info_from_rollout(rollout_items: &[RolloutItem]) -> Option<TokenUsageInfo> {
@@ -2568,8 +2605,11 @@ impl Session {
         reference_context_item: Option<TurnContextItem>,
         compacted_item: CompactedItem,
     ) {
-        self.replace_history(items, reference_context_item.clone())
-            .await;
+        {
+            let mut state = self.state.lock().await;
+            state.replace_history(items, reference_context_item.clone());
+            state.start_next_auto_compact_window();
+        }
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -2927,6 +2967,12 @@ impl Session {
                 let mut state = self.state.lock().await;
                 state
                     .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                if matches!(
+                    turn_context.config.model_auto_compact_token_limit_scope,
+                    AutoCompactTokenLimitScope::BodyAfterPrefix
+                ) {
+                    state.ensure_auto_compact_window_server_prefill_from_usage(token_usage);
+                }
                 state.token_info()
             };
             if let Some(token_info) = token_info.as_ref() {
@@ -2974,6 +3020,11 @@ impl Session {
 
             state.set_token_info(Some(info));
         }
+        self.set_auto_compact_window_estimated_prefill_for_scope(
+            turn_context,
+            estimated_total_tokens,
+        )
+        .await;
         self.send_token_count_event(turn_context).await;
     }
 
