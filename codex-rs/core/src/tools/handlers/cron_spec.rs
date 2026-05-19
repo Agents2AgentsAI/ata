@@ -113,8 +113,7 @@ pub fn create_cron_delete_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "task_id".to_string(),
         JsonSchema::string(Some(
-            "Required. The task_id returned from cron_create or shown in cron_list."
-                .to_string(),
+            "Required. The task_id returned from cron_create or shown in cron_list.".to_string(),
         )),
     )]);
 
@@ -164,7 +163,10 @@ mod tests {
         let ToolSpec::Function(tool) = create_cron_list_tool() else {
             panic!("cron_list should be a function tool");
         };
-        assert!(matches!(tool.parameters.required.as_ref().map(|r| r.is_empty()), Some(true)));
+        assert!(matches!(
+            tool.parameters.required.as_ref().map(Vec::is_empty),
+            Some(true)
+        ));
     }
 
     #[test]

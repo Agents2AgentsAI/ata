@@ -101,11 +101,9 @@ impl ToolHandler for LoopStartHandler {
         })?;
 
         let task = match mode {
-            LoopMode::Fixed(interval) => LoopTask::new_fixed_with_background(
-                args.prompt.clone(),
-                interval,
-                args.background,
-            ),
+            LoopMode::Fixed(interval) => {
+                LoopTask::new_fixed_with_background(args.prompt.clone(), interval, args.background)
+            }
             LoopMode::Dynamic(_) => {
                 let mut t = LoopTask::new_dynamic(args.prompt.clone());
                 t.background = args.background;
@@ -141,7 +139,15 @@ impl ToolHandler for LoopStartHandler {
 
         let join_handle = match mode {
             LoopMode::Fixed(interval) => tokio::spawn(async move {
-                run_loop(task_id_for_task, prompt, interval, background, registry, tx_sub).await;
+                run_loop(
+                    task_id_for_task,
+                    prompt,
+                    interval,
+                    background,
+                    registry,
+                    tx_sub,
+                )
+                .await;
             }),
             LoopMode::Dynamic(initial_delay) => {
                 // Seed the first wake-up so the dynamic loop's polling
@@ -191,10 +197,7 @@ pub(crate) async fn run_loop(
         // If `loop_stop` already marked the task terminal but the tokio
         // abort hasn't unwound this task yet (or the interval is in
         // burst-catch-up mode), don't send another submission.
-        if registry
-            .status(&task_id)
-            .is_none_or(|s| s.is_terminal())
-        {
+        if registry.status(&task_id).is_none_or(|s| s.is_terminal()) {
             tracing::debug!(
                 target: "codex_scheduling::loop",
                 task_id = %task_id,

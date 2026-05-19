@@ -8894,7 +8894,11 @@ impl ChatWidget {
     /// / loop rows. The view subscribes to `SchedulingTasksSnapshot` events and
     /// auto-refreshes every second.
     pub(crate) fn open_scheduling_popup(&mut self) {
-        if !self.config.features.enabled(codex_features::Feature::Scheduling) {
+        if !self
+            .config
+            .features
+            .enabled(codex_features::Feature::Scheduling)
+        {
             self.add_info_message(
                 "Scheduling is not enabled. Toggle it on in /experimental first.".to_string(),
                 None,
@@ -8907,8 +8911,9 @@ impl ChatWidget {
         // Kick off the snapshot fetch. The reply arrives as a
         // `ServerNotification::SchedulingTasksSnapshot`. The view's
         // auto-refresh keeps subsequent requests flowing every second.
-        self.app_event_tx
-            .send(crate::app_event::AppEvent::CodexOp(AppCommand::ListSchedulingTasks));
+        self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
+            AppCommand::ListSchedulingTasks,
+        ));
     }
 
     fn approval_preset_actions(

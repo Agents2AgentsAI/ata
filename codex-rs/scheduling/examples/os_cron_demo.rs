@@ -11,12 +11,14 @@
 //! ~/.ata/cron/<task_id>.log. This validates the entire crontab pipeline
 //! without burning API tokens.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use codex_scheduling::CronJob;
 use codex_scheduling::os_cron;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("help");
+    let cmd = args.get(1).map(String::as_str).unwrap_or("help");
 
     match cmd {
         "create" => create(),
@@ -48,13 +50,25 @@ fn create() {
 
     let dir = os_cron::data_dir().unwrap();
     println!("✓ Inserted. Files:");
-    println!("    prompt: {}", dir.join(format!("{}.prompt", job.id)).display());
-    println!("    log:    {}", dir.join(format!("{}.log", job.id)).display());
+    println!(
+        "    prompt: {}",
+        dir.join(format!("{}.prompt", job.id)).display()
+    );
+    println!(
+        "    log:    {}",
+        dir.join(format!("{}.log", job.id)).display()
+    );
     println!();
     println!("Next steps:");
     println!("  1. Wait 60-120 seconds for cron to fire.");
-    println!("  2. cargo run -p codex-scheduling --example os_cron_demo -- log {}", job.id);
-    println!("  3. cargo run -p codex-scheduling --example os_cron_demo -- delete {}", job.id);
+    println!(
+        "  2. cargo run -p codex-scheduling --example os_cron_demo -- log {}",
+        job.id
+    );
+    println!(
+        "  3. cargo run -p codex-scheduling --example os_cron_demo -- delete {}",
+        job.id
+    );
 }
 
 fn list() {
@@ -63,7 +77,11 @@ fn list() {
         println!("(no ata-managed cron entries)");
         return;
     }
-    println!("Found {} ata cron entr{}:", entries.len(), if entries.len() == 1 { "y" } else { "ies" });
+    println!(
+        "Found {} ata cron entr{}:",
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    );
     for e in entries {
         let next = os_cron::next_fire_after_now_five_field(&e.cron_expr_five_field)
             .map(|t| t.to_rfc3339())
@@ -80,7 +98,9 @@ fn log(args: &[String]) {
     let path = os_cron::data_dir().unwrap().join(format!("{id}.log"));
     println!("--- {} ---", path.display());
     match std::fs::read_to_string(&path) {
-        Ok(s) if s.is_empty() => println!("(log empty — cron hasn't fired yet, or fired with no output)"),
+        Ok(s) if s.is_empty() => {
+            println!("(log empty — cron hasn't fired yet, or fired with no output)")
+        }
         Ok(s) => print!("{s}"),
         Err(e) => println!("(no log file: {e})"),
     }

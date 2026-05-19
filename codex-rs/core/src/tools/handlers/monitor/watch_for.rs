@@ -243,9 +243,7 @@ fn strip_stream_prefix(tail_line: &str) -> (&str, &str) {
     }
 }
 
-fn ok_response(
-    response: MonitorWatchForResponse,
-) -> Result<FunctionToolOutput, FunctionCallError> {
+fn ok_response(response: MonitorWatchForResponse) -> Result<FunctionToolOutput, FunctionCallError> {
     let body = serde_json::to_string(&response).map_err(|err| {
         FunctionCallError::RespondToModel(format!(
             "monitor_watch_for response serialization failed: {err}"

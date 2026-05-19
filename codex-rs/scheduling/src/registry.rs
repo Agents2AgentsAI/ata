@@ -32,13 +32,12 @@ impl CronRegistry {
     /// using `now` as the anchor. Returns the assigned `TaskId`.
     pub fn insert(&self, mut job: CronJob, now: DateTime<Utc>) -> TaskId {
         if job.next_fire_at.is_none() {
-            job.next_fire_at =
-                next_fire_after_in_tz(&job.cron_expr, now, job.timezone.as_deref());
+            job.next_fire_at = next_fire_after_in_tz(&job.cron_expr, now, job.timezone.as_deref());
         }
         let id = job.id.clone();
         self.jobs
             .lock()
-            .expect("CronRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), job);
         id
     }
@@ -47,7 +46,7 @@ impl CronRegistry {
     pub fn remove(&self, id: &TaskId) -> Option<CronJob> {
         self.jobs
             .lock()
-            .expect("CronRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id)
     }
 
@@ -55,23 +54,20 @@ impl CronRegistry {
     pub fn list(&self) -> Vec<CronJob> {
         self.jobs
             .lock()
-            .expect("CronRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .cloned()
             .collect()
     }
 
     pub fn len(&self) -> usize {
-        self.jobs
-            .lock()
-            .expect("CronRegistry mutex poisoned")
-            .len()
+        self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.jobs
             .lock()
-            .expect("CronRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 
@@ -80,7 +76,7 @@ impl CronRegistry {
     /// job whose `next_fire_at` is `None` is left untouched — the engine
     /// will compute the next firing time on its next tick if appropriate.
     pub fn hydrate(&self, jobs: Vec<CronJob>) {
-        let mut map = self.jobs.lock().expect("CronRegistry mutex poisoned");
+        let mut map = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.clear();
         for job in jobs {
             map.insert(job.id.clone(), job);
@@ -97,13 +93,10 @@ impl CronRegistry {
     /// the background flag in the submission id (`cronbg-...` vs `cron-...`)
     /// for the TUI's chat-cell filter.
     pub fn take_due(&self, now: DateTime<Utc>) -> Vec<(TaskId, String, bool)> {
-        let mut jobs = self.jobs.lock().expect("CronRegistry mutex poisoned");
+        let mut jobs = self.jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut fired = Vec::new();
         for (id, job) in jobs.iter_mut() {
-            if !matches!(
-                job.status,
-                TaskStatus::Pending | TaskStatus::Running
-            ) {
+            if !matches!(job.status, TaskStatus::Pending | TaskStatus::Running) {
                 continue;
             }
             let Some(fire_at) = job.next_fire_at else {

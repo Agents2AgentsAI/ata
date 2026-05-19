@@ -27,7 +27,7 @@ impl LoopRegistry {
         let id = task.id.clone();
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), task);
         id
     }
@@ -35,14 +35,14 @@ impl LoopRegistry {
     pub fn remove(&self, id: &TaskId) -> Option<LoopTask> {
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id)
     }
 
     pub fn list(&self) -> Vec<LoopTask> {
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .cloned()
             .collect()
@@ -51,14 +51,14 @@ impl LoopRegistry {
     pub fn len(&self) -> usize {
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 
@@ -66,7 +66,7 @@ impl LoopRegistry {
     pub fn status(&self, id: &TaskId) -> Option<TaskStatus> {
         self.loops
             .lock()
-            .expect("LoopRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .map(|task| task.status)
     }
@@ -77,7 +77,7 @@ impl LoopRegistry {
     /// new tokio task for each non-terminal loop because the previous
     /// tasks died with the prior session.
     pub fn hydrate(&self, tasks: Vec<LoopTask>) {
-        let mut map = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut map = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         map.clear();
         for task in tasks {
             map.insert(task.id.clone(), task);
@@ -88,7 +88,7 @@ impl LoopRegistry {
     /// each time it fires. Also advances `next_wakeup_at` to `fired_at + interval`
     /// so the `/scheduling` panel can show a live countdown.
     pub fn record_iteration(&self, id: &TaskId, fired_at: DateTime<Utc>) {
-        let mut loops = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut loops = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = loops.get_mut(id) {
             task.last_iter_at = Some(fired_at);
             task.iteration_count = task.iteration_count.saturating_add(1);
@@ -108,7 +108,7 @@ impl LoopRegistry {
     /// Set the initial `next_wakeup_at` for a loop. Called by the per-loop
     /// tokio task once when it computes the first scheduled fire time.
     pub fn set_next_wakeup(&self, id: &TaskId, wakeup_at: DateTime<Utc>) {
-        let mut loops = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut loops = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = loops.get_mut(id) {
             task.next_wakeup_at = Some(wakeup_at);
         }
@@ -118,7 +118,7 @@ impl LoopRegistry {
     /// firing so the per-loop task doesn't refire on the stale timestamp;
     /// the agent must call `loop_wakeup` to schedule the next iteration.
     pub fn clear_next_wakeup(&self, id: &TaskId) {
-        let mut loops = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut loops = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = loops.get_mut(id) {
             task.next_wakeup_at = None;
         }
@@ -128,7 +128,7 @@ impl LoopRegistry {
     /// `loop_wakeup` calls this when the agent wants the next firing to
     /// ask a different question than the original loop_start prompt.
     pub fn update_prompt(&self, id: &TaskId, prompt: String) {
-        let mut loops = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut loops = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = loops.get_mut(id) {
             task.prompt = prompt;
         }
@@ -136,7 +136,7 @@ impl LoopRegistry {
 
     /// Mark a loop terminal (stopped by user or completed naturally).
     pub fn mark_terminal(&self, id: &TaskId, status: TaskStatus, stopped_at: DateTime<Utc>) {
-        let mut loops = self.loops.lock().expect("LoopRegistry mutex poisoned");
+        let mut loops = self.loops.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = loops.get_mut(id) {
             task.status = status;
             task.last_iter_at = Some(stopped_at);

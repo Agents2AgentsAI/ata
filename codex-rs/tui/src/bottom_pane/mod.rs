@@ -94,12 +94,12 @@ mod command_popup;
 pub(crate) mod custom_prompt_view;
 pub(crate) mod document_reader;
 mod experimental_features_view;
-mod scheduling_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
 pub(crate) mod prompt_args;
+mod scheduling_view;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
@@ -198,9 +198,9 @@ use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
-pub(crate) use scheduling_view::SchedulingView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+pub(crate) use scheduling_view::SchedulingView;
 
 struct DelayedApprovalRequest {
     request: ApprovalRequest,

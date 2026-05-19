@@ -295,7 +295,7 @@ mod tests {
             panic!("monitor_list should be a function tool");
         };
         assert!(matches!(
-            tool.parameters.required.as_ref().map(|r| r.is_empty()),
+            tool.parameters.required.as_ref().map(Vec::is_empty),
             Some(true)
         ));
     }

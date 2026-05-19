@@ -44,7 +44,7 @@ impl MonitorRegistry {
         let id = task.id.clone();
         self.monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id.clone(), task);
         id
     }
@@ -55,11 +55,11 @@ impl MonitorRegistry {
     pub fn remove(&self, id: &TaskId) -> Option<MonitorTask> {
         self.tails
             .lock()
-            .expect("MonitorRegistry tails poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
         self.monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id)
     }
 
@@ -67,7 +67,7 @@ impl MonitorRegistry {
     pub fn list(&self) -> Vec<MonitorTask> {
         self.monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .cloned()
             .collect()
@@ -76,14 +76,14 @@ impl MonitorRegistry {
     pub fn len(&self) -> usize {
         self.monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 
@@ -92,13 +92,16 @@ impl MonitorRegistry {
     /// underlying subprocess is gone, so the caller is expected to mark
     /// any non-terminal entries as `Interrupted` before storing them.
     pub fn hydrate(&self, tasks: Vec<MonitorTask>) {
-        let mut map = self.monitors.lock().expect("MonitorRegistry mutex poisoned");
+        let mut map = self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.clear();
         for task in tasks {
             map.insert(task.id.clone(), task);
         }
         // Tail buffers don't survive a process restart; start fresh.
-        let mut tails = self.tails.lock().expect("MonitorRegistry tails poisoned");
+        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         tails.clear();
     }
 
@@ -107,7 +110,7 @@ impl MonitorRegistry {
         let mut monitors = self
             .monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = monitors.get_mut(id) {
             task.lines_emitted = task.lines_emitted.saturating_add(1);
         }
@@ -116,8 +119,8 @@ impl MonitorRegistry {
     /// Append a line to the per-monitor tail ring buffer. Older lines beyond
     /// `MONITOR_TAIL_CAPACITY` are discarded.
     pub fn record_tail_line(&self, id: &TaskId, line: String) {
-        let mut tails = self.tails.lock().expect("MonitorRegistry tails poisoned");
-        let buf = tails.entry(id.clone()).or_insert_with(VecDeque::new);
+        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let buf = tails.entry(id.clone()).or_default();
         if buf.len() == MONITOR_TAIL_CAPACITY {
             buf.pop_front();
         }
@@ -129,7 +132,7 @@ impl MonitorRegistry {
     pub fn tail_snapshot(&self, id: &TaskId) -> Vec<String> {
         self.tails
             .lock()
-            .expect("MonitorRegistry tails poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
             .map(|buf| buf.iter().cloned().collect())
             .unwrap_or_default()
@@ -140,7 +143,7 @@ impl MonitorRegistry {
         let mut monitors = self
             .monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = monitors.get_mut(id) {
             task.status = TaskStatus::Running;
             task.started_at = Some(started_at);
@@ -154,7 +157,7 @@ impl MonitorRegistry {
         let mut monitors = self
             .monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = monitors.get_mut(id) {
             task.status = status;
             task.stopped_at = Some(stopped_at);
@@ -169,7 +172,7 @@ impl MonitorRegistry {
         let mut monitors = self
             .monitors
             .lock()
-            .expect("MonitorRegistry mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(task) = monitors.get_mut(id) {
             task.status = TaskStatus::Pending;
             task.started_at = None;
@@ -177,7 +180,7 @@ impl MonitorRegistry {
             task.lines_emitted = 0;
         }
         // Tail buffer also belongs to the prior, dead subprocess — drop it.
-        let mut tails = self.tails.lock().expect("MonitorRegistry tails poisoned");
+        let mut tails = self.tails.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         tails.remove(id);
     }
 }

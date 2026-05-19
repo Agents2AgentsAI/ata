@@ -48,11 +48,7 @@ fn default_version() -> u32 {
 }
 
 impl SchedulingSnapshot {
-    pub fn new(
-        cron_jobs: Vec<CronJob>,
-        monitors: Vec<MonitorTask>,
-        loops: Vec<LoopTask>,
-    ) -> Self {
+    pub fn new(cron_jobs: Vec<CronJob>, monitors: Vec<MonitorTask>, loops: Vec<LoopTask>) -> Self {
         Self {
             version: 1,
             cron_jobs,

@@ -172,7 +172,7 @@ mod tests {
             panic!("cron_list_session should be a function tool");
         };
         assert!(matches!(
-            tool.parameters.required.as_ref().map(|r| r.is_empty()),
+            tool.parameters.required.as_ref().map(Vec::is_empty),
             Some(true)
         ));
     }
@@ -182,6 +182,9 @@ mod tests {
         let ToolSpec::Function(tool) = create_cron_session_delete_tool() else {
             panic!("cron_delete_session should be a function tool");
         };
-        assert_eq!(tool.parameters.required.as_ref().expect("required").len(), 1);
+        assert_eq!(
+            tool.parameters.required.as_ref().expect("required").len(),
+            1
+        );
     }
 }

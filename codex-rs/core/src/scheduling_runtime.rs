@@ -47,7 +47,7 @@ impl MonitorRuntime {
     pub fn store_handle(&self, id: TaskId, handle: AbortHandle) {
         self.handles
             .lock()
-            .expect("MonitorRuntime handles mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, handle);
     }
 
@@ -58,7 +58,7 @@ impl MonitorRuntime {
         let mut handles = self
             .handles
             .lock()
-            .expect("MonitorRuntime handles mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(handle) = handles.remove(id) {
             handle.abort();
             true
@@ -75,7 +75,7 @@ impl MonitorRuntime {
         let (tx, _rx) = broadcast::channel(MONITOR_BROADCAST_CAPACITY);
         self.watchers
             .lock()
-            .expect("MonitorRuntime watchers mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, tx.clone());
         tx
     }
@@ -85,9 +85,9 @@ impl MonitorRuntime {
     pub fn subscribe(&self, id: &TaskId) -> Option<broadcast::Receiver<MonitorLine>> {
         self.watchers
             .lock()
-            .expect("MonitorRuntime watchers mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(id)
-            .map(|tx| tx.subscribe())
+            .map(broadcast::Sender::subscribe)
     }
 
     /// Drop the broadcast channel for this monitor. Any active receivers
@@ -96,7 +96,7 @@ impl MonitorRuntime {
     pub fn drop_watcher_channel(&self, id: &TaskId) {
         self.watchers
             .lock()
-            .expect("MonitorRuntime watchers mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);
     }
 }
@@ -124,7 +124,7 @@ impl LoopRuntime {
     pub fn store_handle(&self, id: TaskId, handle: AbortHandle) {
         self.handles
             .lock()
-            .expect("LoopRuntime handles mutex poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id, handle);
     }
 
@@ -132,7 +132,7 @@ impl LoopRuntime {
         let mut handles = self
             .handles
             .lock()
-            .expect("LoopRuntime handles mutex poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(handle) = handles.remove(id) {
             handle.abort();
             true

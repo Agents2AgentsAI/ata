@@ -184,8 +184,7 @@ pub fn create_loop_stop_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "task_id".to_string(),
         JsonSchema::string(Some(
-            "Required. The task_id returned from loop_start or shown in loop_list."
-                .to_string(),
+            "Required. The task_id returned from loop_start or shown in loop_list.".to_string(),
         )),
     )]);
 
@@ -229,7 +228,7 @@ mod tests {
             panic!("loop_list should be a function tool");
         };
         assert!(matches!(
-            tool.parameters.required.as_ref().map(|r| r.is_empty()),
+            tool.parameters.required.as_ref().map(Vec::is_empty),
             Some(true)
         ));
     }

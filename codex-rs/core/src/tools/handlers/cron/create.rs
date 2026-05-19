@@ -72,8 +72,7 @@ impl ToolHandler for CronCreateHandler {
             FunctionCallError::RespondToModel(format!("cron_create failed to write crontab: {err}"))
         })?;
 
-        let next_fire_at =
-            os_cron::next_fire_after_now(&normalized_expr).map(|t| t.to_rfc3339());
+        let next_fire_at = os_cron::next_fire_after_now(&normalized_expr).map(|t| t.to_rfc3339());
 
         let log_path = os_cron::data_dir()
             .map(|d| d.join(format!("{}.log", job.id)).display().to_string())

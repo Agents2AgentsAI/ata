@@ -94,7 +94,7 @@ impl ToolHandler for MonitorStartHandler {
         let watch_tx = runtime.register_watcher_channel(task_id.clone());
 
         let tx_sub = session.submission_tx();
-        let session_for_task = session.clone();
+        let session_for_task = session;
         let registry = runtime.registry.clone();
         let runtime_for_task = runtime.clone();
         let task_id_for_task = task_id.clone();
@@ -128,6 +128,7 @@ impl ToolHandler for MonitorStartHandler {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_monitor(
     task_id: TaskId,
     command: String,

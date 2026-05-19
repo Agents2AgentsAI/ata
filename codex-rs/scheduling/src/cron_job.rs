@@ -150,8 +150,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_cron_expression() {
-        let err =
-            CronJob::new("not a cron expression".into(), "do the thing".into()).unwrap_err();
+        let err = CronJob::new("not a cron expression".into(), "do the thing".into()).unwrap_err();
         assert!(matches!(err, CronError::InvalidExpression(_)));
     }
 

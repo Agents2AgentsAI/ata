@@ -220,7 +220,9 @@ impl SchedulingView {
         let mut idx: usize = 0;
 
         body.push(Line::from(""));
-        body.push(Line::from(format!("Cron ({})", snapshot.cron_jobs.len()).bold()));
+        body.push(Line::from(
+            format!("Cron ({})", snapshot.cron_jobs.len()).bold(),
+        ));
         if snapshot.cron_jobs.is_empty() {
             body.push(Line::from("  (none)".dim()));
         } else {
@@ -233,7 +235,9 @@ impl SchedulingView {
         }
 
         body.push(Line::from(""));
-        body.push(Line::from(format!("Monitors ({})", snapshot.monitors.len()).bold()));
+        body.push(Line::from(
+            format!("Monitors ({})", snapshot.monitors.len()).bold(),
+        ));
         if snapshot.monitors.is_empty() {
             body.push(Line::from("  (none)".dim()));
         } else {
@@ -246,7 +250,9 @@ impl SchedulingView {
         }
 
         body.push(Line::from(""));
-        body.push(Line::from(format!("Loops ({})", snapshot.loops.len()).bold()));
+        body.push(Line::from(
+            format!("Loops ({})", snapshot.loops.len()).bold(),
+        ));
         if snapshot.loops.is_empty() {
             body.push(Line::from("  (none)".dim()));
         } else {
@@ -364,9 +370,7 @@ impl Renderable for SchedulingView {
         let inner_width = width.saturating_sub(4);
         let header_height = self.header().desired_height(inner_width);
         let body_height = self.body().desired_height(inner_width);
-        header_height
-            .saturating_add(body_height)
-            .saturating_add(4)
+        header_height.saturating_add(body_height).saturating_add(4)
     }
 }
 
@@ -427,9 +431,7 @@ fn cron_row_lines(row: &SchedulingCronRow, selected: bool) -> [Line<'static>; 2]
         .as_deref()
         .and_then(relative_time)
         .unwrap_or_else(|| "—".to_string());
-    let details = Line::from(
-        format!("      fired {} · next {}", row.fire_count, next).dim(),
-    );
+    let details = Line::from(format!("      fired {} · next {}", row.fire_count, next).dim());
     [head, details]
 }
 
@@ -437,9 +439,7 @@ fn monitor_row_lines(row: &SchedulingMonitorRow, selected: bool) -> [Line<'stati
     let short_id = short_task_id(&row.task_id);
     let cmd = truncate(&row.command, 60);
     let head = row_head(row_marker(selected), &short_id, &row.status, &cmd);
-    let details = Line::from(
-        format!("      lines {}", row.lines_emitted).dim(),
-    );
+    let details = Line::from(format!("      lines {}", row.lines_emitted).dim());
     [head, details]
 }
 
@@ -544,7 +544,10 @@ mod tests {
         let view = SchedulingView::new();
         let out = render_to_string(&view, 80, 10);
         assert!(out.contains("Scheduling tasks"), "header missing: {out}");
-        assert!(out.contains("Loading"), "loading placeholder missing: {out}");
+        assert!(
+            out.contains("Loading"),
+            "loading placeholder missing: {out}"
+        );
     }
 
     #[test]
@@ -582,7 +585,10 @@ mod tests {
         let out = render_to_string(&view, 100, 20);
         assert!(out.contains("Cron (1)"), "cron header missing: {out}");
         assert!(out.contains("c1"), "cron row missing: {out}");
-        assert!(out.contains("Monitors (1)"), "monitors header missing: {out}");
+        assert!(
+            out.contains("Monitors (1)"),
+            "monitors header missing: {out}"
+        );
         assert!(out.contains("m1"), "monitor row missing: {out}");
         assert!(out.contains("Loops (1)"), "loops header missing: {out}");
         assert!(out.contains("l1"), "loop row missing: {out}");

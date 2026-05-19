@@ -44,7 +44,9 @@ pub enum OsCronError {
     Io(#[from] std::io::Error),
     #[error("invalid crontab line: {0}")]
     Parse(String),
-    #[error("cron expression has sub-minute granularity; OS cron can only schedule at 1-minute resolution")]
+    #[error(
+        "cron expression has sub-minute granularity; OS cron can only schedule at 1-minute resolution"
+    )]
     SubMinuteUnsupported,
     #[error("cron expression invalid: {0}")]
     InvalidExpression(String),
@@ -67,11 +69,11 @@ pub fn data_dir() -> Result<PathBuf, OsCronError> {
 }
 
 fn prompt_path(task_id: &TaskId) -> Result<PathBuf, OsCronError> {
-    Ok(data_dir()?.join(format!("{}.prompt", task_id)))
+    Ok(data_dir()?.join(format!("{task_id}.prompt")))
 }
 
 fn log_path(task_id: &TaskId) -> Result<PathBuf, OsCronError> {
-    Ok(data_dir()?.join(format!("{}.log", task_id)))
+    Ok(data_dir()?.join(format!("{task_id}.log")))
 }
 
 /// Read the user's current crontab. Returns an empty string if the user
@@ -199,7 +201,10 @@ pub fn format_entry(
     let path_prefix = if bin_dir.is_empty() {
         String::new()
     } else {
-        format!("PATH={}:/usr/bin:/bin ", shell_quote_path(Path::new(&bin_dir)))
+        format!(
+            "PATH={}:/usr/bin:/bin ",
+            shell_quote_path(Path::new(&bin_dir))
+        )
     };
     // `--skip-git-repo-check` is required because cron starts in `$HOME`,
     // which isn't a trusted git repo. The scheduled prompt is the user's
@@ -220,7 +225,9 @@ pub fn format_entry(
 /// escaped via the `'\''` idiom.
 fn shell_quote_path(p: &Path) -> String {
     let s = p.to_string_lossy();
-    if s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')) {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    {
         s.into_owned()
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
