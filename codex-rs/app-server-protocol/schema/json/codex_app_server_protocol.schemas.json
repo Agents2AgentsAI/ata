@@ -9710,6 +9710,7 @@
           "sessionStart",
           "userPromptSubmit",
           "subagentStart",
+          "subagentStop",
           "stop"
         ],
         "type": "string"
@@ -10606,6 +10607,12 @@
             },
             "type": "array"
           },
+          "SubagentStop": {
+            "items": {
+              "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
+            },
+            "type": "array"
+          },
           "UserPromptSubmit": {
             "items": {
               "$ref": "#/definitions/v2/ConfiguredHookMatcherGroup"
@@ -10634,6 +10641,7 @@
           "SessionStart",
           "Stop",
           "SubagentStart",
+          "SubagentStop",
           "UserPromptSubmit"
         ],
         "type": "object"
