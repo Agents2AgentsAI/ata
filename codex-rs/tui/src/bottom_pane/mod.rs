@@ -1267,6 +1267,19 @@ impl BottomPane {
         ev: codex_protocol::document_reader::PresentDocumentEvent,
         _from_replay: bool,
     ) {
+        // If a document reader is already on the stack, don't push another
+        // one. A subsequent `PresentDocument` with `is_reopen: true` is sent
+        // by `add_document_section`, `append_to_section`, and
+        // `patch_document_section` so a closed reader can re-open with the
+        // updated content. When the reader is still open, pushing a fresh
+        // view on top would (a) duplicate content because the following
+        // action event would apply on top of an already-up-to-date view, and
+        // (b) wipe fold history because the new view starts from scratch.
+        if let Some(view) = self.view_stack.last()
+            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
+        {
+            return;
+        }
         // Open the document_reader view, wired to the BottomPane's real
         // `app_event_tx`. The previous `new_from_event` constructor created
         // a dummy `AppEventSender` whose receiver was immediately dropped,
