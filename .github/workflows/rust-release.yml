@@ -10,6 +10,10 @@ on:
   push:
     tags:
       - "v*.*.*"
+      # Bridge tag format: lets us cut a one-time `rust-v0.6.5` release that
+      # old ata binaries (whose updater only recognized `rust-v*`) can detect
+      # so they can pick up the new `v*`-aware updater.
+      - "rust-v*.*.*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,11 +34,12 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          [[ "${GITHUB_REF_NAME}" =~ ^(rust-)?v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
-          # 2. Extract versions
-          tag_ver="${GITHUB_REF_NAME#v}"
+          # 2. Extract versions (strip optional `rust-` then the `v`)
+          tag_ver="${GITHUB_REF_NAME#rust-}"
+          tag_ver="${tag_ver#v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
@@ -628,8 +633,9 @@ jobs:
         id: release_name
         run: |
           # Extract the version from the tag name, which is in the format
-          # "v0.1.0".
-          version="${GITHUB_REF_NAME#v}"
+          # "v0.1.0" (or "rust-v0.1.0" for the one-time bridge release).
+          version="${GITHUB_REF_NAME#rust-}"
+          version="${version#v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Determine npm publish settings
