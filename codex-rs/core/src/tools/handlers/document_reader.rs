@@ -1182,9 +1182,17 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 }
 
-                // Mirror the append in the cache.
+                // Capture the reopen payload from the PRE-append cache so a
+                // closed reader re-opens with the pre-append content and the
+                // subsequent AppendDocumentSection event applies the change
+                // exactly once. If we built reopen_payload from the post-append
+                // cache, a re-opened reader would receive the appended content
+                // twice (once via PresentDocument, once via the append event).
                 let (streaming_reminder, reopen_payload) = {
                     let mut cache = doc_cache.lock();
+                    let pre_reopen = cache
+                        .get(&args.document_id)
+                        .map(|doc| (doc.title.clone(), doc.to_markdown()));
                     let reminder = if let Some(doc) = cache.get_mut(&args.document_id) {
                         if let Some(section) = doc.sections.get_mut(args.section_index) {
                             if !section.content.is_empty() && !section.content.ends_with('\n') {
@@ -1201,12 +1209,8 @@ impl ToolHandler for DocumentReaderHandler {
                     } else {
                         String::new()
                     };
-                    // When not streaming, capture payload to re-open the
-                    // reading view in case the user closed it.
                     let reopen = if reminder.is_empty() {
-                        cache
-                            .get(&args.document_id)
-                            .map(|doc| (doc.title.clone(), doc.to_markdown()))
+                        pre_reopen
                     } else {
                         None
                     };
@@ -1287,10 +1291,18 @@ impl ToolHandler for DocumentReaderHandler {
                     }
                 }
 
-                // Insert the new section into the cache.
-                let insert_pos = {
+                // Capture the reopen payload from the PRE-insert cache so an
+                // already-open reader applies the new section exactly once via
+                // the AddDocumentSection event below. If we built reopen_payload
+                // from the post-insert cache, an already-open reader would
+                // receive the new section twice (once via PresentDocument
+                // re-open, once via the AddDocumentSection event).
+                let (insert_pos, reopen_payload) = {
                     let mut cache = doc_cache.lock();
-                    if let Some(doc) = cache.get_mut(&args.document_id) {
+                    let reopen = cache
+                        .get(&args.document_id)
+                        .map(|doc| (doc.title.clone(), doc.to_markdown()));
+                    let pos = if let Some(doc) = cache.get_mut(&args.document_id) {
                         let insert_at = (args.after_section_index + 1) as usize;
                         doc.sections.insert(
                             insert_at,
@@ -1304,19 +1316,12 @@ impl ToolHandler for DocumentReaderHandler {
                         Some(insert_at)
                     } else {
                         None
-                    }
+                    };
+                    (pos, reopen)
                 };
 
                 let foldable = args.foldable.unwrap_or(false);
                 let summary = args.summary;
-
-                // Re-open the reading view if the user closed it.
-                let reopen_payload = {
-                    let cache = doc_cache.lock();
-                    cache
-                        .get(&args.document_id)
-                        .map(|doc| (doc.title.clone(), doc.to_markdown()))
-                };
                 if let Some((title, full_content)) = reopen_payload {
                     session
                         .send_event(
