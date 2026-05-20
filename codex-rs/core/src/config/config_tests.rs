@@ -70,6 +70,7 @@ use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_model_provider_info::WireApi;
 use codex_models_manager::bundled_models_response;
 use codex_network_proxy::NetworkMode;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
@@ -8277,7 +8278,7 @@ alpha = "one\ntwo"
 }
 
 #[tokio::test]
-async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std::io::Result<()> {
+async fn explicit_null_service_tier_override_maps_to_default_service_tier() -> std::io::Result<()> {
     let fixture = create_test_fixture()?;
 
     let config = Config::load_from_base_config_with_overrides(
@@ -8291,8 +8292,33 @@ async fn explicit_null_service_tier_override_sets_fast_default_opt_out() -> std:
     )
     .await?;
 
-    assert_eq!(config.service_tier, None);
-    assert_eq!(config.notices.fast_default_opt_out, Some(true));
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
+    assert_eq!(config.notices.fast_default_opt_out, None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_service_tier_override_uses_default_request_value() -> std::io::Result<()> {
+    let fixture = create_test_fixture()?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        fixture.cfg.clone(),
+        ConfigOverrides {
+            cwd: Some(fixture.cwd_path()),
+            service_tier: Some(Some("default".to_string())),
+            ..Default::default()
+        },
+        fixture.codex_home(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.service_tier,
+        Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())
+    );
     Ok(())
 }
 
