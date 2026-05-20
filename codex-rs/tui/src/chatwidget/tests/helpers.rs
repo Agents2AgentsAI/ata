@@ -186,6 +186,7 @@ pub(super) async fn make_chatwidget_manual(
         .service_tier
         .as_deref()
         .and_then(ServiceTier::from_request_value);
+    let reading_view_mode = crate::app_event::ReadingViewMode::from_config(&cfg);
     let mut widget = ChatWidget {
         app_event_tx,
         codex_op_target: super::CodexOpTarget::Direct(op_tx),
@@ -345,7 +346,7 @@ pub(super) async fn make_chatwidget_manual(
         reading_view_pending_browser_info: false,
         reading_view_pending_events: Vec::new(),
         reading_view_pending_section_updates: Vec::new(),
-        reading_view_mode: crate::app_event::ReadingViewMode::default(),
+        reading_view_mode,
         last_turn_was_local_submit: false,
         #[cfg(not(target_os = "linux"))]
         voice_mode_state: None,

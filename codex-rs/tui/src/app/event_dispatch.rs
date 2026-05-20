@@ -1785,7 +1785,7 @@ impl App {
                 self.chat_widget.handle_reading_view_browser_message(&msg);
             }
             AppEvent::ReadingViewModeChanged(mode) => {
-                self.chat_widget.reading_view_mode = mode;
+                self.update_reading_view_mode(mode).await;
             }
             AppEvent::WorkspaceSelectionChanged => {
                 // Full sandbox refresh after workspace selection (rebuilding

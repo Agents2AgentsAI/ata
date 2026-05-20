@@ -212,7 +212,7 @@ fn recursive_registration_downgrades_to_non_recursive_after_drop() {
     let root = temp_dir.path().join("watched-dir");
     std::fs::create_dir(&root).expect("create root");
 
-    let watcher = Arc::new(FileWatcher::new().expect("watcher"));
+    let watcher = Arc::new(FileWatcher::recording_noop());
     let (subscriber, _rx) = watcher.add_subscriber();
     let non_recursive = subscriber.register_path(root.clone(), /*recursive*/ false);
     let recursive = subscriber.register_path(root.clone(), /*recursive*/ true);
@@ -246,7 +246,7 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
     let root = temp_dir.path().join("watched-dir");
     std::fs::create_dir(&root).expect("create root");
 
-    let watcher = Arc::new(FileWatcher::new().expect("watcher"));
+    let watcher = Arc::new(FileWatcher::recording_noop());
     let (unregister_subscriber, _unregister_rx) = watcher.add_subscriber();
     let (register_subscriber, _register_rx) = watcher.add_subscriber();
     let registration = unregister_subscriber.register_path(root.clone(), /*recursive*/ true);

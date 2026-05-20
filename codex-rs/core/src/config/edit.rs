@@ -1380,6 +1380,36 @@ impl ConfigEditsBuilder {
         self
     }
 
+    pub fn set_reading_view_mode(mut self, mode: &str) -> Self {
+        let mode = match mode.trim().to_ascii_lowercase().as_str() {
+            "browser" => "browser",
+            "disabled" | "off" => "disabled",
+            _ => "tui",
+        };
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["reading_view".to_string(), "mode".to_string()],
+            value: value(mode),
+        });
+
+        // `[reading_view].mode` is the source of truth. Clear the old feature
+        // flag location so saved configs do not contain contradictory state.
+        self.edits.push(ConfigEdit::ClearPath {
+            segments: vec!["features".to_string(), "reading_view".to_string()],
+        });
+        if let Some(profile) = self.profile.as_ref() {
+            self.edits.push(ConfigEdit::ClearPath {
+                segments: vec![
+                    "profiles".to_string(),
+                    profile.clone(),
+                    "features".to_string(),
+                    "reading_view".to_string(),
+                ],
+            });
+        }
+
+        self
+    }
+
     pub fn set_windows_sandbox_mode(mut self, mode: &str) -> Self {
         let segments = if let Some(profile) = self.profile.as_ref() {
             vec![

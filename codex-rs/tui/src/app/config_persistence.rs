@@ -378,6 +378,38 @@ impl App {
         }
     }
 
+    pub(super) async fn update_reading_view_mode(
+        &mut self,
+        mode: crate::app_event::ReadingViewMode,
+    ) {
+        if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
+            .with_profile(self.active_profile.as_deref())
+            .set_reading_view_mode(mode.config_value())
+            .apply()
+            .await
+        {
+            tracing::error!(error = %err, "failed to persist reading-view mode");
+            self.chat_widget
+                .add_error_message(format!("Failed to update reading-view mode: {err}"));
+            return;
+        }
+
+        self.chat_widget.reading_view_mode = mode;
+        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+            tracing::warn!(
+                error = %err,
+                "failed to refresh in-memory config after reading-view mode update"
+            );
+            self.chat_widget.add_error_message(format!(
+                "Reading-view mode saved, but failed to refresh config: {err}"
+            ));
+        }
+
+        // Refresh the active core/app-server session so the document cache and
+        // model-visible reading-view formatting guidance match the persisted mode.
+        self.chat_widget.submit_op(AppCommand::reload_user_config());
+    }
+
     pub(super) async fn update_memory_settings(
         &mut self,
         use_memories: bool,

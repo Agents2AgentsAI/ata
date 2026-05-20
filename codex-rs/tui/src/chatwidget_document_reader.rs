@@ -408,11 +408,10 @@ impl ChatWidget {
         self.bottom_pane.is_document_reader_active()
     }
 
-    /// Whether the reading view feature is enabled and not set to Disabled mode.
+    /// Whether the reading view mode is not Disabled.
     /// Also disabled in Plan mode so the reading view doesn't interfere with planning.
     fn is_reading_view_enabled(&self) -> bool {
-        self.config.features.enabled(codex_features::Feature::ReadingView)
-            && self.reading_view_mode != crate::app_event::ReadingViewMode::Disabled
+        self.reading_view_mode != crate::app_event::ReadingViewMode::Disabled
             && self.active_mode_kind() != ModeKind::Plan
     }
 

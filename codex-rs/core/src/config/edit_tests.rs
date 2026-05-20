@@ -93,6 +93,62 @@ fn clear_model_and_provider_is_idempotent_when_already_absent() {
 }
 
 #[test]
+fn set_reading_view_mode_writes_mode_and_clears_legacy_feature_flag() {
+    let tmp = tempdir().expect("tmpdir");
+    let codex_home = tmp.path();
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    std::fs::write(
+        &config_path,
+        r#"[features]
+reading_view = true
+
+[profiles.dev.features]
+reading_view = false
+"#,
+    )
+    .expect("seed config");
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_profile(Some("dev"))
+        .set_reading_view_mode("off")
+        .apply_blocking()
+        .expect("persist");
+
+    let contents = std::fs::read_to_string(&config_path).expect("read config");
+    let parsed: TomlValue = toml::from_str(&contents).expect("parse toml");
+
+    assert_eq!(
+        parsed
+            .get("reading_view")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("mode"))
+            .and_then(TomlValue::as_str),
+        Some("disabled"),
+    );
+    assert_eq!(
+        parsed
+            .get("features")
+            .and_then(TomlValue::as_table)
+            .and_then(|table| table.get("reading_view")),
+        None,
+        "root legacy feature flag should be cleared: {contents}"
+    );
+    assert_eq!(
+        parsed
+            .get("profiles")
+            .and_then(TomlValue::as_table)
+            .and_then(|profiles| profiles.get("dev"))
+            .and_then(TomlValue::as_table)
+            .and_then(|profile| profile.get("features"))
+            .and_then(TomlValue::as_table)
+            .and_then(|features| features.get("reading_view")),
+        None,
+        "profile legacy feature flag should be cleared: {contents}"
+    );
+}
+
+#[test]
 fn builder_with_edits_applies_custom_paths() {
     let tmp = tempdir().expect("tmpdir");
     let codex_home = tmp.path();

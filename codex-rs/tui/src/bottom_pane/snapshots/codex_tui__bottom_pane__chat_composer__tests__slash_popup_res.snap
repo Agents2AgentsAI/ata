@@ -6,6 +6,6 @@ expression: terminal.backend()
 "                                                            "
 "› /res                                                      "
 "                                                            "
+"                                                            "
 "  /resume    resume a saved chat                            "
-"  /research  summarize research toolkit status; run one-off "
-"             via `ata research`                             "
+"  /research  configure research tool integrations           "

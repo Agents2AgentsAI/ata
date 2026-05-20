@@ -936,9 +936,8 @@ pub(crate) enum AppEvent {
     /// A message received from a browser WebSocket client connected to the
     /// reading-view server (e.g. follow-up question, read-aloud request).
     ReadingViewBrowserMessage(String),
-    /// The user changed the reading view mode via the research popup or the
-    /// reading-view setup popup. Currently emitted from
-    /// `bottom_pane::ResearchToolsView`.
+    /// The user changed the reading view mode via the reading-view setup
+    /// popup. Currently emitted from `bottom_pane::ResearchToolsView`.
     ReadingViewModeChanged(ReadingViewMode),
 
     /// `/workspace use <selector>` switched the active workspace. The app
@@ -1047,10 +1046,120 @@ pub(crate) enum ReadingViewMode {
     Disabled,
 }
 
+impl ReadingViewMode {
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "off",
+        }
+    }
+
+    pub(crate) fn from_config_value(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("browser") => Self::Browser,
+            Some("disabled" | "off") => Self::Disabled,
+            _ => Self::Tui,
+        }
+    }
+
+    pub(crate) fn from_config(config: &crate::legacy_core::config::Config) -> Self {
+        let configured_mode = config
+            .config_layer_stack
+            .effective_config()
+            .as_table()
+            .and_then(|t| t.get("reading_view"))
+            .and_then(|v| {
+                v.clone()
+                    .try_into::<crate::legacy_core::config::types::ReadingViewToml>()
+                    .ok()
+            })
+            .and_then(|rv| rv.mode);
+
+        if configured_mode.is_some() {
+            return Self::from_config_value(configured_mode.as_deref());
+        }
+
+        // Backward compatibility for configs written before `[reading_view].mode`
+        // became the source of truth.
+        if !config.features.enabled(Feature::ReadingView) {
+            return Self::Disabled;
+        }
+
+        Self::Tui
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RealtimeWebrtcOffer {
     pub(crate) offer_sdp: String,
     pub(crate) handle: RealtimeWebrtcSessionHandle,
+}
+
+#[cfg(test)]
+mod reading_view_mode_tests {
+    use super::ReadingViewMode;
+
+    #[test]
+    fn config_value_uses_disabled_while_label_uses_off() {
+        assert_eq!(ReadingViewMode::Disabled.label(), "off");
+        assert_eq!(ReadingViewMode::Disabled.config_value(), "disabled");
+    }
+
+    #[test]
+    fn from_config_value_accepts_legacy_off_alias() {
+        assert_eq!(
+            ReadingViewMode::from_config_value(Some("off")),
+            ReadingViewMode::Disabled
+        );
+        assert_eq!(
+            ReadingViewMode::from_config_value(Some("disabled")),
+            ReadingViewMode::Disabled
+        );
+        assert_eq!(
+            ReadingViewMode::from_config_value(Some("browser")),
+            ReadingViewMode::Browser
+        );
+    }
+
+    #[tokio::test]
+    async fn from_config_prefers_reading_view_mode_over_legacy_feature_flag() -> std::io::Result<()>
+    {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(codex_config::CONFIG_TOML_FILE),
+            r#"[reading_view]
+mode = "disabled"
+
+[features]
+reading_view = true
+"#,
+        )?;
+
+        let config = crate::legacy_core::config::ConfigBuilder::default()
+            .codex_home(tmp.path().to_path_buf())
+            .harness_overrides(crate::legacy_core::config::ConfigOverrides {
+                cwd: Some(tmp.path().to_path_buf()),
+                ..Default::default()
+            })
+            .build()
+            .await?;
+
+        assert_eq!(
+            ReadingViewMode::from_config(&config),
+            ReadingViewMode::Disabled
+        );
+
+        Ok(())
+    }
 }
 
 /// The exit strategy requested by the UI layer.

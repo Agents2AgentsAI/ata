@@ -1162,7 +1162,11 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
-                document_cache: crate::tools::handlers::document_reader::DocumentCache::default(),
+                document_cache: crate::tools::handlers::document_reader::DocumentCache::with_display_mode(
+                    crate::tools::handlers::document_reader::reading_view_display_mode_from_config(
+                        config.as_ref(),
+                    ),
+                ),
                 next_internal_sub_id: AtomicU64::new(0),
                 cron_registry,
                 monitor_runtime,
