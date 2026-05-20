@@ -139,21 +139,22 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
             can_request_original_image_detail: config.can_request_original_image_detail,
             include_environment_id: false,
         }),
-        // ATA-extra tools that always register on top of the upstream base
-        // toolset: PDF figure crop, URL file attachment, JS REPL, and the
-        // document_reader (reading view) tool family. These are unconditional
-        // registrations in build_tool_registry_builder, so they must appear in
-        // the expected set even for a minimal CLI session.
-        ATTACH_URL_FILES_TOOL.clone(),
-        CROP_FIGURE_TOOL.clone(),
         create_js_repl_tool(),
-        PRESENT_DOCUMENT_TOOL.clone(),
-        ADD_DOCUMENT_SECTION_TOOL.clone(),
-        APPEND_TO_SECTION_TOOL.clone(),
-        PATCH_DOCUMENT_SECTION_TOOL.clone(),
-        UPDATE_DOCUMENT_SECTION_TOOL.clone(),
     ] {
         expected.insert(spec.name().to_string(), spec);
+    }
+    if config.reading_view_tools_enabled {
+        for spec in [
+            ATTACH_URL_FILES_TOOL.clone(),
+            CROP_FIGURE_TOOL.clone(),
+            PRESENT_DOCUMENT_TOOL.clone(),
+            ADD_DOCUMENT_SECTION_TOOL.clone(),
+            APPEND_TO_SECTION_TOOL.clone(),
+            PATCH_DOCUMENT_SECTION_TOOL.clone(),
+            UPDATE_DOCUMENT_SECTION_TOOL.clone(),
+        ] {
+            expected.insert(spec.name().to_string(), spec);
+        }
     }
     if config.goal_tools {
         for spec in [

@@ -217,35 +217,33 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(UpdateGoalHandler));
     }
 
-    // ATA-extra tools that always register on top of the upstream base
-    // toolset: reading-view (document_reader), URL file attachment, PDF
-    // figure crop, and the embedded V8-backed JS REPL. These are
-    // unconditional registrations.
-    for (tool_static, name) in [
-        (&*PRESENT_DOCUMENT_TOOL, "present_reading_view"),
-        (&*UPDATE_DOCUMENT_SECTION_TOOL, "update_document_section"),
-        (&*APPEND_TO_SECTION_TOOL, "append_to_section"),
-        (&*ADD_DOCUMENT_SECTION_TOOL, "add_document_section"),
-        (&*PATCH_DOCUMENT_SECTION_TOOL, "patch_document_section"),
-    ] {
+    if config.reading_view_tools_enabled {
+        for (tool_static, name) in [
+            (&*PRESENT_DOCUMENT_TOOL, "present_reading_view"),
+            (&*UPDATE_DOCUMENT_SECTION_TOOL, "update_document_section"),
+            (&*APPEND_TO_SECTION_TOOL, "append_to_section"),
+            (&*ADD_DOCUMENT_SECTION_TOOL, "add_document_section"),
+            (&*PATCH_DOCUMENT_SECTION_TOOL, "patch_document_section"),
+        ] {
+            builder.push_spec(
+                tool_static.clone(),
+                /*supports_parallel_tool_calls*/ false,
+            );
+            builder.register_handler(Arc::new(DocumentReaderHandler::new(ToolName::plain(name))));
+        }
+
         builder.push_spec(
-            tool_static.clone(),
+            ATTACH_URL_FILES_TOOL.clone(),
             /*supports_parallel_tool_calls*/ false,
         );
-        builder.register_handler(Arc::new(DocumentReaderHandler::new(ToolName::plain(name))));
+        builder.register_handler(Arc::new(AttachUrlFilesHandler));
+
+        builder.push_spec(
+            CROP_FIGURE_TOOL.clone(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CropFigureHandler));
     }
-
-    builder.push_spec(
-        ATTACH_URL_FILES_TOOL.clone(),
-        /*supports_parallel_tool_calls*/ false,
-    );
-    builder.register_handler(Arc::new(AttachUrlFilesHandler));
-
-    builder.push_spec(
-        CROP_FIGURE_TOOL.clone(),
-        /*supports_parallel_tool_calls*/ false,
-    );
-    builder.register_handler(Arc::new(CropFigureHandler));
 
     builder.push_spec(
         create_js_repl_tool(),
