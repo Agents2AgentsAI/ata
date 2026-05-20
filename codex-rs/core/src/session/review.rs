@@ -56,6 +56,9 @@ pub(super) async fn spawn_review_thread(
     .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
     .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
     .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
+    .with_reading_view_tools_enabled(
+        crate::tools::handlers::document_reader::reading_view_tools_enabled(config.as_ref()),
+    )
     .with_goal_tools_allowed(goal_tools_supported)
     .with_max_concurrent_threads_per_session(config.agent_max_threads)
     .with_wait_agent_min_timeout_ms(
