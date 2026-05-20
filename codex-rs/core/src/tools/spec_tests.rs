@@ -388,6 +388,112 @@ async fn assert_default_model_tools(
     assert_model_tools(model_slug, features, web_search_mode, &expected).await;
 }
 
+const READING_VIEW_TOOL_NAMES: &[&str] = &[
+    "present_reading_view",
+    "update_document_section",
+    "append_to_section",
+    "add_document_section",
+    "patch_document_section",
+    "attach_url_files",
+    "crop_figure",
+];
+
+fn assert_no_reading_view_tools_in_prompt(specs: &[ToolSpec]) {
+    let names = specs.iter().map(ToolSpec::name).collect::<Vec<_>>();
+    for &tool_name in READING_VIEW_TOOL_NAMES {
+        assert!(
+            !names.contains(&tool_name),
+            "{tool_name} should not be model-visible when reading view is off"
+        );
+    }
+
+    let serialized = serde_json::to_string(specs).expect("serialize model-visible tool specs");
+    for &tool_name in READING_VIEW_TOOL_NAMES {
+        assert!(
+            !serialized.contains(tool_name),
+            "{tool_name} leaked into serialized model-visible tool specs"
+        );
+    }
+}
+
+#[tokio::test]
+async fn reading_view_off_omits_tool_specs_from_model_prompt() {
+    let features = Features::with_defaults();
+    let model_info = model_info_from_models_json("gpt-5.4").await;
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_reading_view_tools_enabled(false);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: std::collections::HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: &[],
+            research_toolkit: None,
+            data_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
+        },
+    );
+
+    let model_visible_specs = router.model_visible_specs();
+    assert_no_reading_view_tools_in_prompt(&model_visible_specs);
+    assert!(
+        model_visible_specs
+            .iter()
+            .any(|spec| spec.name() == "js_repl"),
+        "unrelated ATA tools should remain available"
+    );
+}
+
+#[tokio::test]
+async fn reading_view_off_omits_tool_specs_from_code_mode_prompt() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::CodeMode);
+    let model_info = model_info_from_models_json("gpt-5.4").await;
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        image_generation_tool_auth_allowed: true,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        permission_profile: &PermissionProfile::Disabled,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_reading_view_tools_enabled(false);
+    let router = ToolRouter::from_config(
+        &tools_config,
+        ToolRouterParams {
+            mcp_tools: None,
+            deferred_mcp_tools: None,
+            unavailable_called_tools: Vec::new(),
+            parallel_mcp_server_names: std::collections::HashSet::new(),
+            discoverable_tools: None,
+            dynamic_tools: &[],
+            research_toolkit: None,
+            data_toolkit: None,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
+        },
+    );
+
+    assert_no_reading_view_tools_in_prompt(&router.model_visible_specs());
+}
+
 #[tokio::test]
 async fn test_build_specs_gpt5_codex_default() {
     let features = Features::with_defaults();

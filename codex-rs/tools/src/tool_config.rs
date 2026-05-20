@@ -111,6 +111,7 @@ pub struct ToolsConfig {
     pub tool_suggest: bool,
     pub exec_permission_approvals_enabled: bool,
     pub request_permissions_tool_enabled: bool,
+    pub reading_view_tools_enabled: bool,
     pub code_mode_enabled: bool,
     pub code_mode_only_enabled: bool,
     pub research_tools_enabled: bool,
@@ -258,6 +259,7 @@ impl ToolsConfig {
             tool_suggest: include_tool_suggest,
             exec_permission_approvals_enabled,
             request_permissions_tool_enabled,
+            reading_view_tools_enabled: true,
             code_mode_enabled: include_code_mode,
             code_mode_only_enabled: include_code_mode_only,
             research_tools_enabled: features.has_any_research_enabled(),
@@ -327,6 +329,11 @@ impl ToolsConfig {
 
     pub fn with_hide_spawn_agent_metadata(mut self, hide_spawn_agent_metadata: bool) -> Self {
         self.hide_spawn_agent_metadata = hide_spawn_agent_metadata;
+        self
+    }
+
+    pub fn with_reading_view_tools_enabled(mut self, reading_view_tools_enabled: bool) -> Self {
+        self.reading_view_tools_enabled = reading_view_tools_enabled;
         self
     }
 
