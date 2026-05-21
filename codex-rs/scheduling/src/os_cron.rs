@@ -21,6 +21,25 @@
 //!
 //! Note: OS cron has 1-minute minimum granularity. Sub-minute schedules
 //! (e.g. `*/30 * * * * *`) are rejected with `OsCronError::SubMinuteUnsupported`.
+//!
+//! ## Known limitation: macOS TCC popups on unsigned binaries
+//!
+//! On macOS, each fired `ata exec` subprocess can trigger a "ata would like
+//! to access data from other apps" TCC dialog. macOS pins TCC decisions to
+//! a binary's code signature; an unsigned (or only ad-hoc-signed) binary
+//! has no stable identity for macOS to remember a previous decision
+//! against, so every subprocess can be treated as a fresh "stranger" that
+//! re-prompts. This is most visible with:
+//!
+//! - Dev builds (`cargo build` produces a new binary on every rebuild, so
+//!   even a previously-granted decision is forgotten on the next rebuild).
+//! - Tight schedules (every minute) that spawn many subprocesses quickly.
+//!
+//! End users running the released binary normally see at most one prompt
+//! per category because the release binary file (and its ad-hoc signature)
+//! is stable across runs. The full fix is enabling Apple Developer
+//! signing in the release workflow — see the `HAS_APPLE_SIGNING: "false"`
+//! TODO in `.github/workflows/rust-release.yml`.
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -336,9 +355,23 @@ pub fn insert(job: &CronJob) -> Result<(), OsCronError> {
 }
 
 /// Remove the two-line block for `task_id` from the crontab. Returns
-/// `true` if an entry was removed, `false` if none was found. Also deletes
-/// the prompt sidecar (best-effort; log is preserved for inspection).
+/// `true` if an entry was removed, `false` if none was found.
+///
+/// Also performs two cleanup side-effects (best-effort, errors swallowed):
+/// - Kills any in-flight subprocesses spawned by the system cron daemon
+///   for this task (see [`kill_in_flight`]). Without this, `delete` would
+///   stop future fires but already-spawned `ata exec` children would keep
+///   running until they finish, producing a confusing "delete didn't
+///   actually delete anything" UX (and a stream of macOS TCC popups on
+///   unsigned dev builds).
+/// - Removes the prompt sidecar. The log is preserved for inspection.
 pub fn delete(task_id: &TaskId) -> Result<bool, OsCronError> {
+    // Kill in-flight first. If we removed the crontab line first there's a
+    // tiny race where the daemon could spawn one more fire between our
+    // crontab rewrite and the kill sweep — putting kill first closes that
+    // window. Failures here are non-fatal; we still want delete to succeed.
+    let _ = kill_in_flight(task_id);
+
     let current = read_crontab()?;
     let tag = format!("{TAG_PREFIX}{task_id}");
 
@@ -365,6 +398,98 @@ pub fn delete(task_id: &TaskId) -> Result<bool, OsCronError> {
         let _ = std::fs::remove_file(prompt_path(task_id)?);
     }
     Ok(removed)
+}
+
+/// Kill any in-flight subprocesses that the system cron daemon spawned for
+/// this task. Returns the number of processes signalled (sum of shell
+/// wrappers and their `ata exec` children that were still alive).
+///
+/// Strategy: each in-flight fire is a `/bin/sh -c '... < <prompt-file> ...'`
+/// wrapper plus its `ata exec` child. The wrapper carries the prompt-file
+/// path in its argv (so `pgrep -f <path>` finds it). The child does NOT
+/// (it reads the prompt over stdin), so we walk wrapper -> children via
+/// `pgrep -P <wrapper-pid>` and kill children first so the wrapper's exit
+/// doesn't orphan them to launchd/init.
+///
+/// `SIGTERM` is the polite signal; the spawned `ata exec` is short-lived
+/// and not holding important state, so a graceful shutdown is fine.
+///
+/// Unix-only. On other platforms this is a no-op; the OS-cron path itself
+/// is also unavailable there.
+fn kill_in_flight(task_id: &TaskId) -> usize {
+    #[cfg(unix)]
+    {
+        let Ok(prompt) = prompt_path(task_id) else {
+            return 0;
+        };
+        let prompt_str = prompt.to_string_lossy().into_owned();
+        let wrapper_pids = pgrep_match_full(&prompt_str);
+        let mut killed = 0usize;
+        for wrapper_pid in &wrapper_pids {
+            for child_pid in pgrep_children(*wrapper_pid) {
+                if send_sigterm(child_pid) {
+                    killed += 1;
+                }
+            }
+            if send_sigterm(*wrapper_pid) {
+                killed += 1;
+            }
+        }
+        killed
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = task_id;
+        0
+    }
+}
+
+/// Return PIDs whose full command line matches `pattern` (`pgrep -f`).
+/// Empty vec on no matches or any failure.
+#[cfg(unix)]
+fn pgrep_match_full(pattern: &str) -> Vec<u32> {
+    let Ok(output) = Command::new("pgrep").arg("-f").arg(pattern).output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+}
+
+/// Return PIDs whose parent is `ppid` (`pgrep -P`). Empty vec on no
+/// matches or any failure.
+#[cfg(unix)]
+fn pgrep_children(ppid: u32) -> Vec<u32> {
+    let Ok(output) = Command::new("pgrep")
+        .arg("-P")
+        .arg(ppid.to_string())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .collect()
+}
+
+/// Send `SIGTERM` to `pid`. Returns `true` iff the kill command exited 0
+/// (process existed and was signalled). All other outcomes — including the
+/// process having already exited — return `false`.
+#[cfg(unix)]
+fn send_sigterm(pid: u32) -> bool {
+    Command::new("kill")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Parsed view of one ata-cron entry. The schedule line is parsed only for
@@ -489,6 +614,15 @@ mod tests {
     fn six_field_rejects_garbage() {
         let err = six_field_to_five("not a cron").unwrap_err();
         assert!(matches!(err, OsCronError::InvalidExpression(_)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_in_flight_returns_zero_when_no_subprocesses_match() {
+        // Use a freshly-generated TaskId so no real cron entry exists for it
+        // and no process anywhere has its prompt path in its argv.
+        let unused_task = TaskId::default();
+        assert_eq!(kill_in_flight(&unused_task), 0);
     }
 
     #[test]
