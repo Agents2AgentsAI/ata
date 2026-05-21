@@ -58,9 +58,14 @@ that no welcome-banner / chat-composer cells leak into the reader.
    → capture `baseline`.
 2. `tmux resize-pane -t <new> -x 70`, then sleep 4.
    (Multi-frame repaint needs ~200ms; 4s leaves a wide margin.)
+   **Detached-session note**: `resize-pane -x` is a no-op on a session
+   with no attached client (its size is governed by the window). For
+   detached runs use `tmux resize-window -t <session> -x 70 -y 50`
+   instead — the inner pane will reflow.
 3. `tmux capture-pane -t <new> -p > <narrow_capture>`.
    → capture `narrow`.
 4. `tmux resize-pane -t <new> -x $BASE_W`, then sleep 4.
+   (Same detached-session caveat: use `resize-window -x $BASE_W -y 50`.)
 5. `tmux capture-pane -t <new> -p > <restored_capture>`.
    → capture `restored`.
 6. `tmux send-keys -t <new> "q"` to close the reader (cleanup).
@@ -316,16 +321,14 @@ entering voice mode, and the predicates below will not match.
 
 ## TR-013: Escape does NOT exit voice mode; /voice does
 
-> Updated 2026-05-21: predicate `No previous message to edit` was too
-> narrow — that string only appears when chat history is empty. With
-> prior messages, Escape shows `esc again to edit previous message`
-> instead. Both forms contain `previous message`, which is now the
-> shared substring. The toggle-off predicates also got tightened: instead
-> of `not contains "Hold Space to speak"` (which matched announcement
-> text still in scrollback after exit), assert the announcement
-> `Voice mode off.` AND the default composer placeholder
-> `Find and fix a bug` are visible — both unambiguously prove voice
-> mode is gone.
+> Updated 2026-05-21 (v3): two earlier "fixes" were themselves wrong.
+> (a) `contains "previous message"` fails on a fresh session because
+> Escape produces no visible hint at all when there's no prior chat
+> history — only when something was typed before. (b) `contains "Find
+> and fix a bug"` fails because ata's composer placeholder rotates
+> randomly per launch (`Summarize recent commits`, `Run /review on my
+> current changes`, etc.). Predicates now use the only stable
+> composer-state signal: presence or absence of the `🎤` emoji.
 
 Escape is bound to "edit previous message", not to leaving voice mode.
 Only the `/voice` slash toggles voice mode off. This test guards against
@@ -340,10 +343,9 @@ a regression that silently rebinds Escape.
 4. → capture `after_toggle_off`.
 
 **Expect**:
-- `after_escape` contains `🎤  Hold Space to speak` — still in voice mode (the core assertion)
-- `after_escape` contains `previous message` — Escape ran its real binding (matches both "No previous message to edit" and "esc again to edit previous message")
-- `after_toggle_off` contains `Voice mode off.` — confirmation announcement
-- `after_toggle_off` contains `Find and fix a bug` — composer reverted to default placeholder (proves voice composer is gone)
+- `after_escape` contains `🎤  Hold Space to speak` — voice mode survived Escape (the core assertion)
+- `after_toggle_off` contains `Voice mode off.` — exit confirmation announcement
+- `after_toggle_off` not contains `🎤` — voice composer is gone (any 🎤 elsewhere on the pane would also indicate a stuck voice composer)
 
 ---
 
@@ -374,7 +376,7 @@ and the pane must still exist afterwards.
 - `menu` contains `Press space to select or enter to save`
 - `toggled` contains `[ ] Hacker News` — toggle flipped the box
 - `saved` not contains `Research tools` — menu dismissed
-- `saved` contains the composer placeholder (e.g. `Find and fix a bug`) — back in chat
+- `saved` contains `gpt-` — back in chat (model footer line is the stable "in chat" signal; the composer placeholder rotates per launch and can't be asserted)
 - `panes` contains the ata pane index — pane survived (regression guard)
 
 ---
