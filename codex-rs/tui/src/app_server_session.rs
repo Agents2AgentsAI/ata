@@ -42,6 +42,10 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::SchedulingTaskDeleteParams;
+use codex_app_server_protocol::SchedulingTaskDeleteResponse;
+use codex_app_server_protocol::SchedulingTasksListParams;
+use codex_app_server_protocol::SchedulingTasksListResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -787,6 +791,48 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
+        Ok(())
+    }
+
+    /// ATA scheduling: request a snapshot of the thread's cron/monitor/loop
+    /// tasks. Response is empty; the actual snapshot arrives as a
+    /// `SchedulingTasksSnapshot` notification.
+    pub(crate) async fn scheduling_tasks_list(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: SchedulingTasksListResponse = self
+            .client
+            .request_typed(ClientRequest::SchedulingTasksList {
+                request_id,
+                params: SchedulingTasksListParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("scheduling/tasks/list failed in TUI")?;
+        Ok(())
+    }
+
+    /// ATA scheduling: delete one cron/monitor/loop task. Response is empty;
+    /// the next `SchedulingTasksSnapshot` notification reflects the removal.
+    pub(crate) async fn scheduling_task_delete(
+        &mut self,
+        thread_id: ThreadId,
+        task_id: String,
+        kind: codex_protocol::protocol::SchedulingTaskKind,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: SchedulingTaskDeleteResponse = self
+            .client
+            .request_typed(ClientRequest::SchedulingTaskDelete {
+                request_id,
+                params: SchedulingTaskDeleteParams {
+                    thread_id: thread_id.to_string(),
+                    task_id,
+                    kind,
+                },
+            })
+            .await
+            .wrap_err("scheduling/tasks/delete failed in TUI")?;
         Ok(())
     }
 
@@ -1873,6 +1919,7 @@ mod tests {
                     started_at: None,
                     completed_at: None,
                     duration_ms: None,
+                    background: None,
                 }],
             },
             model: "gpt-5.4".to_string(),

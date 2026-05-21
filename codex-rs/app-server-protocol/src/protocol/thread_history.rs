@@ -1173,6 +1173,7 @@ impl From<PendingTurn> for Turn {
             started_at: value.started_at,
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,
+            background: None,
         }
     }
 }
@@ -1188,6 +1189,7 @@ impl From<&PendingTurn> for Turn {
             started_at: value.started_at,
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,
+            background: None,
         }
     }
 }
@@ -1473,6 +1475,7 @@ mod tests {
                         saved_path: Some(test_path_buf("/tmp/ig_123.png").abs()),
                     },
                 ],
+                background: None,
             }
         );
     }
@@ -2736,6 +2739,7 @@ mod tests {
                 duration_ms: None,
                 items_view: TurnItemsView::Full,
                 items: Vec::new(),
+                background: None,
             }]
         );
     }
@@ -3002,6 +3006,7 @@ mod tests {
                         text_elements: Vec::new(),
                     }],
                 }],
+                background: None,
             }
         );
     }

@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "SchedulingMonitorOutputDeltaEvent": {
+      "description": "ATA: a single streamed line from a running monitor command. The `stream` field is `\"stdout\"` or `\"stderr\"`. Emitted per-line for live TUI display. Not persisted to rollouts and never fed back to the LLM — see [`EventMsg::SchedulingMonitorOutputDelta`].",
+      "properties": {
+        "line": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line",
+        "stream",
+        "task_id"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Streamed line of output from a running monitor. The TUI renders this for the user only; the LLM never sees it. See `codex_protocol::protocol::SchedulingMonitorOutputDeltaEvent`.",
+  "properties": {
+    "event": {
+      "$ref": "#/definitions/SchedulingMonitorOutputDeltaEvent"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "event",
+    "threadId"
+  ],
+  "title": "SchedulingMonitorOutputDeltaNotification",
+  "type": "object"
+}

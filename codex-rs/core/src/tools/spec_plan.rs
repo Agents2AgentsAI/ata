@@ -5,6 +5,12 @@ use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
 use crate::tools::handlers::ContainerExecHandler;
 use crate::tools::handlers::CreateGoalHandler;
+use crate::tools::handlers::CronCreateHandler;
+use crate::tools::handlers::CronDeleteHandler;
+use crate::tools::handlers::CronListHandler;
+use crate::tools::handlers::CronSessionCreateHandler;
+use crate::tools::handlers::CronSessionDeleteHandler;
+use crate::tools::handlers::CronSessionListHandler;
 use crate::tools::handlers::CropFigureHandler;
 use crate::tools::handlers::DocumentReaderHandler;
 use crate::tools::handlers::DynamicToolHandler;
@@ -15,6 +21,11 @@ use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::McpHandler;
+use crate::tools::handlers::MonitorListHandler;
+use crate::tools::handlers::MonitorStartHandler;
+use crate::tools::handlers::MonitorStopHandler;
+use crate::tools::handlers::MonitorWaitHandler;
+use crate::tools::handlers::MonitorWatchForHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
@@ -32,6 +43,12 @@ use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
+use crate::tools::handlers::cron_session_spec::create_cron_session_create_tool;
+use crate::tools::handlers::cron_session_spec::create_cron_session_delete_tool;
+use crate::tools::handlers::cron_session_spec::create_cron_session_list_tool;
+use crate::tools::handlers::cron_spec::create_cron_create_tool;
+use crate::tools::handlers::cron_spec::create_cron_delete_tool;
+use crate::tools::handlers::cron_spec::create_cron_list_tool;
 use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
 use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
@@ -40,6 +57,11 @@ use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::js_repl::JsReplHandler;
 use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_list_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_start_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_stop_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_wait_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_watch_for_tool;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -215,6 +237,63 @@ pub fn build_tool_registry_builder(
         builder.register_handler(Arc::new(GetGoalHandler));
         builder.register_handler(Arc::new(CreateGoalHandler));
         builder.register_handler(Arc::new(UpdateGoalHandler));
+    }
+    if config.scheduling_enabled {
+        builder.push_spec(
+            create_cron_create_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronCreateHandler));
+        builder.push_spec(
+            create_cron_list_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronListHandler));
+        builder.push_spec(
+            create_cron_delete_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronDeleteHandler));
+        builder.push_spec(
+            create_cron_session_create_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronSessionCreateHandler));
+        builder.push_spec(
+            create_cron_session_list_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronSessionListHandler));
+        builder.push_spec(
+            create_cron_session_delete_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(CronSessionDeleteHandler));
+        builder.push_spec(
+            create_monitor_start_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(MonitorStartHandler));
+        builder.push_spec(
+            create_monitor_list_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(MonitorListHandler));
+        builder.push_spec(
+            create_monitor_stop_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(MonitorStopHandler));
+        builder.push_spec(
+            create_monitor_wait_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(MonitorWaitHandler));
+        builder.push_spec(
+            create_monitor_watch_for_tool(),
+            /*supports_parallel_tool_calls*/ false,
+        );
+        builder.register_handler(Arc::new(MonitorWatchForHandler));
     }
 
     if config.reading_view_tools_enabled {

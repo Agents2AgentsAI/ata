@@ -508,6 +508,7 @@ impl TurnRequestProcessor {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         };
 
         Ok(TurnStartResponse { turn })
@@ -827,6 +828,7 @@ impl TurnRequestProcessor {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         }
     }
 

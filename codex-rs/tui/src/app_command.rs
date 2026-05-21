@@ -107,6 +107,18 @@ pub(crate) enum AppCommand {
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
+    /// ATA scheduling: request a snapshot of cron/monitor/loop tasks for the
+    /// active thread. Response arrives as a `SchedulingTasksSnapshot`
+    /// notification.
+    ListSchedulingTasks,
+    /// ATA scheduling: delete one cron/monitor/loop row from the panel via
+    /// the `d` keypress. Server aborts the task first if it's still running
+    /// and emits a fresh `SchedulingTasksSnapshot` so the row disappears
+    /// without waiting for the 1s auto-refresh tick.
+    DeleteSchedulingTask {
+        task_id: String,
+        kind: codex_protocol::protocol::SchedulingTaskKind,
+    },
 }
 
 impl AppCommand {

@@ -61,6 +61,7 @@ codex-elevenlabs = { workspace = true }
 codex-research-tools = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-sandboxing = { workspace = true }
+codex-scheduling = { workspace = true }
 codex-secrets = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }

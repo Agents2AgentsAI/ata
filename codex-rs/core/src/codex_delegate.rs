@@ -99,6 +99,11 @@ pub(crate) async fn run_codex_thread_interactive(
         environment_selections: parent_ctx.environments.clone(),
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
+        // Option A: sub-agent inherits parent's scheduling registries +
+        // root submission tx so cron/monitor/loop tasks registered by the
+        // sub-agent survive sub-agent termination and fire into the root
+        // user-facing session.
+        parent_scheduling: Some(parent_session.scheduling_handle()),
     }))
     .or_cancel(&cancel_token)
     .await??;

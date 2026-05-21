@@ -1593,7 +1593,9 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::UpdateDocumentSection(_)
         | EventMsg::AppendDocumentSection(_)
         | EventMsg::AddDocumentSection(_)
-        | EventMsg::PatchDocumentSection(_) => None,
+        | EventMsg::PatchDocumentSection(_)
+        | EventMsg::SchedulingTasksSnapshot(_)
+        | EventMsg::SchedulingMonitorOutputDelta(_) => None,
     }
 }
 

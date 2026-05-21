@@ -225,6 +225,14 @@ pub(crate) trait BottomPaneView: Renderable {
     /// the agent never called an update tool.
     fn handle_turn_complete(&mut self) {}
 
+    /// Deliver a fresh `/scheduling` snapshot to the view if it owns the
+    /// scheduling panel. Non-scheduling views default to a no-op.
+    fn handle_scheduling_snapshot(
+        &mut self,
+        _snapshot: codex_protocol::protocol::SchedulingTasksSnapshotEvent,
+    ) {
+    }
+
     /// Voice-mode integration hooks. Reading-view overlays override these to
     /// participate in voice narration; everything else gets a no-op.
     #[cfg(not(target_os = "linux"))]

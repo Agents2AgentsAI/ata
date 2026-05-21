@@ -693,6 +693,20 @@ impl App {
                     .await?;
                 Ok(true)
             }
+            // ATA scheduling: route the `/scheduling` panel's list / delete
+            // requests through the typed app-server protocol. Both replies
+            // are empty; the panel observes new data via the next
+            // `SchedulingTasksSnapshot` notification the server emits.
+            AppCommand::ListSchedulingTasks => {
+                app_server.scheduling_tasks_list(thread_id).await?;
+                Ok(true)
+            }
+            AppCommand::DeleteSchedulingTask { task_id, kind } => {
+                app_server
+                    .scheduling_task_delete(thread_id, task_id.clone(), *kind)
+                    .await?;
+                Ok(true)
+            }
             _ => Ok(false),
         }
     }

@@ -272,6 +272,7 @@ pub(super) async fn make_chatwidget_manual(
         dismissed_plan_mode_nudge_scopes: HashSet::new(),
         last_turn_id: None,
         budget_limited_turn_ids: HashSet::new(),
+        background_turn_ids: HashSet::new(),
         thread_name: None,
         thread_rename_block_message: None,
         active_side_conversation: false,
@@ -1126,6 +1127,7 @@ pub(super) fn app_server_turn(
         started_at: None,
         completed_at: None,
         duration_ms,
+        background: None,
     }
 }
 
