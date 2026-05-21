@@ -36,7 +36,6 @@ durationMs: number | null,
  * cron/loop firing. The TUI hides the user-prompt and agent-reply
  * items for these turns so periodic scheduled work doesn't flood the
  * chat. Tool call items still render so explicit `echo` alerts come
- * through. `None` for non-scheduling turns; omitted from the wire
- * when absent so existing tooling stays compatible.
+ * through. `None` for non-scheduling turns.
  */
-background?: boolean | null, };
+background: boolean | null, };

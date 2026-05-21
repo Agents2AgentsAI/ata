@@ -3748,13 +3748,10 @@ pub struct SchedulingCronRow {
     pub prompt: String,
     pub status: String,
     pub fire_count: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_fired_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_fire_at: Option<String>,
     /// Optional agent-supplied human-readable label. Empty/whitespace
     /// strings collapse to `None`; the TUI then falls back to the short id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Pre-formatted history records (newest last) for the `/scheduling`
     /// detail view. For in-session crons this is the per-fire ring buffer;
@@ -3771,12 +3768,9 @@ pub struct SchedulingMonitorRow {
     pub command: String,
     pub status: String,
     pub lines_emitted: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<String>,
     /// Optional agent-supplied human-readable label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Tail of recent output lines (already prefixed with `[stdout]` or
     /// `[stderr]`). Used by the detail view.
@@ -3791,17 +3785,13 @@ pub struct SchedulingLoopRow {
     pub prompt: String,
     /// Fixed-interval loops report their interval here in seconds; dynamic /
     /// model-paced loops are `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(type = "number | null", optional)]
+    #[ts(type = "number | null")]
     pub interval_seconds: Option<u64>,
     pub status: String,
     pub iteration_count: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_iter_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_wakeup_at: Option<String>,
     /// Optional agent-supplied human-readable label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Pre-formatted iteration history (newest last) for the detail view.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

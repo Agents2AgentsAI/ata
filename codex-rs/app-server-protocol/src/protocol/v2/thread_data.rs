@@ -173,10 +173,8 @@ pub struct Turn {
     /// cron/loop firing. The TUI hides the user-prompt and agent-reply
     /// items for these turns so periodic scheduled work doesn't flood the
     /// chat. Tool call items still render so explicit `echo` alerts come
-    /// through. `None` for non-scheduling turns; omitted from the wire
-    /// when absent so existing tooling stays compatible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(type = "boolean | null", optional)]
+    /// through. `None` for non-scheduling turns.
+    #[ts(type = "boolean | null")]
     pub background: Option<bool>,
 }
 
