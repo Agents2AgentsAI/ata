@@ -2,11 +2,10 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "SchedulingTaskKind": {
-      "description": "ATA: discriminator for the three scheduling task families, used on the wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.",
+      "description": "ATA: discriminator for the scheduling task families, used on the wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.",
       "enum": [
         "cron",
-        "monitor",
-        "loop"
+        "monitor"
       ],
       "type": "string"
     }

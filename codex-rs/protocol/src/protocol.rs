@@ -3728,14 +3728,13 @@ pub struct Chunk {
     pub inserted_lines: Vec<String>,
 }
 
-/// ATA: discriminator for the three scheduling task families, used on the
-/// wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.
+/// ATA: discriminator for the scheduling task families, used on the wire by
+/// [`Op::DeleteSchedulingTask`] and any future per-kind operations.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum SchedulingTaskKind {
     Cron,
     Monitor,
-    Loop,
 }
 
 /// ATA: per-cron-job row in [`SchedulingTasksSnapshotEvent`]. Timestamps are
@@ -3778,26 +3777,6 @@ pub struct SchedulingMonitorRow {
     pub tail: Vec<String>,
 }
 
-/// ATA: per-loop row in [`SchedulingTasksSnapshotEvent`].
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct SchedulingLoopRow {
-    pub task_id: String,
-    pub prompt: String,
-    /// Fixed-interval loops report their interval here in seconds; dynamic /
-    /// model-paced loops are `None`.
-    #[ts(type = "number | null")]
-    pub interval_seconds: Option<u64>,
-    pub status: String,
-    pub iteration_count: u64,
-    pub last_iter_at: Option<String>,
-    pub next_wakeup_at: Option<String>,
-    /// Optional agent-supplied human-readable label.
-    pub name: Option<String>,
-    /// Pre-formatted iteration history (newest last) for the detail view.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub recent_events: Vec<String>,
-}
-
 /// ATA: a single streamed line from a running monitor command. The `stream`
 /// field is `"stdout"` or `"stderr"`. Emitted per-line for live TUI display.
 /// Not persisted to rollouts and never fed back to the LLM — see
@@ -3816,7 +3795,6 @@ pub struct SchedulingMonitorOutputDeltaEvent {
 pub struct SchedulingTasksSnapshotEvent {
     pub cron_jobs: Vec<SchedulingCronRow>,
     pub monitors: Vec<SchedulingMonitorRow>,
-    pub loops: Vec<SchedulingLoopRow>,
     /// True iff `Feature::Scheduling` is enabled for the session. Lets the
     /// TUI distinguish "scheduling off" from "scheduling on but no tasks".
     pub scheduling_enabled: bool,

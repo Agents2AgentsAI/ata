@@ -1,5 +1,4 @@
-//! Shared identifiers and status enums used across CronJob, MonitorTask,
-//! and LoopTask.
+//! Shared identifiers and status enums used across CronJob and MonitorTask.
 
 use serde::Deserialize;
 use serde::Serialize;

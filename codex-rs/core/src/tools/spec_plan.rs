@@ -20,10 +20,6 @@ use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::LocalShellHandler;
-use crate::tools::handlers::LoopListHandler;
-use crate::tools::handlers::LoopStartHandler;
-use crate::tools::handlers::LoopStopHandler;
-use crate::tools::handlers::LoopWakeupHandler;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::MonitorListHandler;
 use crate::tools::handlers::MonitorStartHandler;
@@ -61,10 +57,6 @@ use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::js_repl::JsReplHandler;
 use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
-use crate::tools::handlers::loop_tool_spec::create_loop_list_tool;
-use crate::tools::handlers::loop_tool_spec::create_loop_start_tool;
-use crate::tools::handlers::loop_tool_spec::create_loop_stop_tool;
-use crate::tools::handlers::loop_tool_spec::create_loop_wakeup_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_list_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_start_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_stop_tool;
@@ -302,26 +294,6 @@ pub fn build_tool_registry_builder(
             /*supports_parallel_tool_calls*/ false,
         );
         builder.register_handler(Arc::new(MonitorWatchForHandler));
-        builder.push_spec(
-            create_loop_start_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(LoopStartHandler));
-        builder.push_spec(
-            create_loop_list_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(LoopListHandler));
-        builder.push_spec(
-            create_loop_stop_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(LoopStopHandler));
-        builder.push_spec(
-            create_loop_wakeup_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(LoopWakeupHandler));
     }
 
     // ATA-extra tools that always register on top of the upstream base

@@ -83,7 +83,7 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
-/// ATA: gather a serializable snapshot of the session's cron / monitor / loop
+/// ATA: gather a serializable snapshot of the session's cron / monitor
 /// registries and emit it as `EventMsg::SchedulingTasksSnapshot`. The TUI
 /// `/scheduling` panel consumes this event to render the inspection view.
 ///
@@ -93,7 +93,6 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
 /// differently.
 pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
     use codex_protocol::protocol::SchedulingCronRow;
-    use codex_protocol::protocol::SchedulingLoopRow;
     use codex_protocol::protocol::SchedulingMonitorRow;
     use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
 
@@ -182,46 +181,11 @@ pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
         })
         .unwrap_or_default();
 
-    let loops: Vec<SchedulingLoopRow> = sess
-        .loop_runtime()
-        .map(|rt| {
-            rt.registry
-                .list()
-                .into_iter()
-                .map(|l| {
-                    let recent_events = l
-                        .recent_iterations
-                        .iter()
-                        .map(|r| {
-                            format!(
-                                "{}  {}",
-                                r.fired_at.with_timezone(&chrono::Local).format("%H:%M:%S"),
-                                r.outcome
-                            )
-                        })
-                        .collect();
-                    SchedulingLoopRow {
-                        task_id: l.id.as_str().to_string(),
-                        prompt: l.prompt,
-                        interval_seconds: l.interval.map(|d| d.as_secs()),
-                        status: format!("{:?}", l.status),
-                        iteration_count: l.iteration_count,
-                        last_iter_at: l.last_iter_at.map(|ts| ts.to_rfc3339()),
-                        next_wakeup_at: l.next_wakeup_at.map(|ts| ts.to_rfc3339()),
-                        name: l.name,
-                        recent_events,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
     sess.send_event_raw(Event {
         id: sub_id,
         msg: EventMsg::SchedulingTasksSnapshot(SchedulingTasksSnapshotEvent {
             cron_jobs,
             monitors,
-            loops,
             scheduling_enabled,
         }),
     })
@@ -242,7 +206,6 @@ pub async fn delete_scheduling_task(
     let kind_str = match kind {
         SchedulingTaskKind::Cron => "cron",
         SchedulingTaskKind::Monitor => "monitor",
-        SchedulingTaskKind::Loop => "loop",
     };
     match kind {
         SchedulingTaskKind::Cron => {
@@ -256,12 +219,6 @@ pub async fn delete_scheduling_task(
         }
         SchedulingTaskKind::Monitor => {
             if let Some(rt) = sess.monitor_runtime() {
-                let _ = rt.abort(&id);
-                let _ = rt.registry.remove(&id);
-            }
-        }
-        SchedulingTaskKind::Loop => {
-            if let Some(rt) = sess.loop_runtime() {
                 let _ = rt.abort(&id);
                 let _ = rt.registry.remove(&id);
             }

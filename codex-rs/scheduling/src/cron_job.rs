@@ -51,7 +51,7 @@ pub struct CronJob {
     pub fire_count: u64,
     /// When `true` (the new default), firings run silently — the TUI hides
     /// the agent's natural-language reply so periodic crons don't flood the
-    /// chat. Tool call cells still render. See `LoopTask::background`.
+    /// chat. Tool call cells still render.
     #[serde(default = "default_background")]
     pub background: bool,
     /// Optional. Stop firing after this many total firings. `Some(1)` makes

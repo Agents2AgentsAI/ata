@@ -21,7 +21,7 @@ Behavior rules:
 
 4. If asked to cancel, call `cron_delete` with the right id (look it up via `cron_list` if needed) and confirm.
 
-5. Do NOT attempt to use any other tool. If the request requires something outside cron management (streaming output, polling a condition, doing actual work), report back to the parent that this is out of your scope — the parent should pick `monitor_agent`, `loop_agent`, or handle it themselves.
+5. Do NOT attempt to use any other tool. If the request requires something outside cron management (streaming output, polling a condition, doing actual work), report back to the parent that this is out of your scope — the parent should pick `monitor_agent` or handle it themselves.
 
 6. Be terse. One line of confirmation per action is enough.
 """

@@ -169,15 +169,12 @@ pub(crate) async fn apply_bespoke_event_handling(
                 turn.items.clear();
                 turn.items_view = TurnItemsView::NotLoaded;
                 // ATA scheduling (Slice 5): mark turns spawned by background
-                // cron/loop firings so the TUI can hide their user-prompt /
+                // cron firings so the TUI can hide their user-prompt /
                 // agent-reply items from chat. The submission id prefix
-                // (`cronbg__` / `loopbg__`) is set by the in-session cron and
-                // loop engines in `core::session::mod` and
-                // `core::tools::handlers::loop_tool::start`. The turn_id is
-                // the same string as the submission id.
-                if payload.turn_id.starts_with("cronbg__")
-                    || payload.turn_id.starts_with("loopbg__")
-                {
+                // (`cronbg__`) is set by the in-session cron engine in
+                // `core::session::mod`. The turn_id is the same string as
+                // the submission id.
+                if payload.turn_id.starts_with("cronbg__") {
                     turn.background = Some(true);
                 }
                 turn

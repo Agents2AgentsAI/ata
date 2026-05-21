@@ -67,7 +67,6 @@ export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { SchedulingCronRow } from "./SchedulingCronRow";
-export type { SchedulingLoopRow } from "./SchedulingLoopRow";
 export type { SchedulingMonitorOutputDeltaEvent } from "./SchedulingMonitorOutputDeltaEvent";
 export type { SchedulingMonitorRow } from "./SchedulingMonitorRow";
 export type { SchedulingTaskKind } from "./SchedulingTaskKind";

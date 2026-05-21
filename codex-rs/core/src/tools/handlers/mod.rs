@@ -17,8 +17,6 @@ mod goal;
 pub(crate) mod goal_spec;
 pub(crate) mod js_repl;
 pub(crate) mod js_repl_spec;
-pub(crate) mod loop_tool;
-pub(crate) mod loop_tool_spec;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp;
 #[cfg(feature = "lsp")]
@@ -87,10 +85,6 @@ pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
 pub use goal::UpdateGoalHandler;
-pub use loop_tool::LoopListHandler;
-pub use loop_tool::LoopStartHandler;
-pub use loop_tool::LoopStopHandler;
-pub use loop_tool::LoopWakeupHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
 pub use mcp_resource::ListMcpResourcesHandler;

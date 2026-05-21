@@ -2,8 +2,7 @@
 //!
 //! Registered only when [`Feature::Scheduling`] is enabled. Descriptions
 //! include "use when…" / "don't use when…" guidance so the model picks
-//! Monitor (stream-driven) over Cron (fixed schedule) or Loop (model-paced
-//! retry-until) when appropriate.
+//! Monitor (stream-driven) over Cron (fixed schedule) when appropriate.
 
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
@@ -73,7 +72,6 @@ Use when:
 
 Don't use when:
 - The user wants something to happen on a fixed schedule (every minute, daily at 9am) — use cron_create.
-- The user wants model-paced retries until a condition is met — use the loop tool.
 
 The command runs until it exits naturally or you call `monitor_stop`.
 

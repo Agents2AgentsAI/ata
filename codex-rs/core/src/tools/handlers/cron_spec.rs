@@ -2,7 +2,7 @@
 //!
 //! These specs are registered only when [`Feature::Scheduling`] is enabled.
 //! Each description includes "use when…" / "don't use when…" guidance so
-//! the model picks the right tool from this family (vs. Monitor or Loop).
+//! the model picks the right tool from this family (vs. Monitor).
 //!
 //! Persistence: schedules created here are written to the user's system
 //! crontab. They survive ata exit and reboot. Each firing launches a
@@ -68,12 +68,11 @@ USE THIS TOOL when the user wants:
 
 DO NOT USE THIS TOOL when:
 - The user wants the schedule to die when ata closes ("every 5 min while I'm working today") — use `cron_create_session`.
-- The firing needs the current chat's context ("every hour, summarize what we've discussed") — use `cron_create_session` (in-chat firings have conversation memory) or `loop_start`.
-- The user wants sub-minute granularity — OS cron can't do it. Use `cron_create_session` (allows sub-minute) or `loop_start`.
+- The firing needs the current chat's context ("every hour, summarize what we've discussed") — use `cron_create_session` (in-chat firings have conversation memory).
+- The user wants sub-minute granularity — OS cron can't do it. Use `cron_create_session` (allows sub-minute).
 - The user wants to react to streaming output (logs, build progress) — use `monitor_start`.
-- The user wants the agent to keep checking until a condition is met, then stop — use `loop_start`.
 
-Rule of thumb: clock-aligned + persistent + can-be-self-contained → cron. Anything else → loop or monitor.
+Rule of thumb: clock-aligned + persistent + can-be-self-contained → cron. Anything else → monitor or in-session cron.
 
 The tool returns `task_id`, `next_fire_at` (UTC RFC3339), and `log_path`. Surface `log_path` to the user so they know where to look.
 

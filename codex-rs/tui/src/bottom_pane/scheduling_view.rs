@@ -1,5 +1,4 @@
 use codex_protocol::protocol::SchedulingCronRow;
-use codex_protocol::protocol::SchedulingLoopRow;
 use codex_protocol::protocol::SchedulingMonitorRow;
 use codex_protocol::protocol::SchedulingTaskKind;
 use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
@@ -50,7 +49,7 @@ pub(crate) struct SchedulingView {
     /// Set when the view is mounted by the chatwidget; absent in unit tests
     /// that bypass the host (no auto-refresh in that case).
     auto_refresh: Option<AutoRefresh>,
-    /// Index into the flattened row list (cron → monitor → loop). Used by the
+    /// Index into the flattened row list (cron → monitor). Used by the
     /// `j`/`k`/arrow keys and the `d` shortcut.
     selected_index: usize,
     /// `None` = list view (default); `Some(_)` = drill-down detail for one
@@ -94,7 +93,7 @@ impl SchedulingView {
     }
 
     /// Flatten the snapshot into a `(kind, task_id)` list in display order
-    /// (cron → monitor → loop). Returns an empty vec when the snapshot is
+    /// (cron → monitor). Returns an empty vec when the snapshot is
     /// missing, scheduling is disabled, or there are no rows.
     fn flat_rows(&self) -> Vec<(SchedulingTaskKind, String)> {
         let Some(snapshot) = &self.snapshot else {
@@ -109,9 +108,6 @@ impl SchedulingView {
         }
         for row in &snapshot.monitors {
             rows.push((SchedulingTaskKind::Monitor, row.task_id.clone()));
-        }
-        for row in &snapshot.loops {
-            rows.push((SchedulingTaskKind::Loop, row.task_id.clone()));
         }
         rows
     }
@@ -269,7 +265,7 @@ impl SchedulingView {
         let mut header = ColumnRenderable::new();
         header.push(Line::from("Scheduling tasks in this session".bold()));
         header.push(Line::from(
-            "Active cron jobs, monitors, and loops for this thread.".dim(),
+            "Active cron jobs and monitors for this thread.".dim(),
         ));
         // Heartbeat row so the user can see auto-refresh is alive even when
         // no row data has changed yet.
@@ -306,7 +302,7 @@ impl SchedulingView {
             return Box::new(body);
         }
 
-        // Index that increments across cron → monitor → loop so the
+        // Index that increments across cron → monitor so the
         // selection marker tracks the same flat order as `flat_rows()`.
         let selected = self.clamped_selected_index();
         let mut idx: usize = 0;
@@ -341,20 +337,7 @@ impl SchedulingView {
             }
         }
 
-        body.push(Line::from(""));
-        body.push(Line::from(
-            format!("Loops ({})", snapshot.loops.len()).bold(),
-        ));
-        if snapshot.loops.is_empty() {
-            body.push(Line::from("  (none)".dim()));
-        } else {
-            for row in &snapshot.loops {
-                for line in loop_row_lines(row, idx == selected) {
-                    body.push(line);
-                }
-                idx += 1;
-            }
-        }
+        let _ = idx;
 
         Box::new(body)
     }
@@ -439,44 +422,6 @@ impl SchedulingView {
                 } else {
                     let joined = row.tail.join("\n");
                     push_scrolled_lines(body, &joined, state.scroll);
-                }
-            }
-            SchedulingTaskKind::Loop => {
-                let Some(row) = snapshot.loops.iter().find(|r| r.task_id == state.task_id) else {
-                    body.push(Line::from("(task no longer exists)".dim()));
-                    return;
-                };
-                let label = display_label(row.name.as_deref(), &row.task_id);
-                let interval = match row.interval_seconds {
-                    Some(s) => format!("every {s}s"),
-                    None => "dynamic".to_string(),
-                };
-                body.push(Line::from(format!("Loop · {label}").bold()));
-                body.push(Line::from(
-                    format!("  id {}  ·  {}", row.task_id, interval).dim(),
-                ));
-                body.push(Line::from(
-                    format!(
-                        "  status {} · iter {} · next {}",
-                        row.status,
-                        row.iteration_count,
-                        row.next_wakeup_at
-                            .as_deref()
-                            .and_then(relative_time)
-                            .unwrap_or_else(|| "—".to_string()),
-                    )
-                    .dim(),
-                ));
-                body.push(Line::from(""));
-                body.push(Line::from(format!("prompt: {}", row.prompt)));
-                body.push(Line::from(""));
-                body.push(Line::from("Recent iterations:".bold()));
-                if row.recent_events.is_empty() {
-                    body.push(Line::from("  (none yet)".dim()));
-                } else {
-                    for ev in &row.recent_events {
-                        body.push(Line::from(format!("  {ev}")));
-                    }
                 }
             }
         }
@@ -757,29 +702,6 @@ fn monitor_row_lines(row: &SchedulingMonitorRow, selected: bool) -> [Line<'stati
     [head, details]
 }
 
-fn loop_row_lines(row: &SchedulingLoopRow, selected: bool) -> [Line<'static>; 2] {
-    let label = row_label(row.name.as_deref(), &row.task_id);
-    let prompt = truncate(&row.prompt, 50);
-    let head = row_head(row_marker(selected), &label, &row.status, &prompt);
-    let interval = match row.interval_seconds {
-        Some(s) => format!("{s}s"),
-        None => "dynamic".to_string(),
-    };
-    let next = row
-        .next_wakeup_at
-        .as_deref()
-        .and_then(relative_time)
-        .unwrap_or_else(|| "—".to_string());
-    let details = Line::from(
-        format!(
-            "      iter {} · every {interval} · next {next}",
-            row.iteration_count
-        )
-        .dim(),
-    );
-    [head, details]
-}
-
 /// Compute the head-line label for a row: agent-supplied name when
 /// present, otherwise the short task id. Truncated to keep the row layout
 /// stable across long names.
@@ -876,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_renders_cron_monitor_and_loop_rows() {
+    fn snapshot_renders_cron_and_monitor_rows() {
         let mut view = SchedulingView::new();
         view.set_snapshot(SchedulingTasksSnapshotEvent {
             cron_jobs: vec![SchedulingCronRow {
@@ -900,17 +822,6 @@ mod tests {
                 name: None,
                 tail: Vec::new(),
             }],
-            loops: vec![SchedulingLoopRow {
-                task_id: "l1".into(),
-                prompt: "poll status".into(),
-                interval_seconds: Some(5),
-                status: "Running".into(),
-                iteration_count: 7,
-                last_iter_at: None,
-                next_wakeup_at: None,
-                name: None,
-                recent_events: Vec::new(),
-            }],
             scheduling_enabled: true,
         });
         let out = render_to_string(&view, 100, 20);
@@ -921,9 +832,6 @@ mod tests {
             "monitors header missing: {out}"
         );
         assert!(out.contains("m1"), "monitor row missing: {out}");
-        assert!(out.contains("Loops (1)"), "loops header missing: {out}");
-        assert!(out.contains("l1"), "loop row missing: {out}");
-        assert!(out.contains("every 5s"), "interval missing: {out}");
     }
 
     #[test]
@@ -932,7 +840,6 @@ mod tests {
         view.set_snapshot(SchedulingTasksSnapshotEvent {
             cron_jobs: vec![],
             monitors: vec![],
-            loops: vec![],
             scheduling_enabled: false,
         });
         let out = render_to_string(&view, 80, 12);

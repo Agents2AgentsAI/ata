@@ -3088,67 +3088,6 @@
       ],
       "type": "object"
     },
-    "SchedulingLoopRow": {
-      "description": "ATA: per-loop row in [`SchedulingTasksSnapshotEvent`].",
-      "properties": {
-        "interval_seconds": {
-          "description": "Fixed-interval loops report their interval here in seconds; dynamic / model-paced loops are `None`.",
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "iteration_count": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "last_iter_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "description": "Optional agent-supplied human-readable label.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "next_wakeup_at": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "prompt": {
-          "type": "string"
-        },
-        "recent_events": {
-          "description": "Pre-formatted iteration history (newest last) for the detail view.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "status": {
-          "type": "string"
-        },
-        "task_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "iteration_count",
-        "prompt",
-        "status",
-        "task_id"
-      ],
-      "type": "object"
-    },
     "SchedulingMonitorOutputDeltaEvent": {
       "description": "ATA: a single streamed line from a running monitor command. The `stream` field is `\"stdout\"` or `\"stderr\"`. Emitted per-line for live TUI display. Not persisted to rollouts and never fed back to the LLM — see [`EventMsg::SchedulingMonitorOutputDelta`].",
       "properties": {
@@ -3246,12 +3185,6 @@
           },
           "type": "array"
         },
-        "loops": {
-          "items": {
-            "$ref": "#/definitions/SchedulingLoopRow"
-          },
-          "type": "array"
-        },
         "monitors": {
           "items": {
             "$ref": "#/definitions/SchedulingMonitorRow"
@@ -3265,7 +3198,6 @@
       },
       "required": [
         "cron_jobs",
-        "loops",
         "monitors",
         "scheduling_enabled"
       ],

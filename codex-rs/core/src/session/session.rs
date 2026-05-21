@@ -48,10 +48,7 @@ pub(crate) struct Session {
     /// Session-scoped Monitor runtime (registry + per-monitor abort handles).
     /// `None` when `Feature::Scheduling` is disabled.
     pub(crate) monitor_runtime: Option<Arc<crate::scheduling_runtime::MonitorRuntime>>,
-    /// Session-scoped Loop runtime (registry + per-loop abort handles).
-    /// `None` when `Feature::Scheduling` is disabled.
-    pub(crate) loop_runtime: Option<Arc<crate::scheduling_runtime::LoopRuntime>>,
-    /// Phase 4: sidecar path where this session's cron/monitor/loop state is
+    /// Phase 4: sidecar path where this session's cron/monitor state is
     /// persisted so it survives `/quit` + `ata resume`. `None` when scheduling
     /// is disabled, or for sub-agent sessions whose registries are inherited
     /// from the root (only the root persists; sub-agents share its view).
@@ -80,7 +77,6 @@ pub(crate) struct Session {
 pub(crate) struct ParentSchedulingHandle {
     pub(crate) cron_registry: Option<Arc<codex_scheduling::CronRegistry>>,
     pub(crate) monitor_runtime: Option<Arc<crate::scheduling_runtime::MonitorRuntime>>,
-    pub(crate) loop_runtime: Option<Arc<crate::scheduling_runtime::LoopRuntime>>,
     pub(crate) submission_tx: Sender<Submission>,
     /// Root session's event channel — sub-agents inherit this so monitor
     /// streaming events surface in the user-facing chat.
@@ -407,13 +403,12 @@ impl Session {
         ParentSchedulingHandle {
             cron_registry: self.cron_registry.clone(),
             monitor_runtime: self.monitor_runtime.clone(),
-            loop_runtime: self.loop_runtime.clone(),
             submission_tx: self.submission_tx.clone(),
             scheduling_event_tx: self.scheduling_event_tx.clone(),
         }
     }
 
-    /// Phase 4: write the current cron/monitor/loop state to the session's
+    /// Phase 4: write the current cron/monitor state to the session's
     /// sidecar file. No-op when scheduling is disabled or for sub-agent
     /// sessions whose registries are inherited from the root (the root owns
     /// persistence). Errors are logged but not propagated.
@@ -431,12 +426,7 @@ impl Session {
             .as_ref()
             .map(|r| r.registry.list())
             .unwrap_or_default();
-        let loops = self
-            .loop_runtime
-            .as_ref()
-            .map(|r| r.registry.list())
-            .unwrap_or_default();
-        let snap = codex_scheduling::SchedulingSnapshot::new(cron_jobs, monitors, loops);
+        let snap = codex_scheduling::SchedulingSnapshot::new(cron_jobs, monitors);
         if let Err(err) = codex_scheduling::save_scheduling_state(path, &snap) {
             tracing::warn!(
                 target: "codex_scheduling::persist",
@@ -457,11 +447,6 @@ impl Session {
         &self,
     ) -> Option<&Arc<crate::scheduling_runtime::MonitorRuntime>> {
         self.monitor_runtime.as_ref()
-    }
-
-    /// Returns the Loop runtime when scheduling is enabled.
-    pub(crate) fn loop_runtime(&self) -> Option<&Arc<crate::scheduling_runtime::LoopRuntime>> {
-        self.loop_runtime.as_ref()
     }
 
     /// Clone of the session submission sender, for handlers that need to
@@ -1056,7 +1041,6 @@ impl Session {
             let (
                 cron_registry,
                 monitor_runtime,
-                loop_runtime,
                 effective_submission_tx,
                 effective_scheduling_event_tx,
                 is_root,
@@ -1065,7 +1049,6 @@ impl Session {
                 Some(handle) => (
                     handle.cron_registry,
                     handle.monitor_runtime,
-                    handle.loop_runtime,
                     handle.submission_tx,
                     handle.scheduling_event_tx,
                     false,
@@ -1082,11 +1065,6 @@ impl Session {
                     } else {
                         None
                     };
-                    let lp = if scheduling_on {
-                        Some(Arc::new(crate::scheduling_runtime::LoopRuntime::new()))
-                    } else {
-                        None
-                    };
                     let path = if scheduling_on {
                         Some(codex_scheduling::scheduling_state_path(
                             &config.codex_home,
@@ -1095,8 +1073,8 @@ impl Session {
                     } else {
                         None
                     };
-                    if let (Some(path), Some(cron_reg), Some(mon_rt), Some(lp_rt)) =
-                        (path.as_ref(), cron.as_ref(), mon.as_ref(), lp.as_ref())
+                    if let (Some(path), Some(cron_reg), Some(mon_rt)) =
+                        (path.as_ref(), cron.as_ref(), mon.as_ref())
                     {
                         match codex_scheduling::load_scheduling_state(path) {
                             Ok(Some(snap)) => {
@@ -1118,15 +1096,12 @@ impl Session {
                                     .collect::<Vec<_>>();
                                 let mon_n = monitors.len();
                                 mon_rt.registry.hydrate(monitors);
-                                let loop_n = snap.loops.len();
-                                lp_rt.registry.hydrate(snap.loops);
                                 tracing::info!(
                                     target: "codex_scheduling::persist",
                                     thread_id = %thread_id,
                                     cron_count = cron_n,
                                     monitor_count = mon_n,
                                     monitors_marked_interrupted = interrupted_n,
-                                    loop_count = loop_n,
                                     "scheduling.resume.hydrated"
                                 );
                             }
@@ -1141,7 +1116,7 @@ impl Session {
                             }
                         }
                     }
-                    (cron, mon, lp, submission_tx, tx_event.clone(), true, path)
+                    (cron, mon, submission_tx, tx_event.clone(), true, path)
                 }
             };
             let sess = Arc::new(Session {
@@ -1170,7 +1145,6 @@ impl Session {
                 next_internal_sub_id: AtomicU64::new(0),
                 cron_registry,
                 monitor_runtime,
-                loop_runtime,
                 scheduling_state_path,
                 submission_tx: effective_submission_tx,
                 scheduling_is_root: is_root,

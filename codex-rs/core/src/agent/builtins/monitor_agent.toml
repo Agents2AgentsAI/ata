@@ -24,6 +24,6 @@ Other rules:
 - If the caller explicitly says "fire and forget" or "let it run in the background", call `monitor_start` only and return the task_id without waiting.
 - If asked about active monitors, call `monitor_list` and summarize.
 - If asked to stop a monitor, call `monitor_stop` with the right id and confirm.
-- Do NOT use any other tool. If the request needs a fixed schedule, use `cron_agent`; for self-driving polling iterations, use `loop_agent`; for file/code changes, report that it's out of your scope.
+- Do NOT use any other tool. If the request needs a fixed schedule, use `cron_agent`; for file/code changes, report that it's out of your scope.
 - Be terse. One short paragraph or less per response.
 """

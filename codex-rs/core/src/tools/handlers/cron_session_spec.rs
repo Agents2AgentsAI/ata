@@ -94,7 +94,6 @@ USE THIS TOOL when:
 DO NOT USE THIS TOOL when:
 - The schedule must keep firing after ata closes ("every morning at 9am send me X" — use `cron_create`)
 - The user wants a persistent automation that runs in the background of their machine (use `cron_create`)
-- The user wants interval-from-now timing ("every 30 seconds starting now" — use `loop_start`)
 
 Returns a task_id usable with `cron_delete_session`."#
             .to_string(),

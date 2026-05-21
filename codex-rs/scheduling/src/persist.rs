@@ -1,5 +1,5 @@
-//! Phase 4: durable snapshot of `CronRegistry` + `MonitorRegistry` +
-//! `LoopRegistry` for a single thread.
+//! Phase 4: durable snapshot of `CronRegistry` + `MonitorRegistry` for a
+//! single thread.
 //!
 //! The snapshot is written next to the thread's rollout journal so the
 //! `~/.codex/sessions/…` directory remains the single source of truth for
@@ -22,7 +22,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::cron_job::CronJob;
-use crate::loop_task::LoopTask;
 use crate::monitor::MonitorTask;
 
 /// Persisted scheduling state for one thread. Each `Vec` mirrors the
@@ -39,8 +38,6 @@ pub struct SchedulingSnapshot {
     pub cron_jobs: Vec<CronJob>,
     #[serde(default)]
     pub monitors: Vec<MonitorTask>,
-    #[serde(default)]
-    pub loops: Vec<LoopTask>,
 }
 
 fn default_version() -> u32 {
@@ -48,17 +45,16 @@ fn default_version() -> u32 {
 }
 
 impl SchedulingSnapshot {
-    pub fn new(cron_jobs: Vec<CronJob>, monitors: Vec<MonitorTask>, loops: Vec<LoopTask>) -> Self {
+    pub fn new(cron_jobs: Vec<CronJob>, monitors: Vec<MonitorTask>) -> Self {
         Self {
             version: 1,
             cron_jobs,
             monitors,
-            loops,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.cron_jobs.is_empty() && self.monitors.is_empty() && self.loops.is_empty()
+        self.cron_jobs.is_empty() && self.monitors.is_empty()
     }
 }
 
@@ -84,7 +80,6 @@ pub fn load(path: &Path) -> io::Result<Option<SchedulingSnapshot>> {
                 path = %path.display(),
                 cron_count = snap.cron_jobs.len(),
                 monitor_count = snap.monitors.len(),
-                loop_count = snap.loops.len(),
                 "scheduling.persist.loaded"
             );
             Ok(Some(snap))
@@ -115,7 +110,6 @@ pub fn save(path: &Path, snapshot: &SchedulingSnapshot) -> io::Result<()> {
         path = %path.display(),
         cron_count = snapshot.cron_jobs.len(),
         monitor_count = snapshot.monitors.len(),
-        loop_count = snapshot.loops.len(),
         bytes = body.len(),
         "scheduling.persist.saved"
     );
@@ -132,9 +126,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 mod tests {
     use super::*;
     use crate::cron_job::CronJob;
-    use crate::loop_task::LoopTask;
     use crate::monitor::MonitorTask;
-    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -145,15 +137,14 @@ mod tests {
     }
 
     #[test]
-    fn save_then_load_roundtrips_all_three_kinds() {
+    fn save_then_load_roundtrips_cron_and_monitor() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("snap.json");
 
         let cron = CronJob::new("0 * * * * *".into(), "tick".into()).unwrap();
         let mon = MonitorTask::new("ping -c 3 google.com".into());
-        let lp = LoopTask::new_fixed("poll".into(), Duration::from_secs(30));
 
-        let snap = SchedulingSnapshot::new(vec![cron.clone()], vec![mon.clone()], vec![lp.clone()]);
+        let snap = SchedulingSnapshot::new(vec![cron.clone()], vec![mon.clone()]);
         save(&path, &snap).unwrap();
 
         let loaded = load(&path).unwrap().unwrap();
@@ -162,8 +153,6 @@ mod tests {
         assert_eq!(loaded.cron_jobs[0].id, cron.id);
         assert_eq!(loaded.monitors.len(), 1);
         assert_eq!(loaded.monitors[0].id, mon.id);
-        assert_eq!(loaded.loops.len(), 1);
-        assert_eq!(loaded.loops[0].id, lp.id);
     }
 
     #[test]
