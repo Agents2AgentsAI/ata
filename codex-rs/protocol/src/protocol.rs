@@ -763,6 +763,21 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// ATA: request a snapshot of in-session scheduling state (cron jobs,
+    /// monitors, loops) for display in the `/scheduling` TUI panel. Server
+    /// responds with [`EventMsg::SchedulingTasksSnapshot`]. No-op when
+    /// `Feature::Scheduling` is disabled (server emits an empty snapshot).
+    ListSchedulingTasks,
+
+    /// ATA: remove a scheduling task from the registry, aborting it first
+    /// if it's still running. Used by the `/scheduling` TUI panel's `d`
+    /// shortcut to delete a row. No-op when `Feature::Scheduling` is
+    /// disabled.
+    DeleteSchedulingTask {
+        task_id: String,
+        kind: SchedulingTaskKind,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
@@ -864,6 +879,8 @@ impl Op {
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
+            Self::ListSchedulingTasks => "list_scheduling_tasks",
+            Self::DeleteSchedulingTask { .. } => "delete_scheduling_task",
         }
     }
 }
@@ -1422,6 +1439,18 @@ pub enum EventMsg {
     PatchDocumentSection(crate::document_reader::PatchDocumentSectionEvent),
 
     TurnAborted(TurnAbortedEvent),
+
+    /// ATA: response to [`Op::ListSchedulingTasks`]. Contains the current
+    /// state of all cron jobs, monitors, and loops in the session at the time
+    /// the snapshot was taken. The TUI `/scheduling` panel consumes this event
+    /// to render a live inspection view.
+    SchedulingTasksSnapshot(SchedulingTasksSnapshotEvent),
+
+    /// ATA: one streamed line of output from a running monitor. Ephemeral —
+    /// not persisted to rollouts, not fed back to the LLM. The TUI renders
+    /// this for the user only; the agent receives a single summary on
+    /// monitor termination instead.
+    SchedulingMonitorOutputDelta(SchedulingMonitorOutputDeltaEvent),
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
@@ -3697,6 +3726,78 @@ pub struct Chunk {
     pub orig_index: u32,
     pub deleted_lines: Vec<String>,
     pub inserted_lines: Vec<String>,
+}
+
+/// ATA: discriminator for the scheduling task families, used on the wire by
+/// [`Op::DeleteSchedulingTask`] and any future per-kind operations.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum SchedulingTaskKind {
+    Cron,
+    Monitor,
+}
+
+/// ATA: per-cron-job row in [`SchedulingTasksSnapshotEvent`]. Timestamps are
+/// RFC 3339 strings (rather than i64) so the TUI can render them without
+/// pulling in chrono on the wire.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingCronRow {
+    pub task_id: String,
+    pub cron_expr: String,
+    pub prompt: String,
+    pub status: String,
+    pub fire_count: u64,
+    pub last_fired_at: Option<String>,
+    pub next_fire_at: Option<String>,
+    /// Optional agent-supplied human-readable label. Empty/whitespace
+    /// strings collapse to `None`; the TUI then falls back to the short id.
+    pub name: Option<String>,
+    /// Pre-formatted history records (newest last) for the `/scheduling`
+    /// detail view. For in-session crons this is the per-fire ring buffer;
+    /// for OS-cron rows the host leaves this empty (the TUI reads the log
+    /// file directly when the user opens the detail view).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_events: Vec<String>,
+}
+
+/// ATA: per-monitor row in [`SchedulingTasksSnapshotEvent`].
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingMonitorRow {
+    pub task_id: String,
+    pub command: String,
+    pub status: String,
+    pub lines_emitted: u64,
+    pub started_at: Option<String>,
+    pub stopped_at: Option<String>,
+    /// Optional agent-supplied human-readable label.
+    pub name: Option<String>,
+    /// Tail of recent output lines (already prefixed with `[stdout]` or
+    /// `[stderr]`). Used by the detail view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tail: Vec<String>,
+}
+
+/// ATA: a single streamed line from a running monitor command. The `stream`
+/// field is `"stdout"` or `"stderr"`. Emitted per-line for live TUI display.
+/// Not persisted to rollouts and never fed back to the LLM — see
+/// [`EventMsg::SchedulingMonitorOutputDelta`].
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingMonitorOutputDeltaEvent {
+    pub task_id: String,
+    pub stream: String,
+    pub line: String,
+}
+
+/// ATA: response payload for `Op::ListSchedulingTasks`. Always non-null —
+/// when scheduling is disabled or no tasks exist, the lists are empty rather
+/// than the whole event being omitted.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingTasksSnapshotEvent {
+    pub cron_jobs: Vec<SchedulingCronRow>,
+    pub monitors: Vec<SchedulingMonitorRow>,
+    /// True iff `Feature::Scheduling` is enabled for the session. Lets the
+    /// TUI distinguish "scheduling off" from "scheduling on but no tasks".
+    pub scheduling_enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

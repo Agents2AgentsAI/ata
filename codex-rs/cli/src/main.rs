@@ -167,12 +167,6 @@ enum Subcommand {
     #[clap(name = "cloud", alias = "cloud-tasks")]
     Cloud(CloudTasksCli),
 
-    /// Manage scheduled jobs.
-    Jobs(codex_scheduler::cli::JobsCli),
-
-    /// Control the scheduler daemon.
-    Scheduler(codex_scheduler::cli::SchedulerCli),
-
     /// Manage workspaces (repos, runs, artifacts, audit).
     #[clap(visible_alias = "ws")]
     Workspace(WorkspaceCli),
@@ -1097,22 +1091,6 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
                 .await?;
-        }
-        Some(Subcommand::Jobs(jobs_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "jobs",
-            )?;
-            codex_scheduler::cli::run_jobs_command(jobs_cli).await?;
-        }
-        Some(Subcommand::Scheduler(scheduler_cli)) => {
-            reject_remote_mode_for_subcommand(
-                root_remote.as_deref(),
-                root_remote_auth_token_env.as_deref(),
-                "scheduler",
-            )?;
-            codex_scheduler::cli::run_scheduler_command(scheduler_cli).await?;
         }
         Some(Subcommand::Workspace(workspace_cli)) => {
             reject_remote_mode_for_subcommand(

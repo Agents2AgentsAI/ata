@@ -127,6 +127,11 @@ pub struct ToolsConfig {
     pub multi_agent_v2: bool,
     pub lsp_enabled: bool,
     pub code_intel_enabled: bool,
+    pub scheduling_enabled: bool,
+    /// If `Some`, the tool registry will be filtered down to exactly these tool names
+    /// after registration. Used to enforce per-role tool restrictions for specialized
+    /// sub-agents (e.g., cron_agent, monitor_agent, loop_agent). `None` means no filter.
+    pub tool_allowlist: Option<Vec<String>>,
     pub hide_spawn_agent_metadata: bool,
     pub spawn_agent_usage_hint: bool,
     pub spawn_agent_usage_hint_text: Option<String>,
@@ -186,6 +191,7 @@ impl ToolsConfig {
         let include_code_mode = features.enabled(Feature::CodeMode);
         let include_code_mode_only = include_code_mode && features.enabled(Feature::CodeModeOnly);
         let include_goal_tools = features.enabled(Feature::Goals);
+        let include_scheduling = features.enabled(Feature::Scheduling);
         let include_multi_agent_v2 = features.enabled(Feature::MultiAgentV2);
         let include_collab_tools = include_multi_agent_v2 || features.enabled(Feature::Collab);
         let include_agent_jobs = features.enabled(Feature::SpawnCsv);
@@ -275,6 +281,8 @@ impl ToolsConfig {
             multi_agent_v2: include_multi_agent_v2,
             lsp_enabled: false,
             code_intel_enabled: false,
+            scheduling_enabled: include_scheduling,
+            tool_allowlist: None,
             hide_spawn_agent_metadata: false,
             spawn_agent_usage_hint: true,
             spawn_agent_usage_hint_text: None,
@@ -365,6 +373,11 @@ impl ToolsConfig {
 
     pub fn with_code_intel_enabled(mut self, code_intel_enabled: bool) -> Self {
         self.code_intel_enabled = code_intel_enabled;
+        self
+    }
+
+    pub fn with_tool_allowlist(mut self, allowlist: Option<Vec<String>>) -> Self {
+        self.tool_allowlist = allowlist;
         self
     }
 

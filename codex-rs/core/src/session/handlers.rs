@@ -83,6 +83,159 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
+/// ATA: gather a serializable snapshot of the session's cron / monitor
+/// registries and emit it as `EventMsg::SchedulingTasksSnapshot`. The TUI
+/// `/scheduling` panel consumes this event to render the inspection view.
+///
+/// When `Feature::Scheduling` is disabled the registries are `None` on the
+/// Session, so we emit an empty snapshot with `scheduling_enabled: false`.
+/// That distinction matters for the panel — "off" vs "on but empty" render
+/// differently.
+pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
+    use codex_protocol::protocol::SchedulingCronRow;
+    use codex_protocol::protocol::SchedulingMonitorRow;
+    use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
+
+    let scheduling_enabled = sess.cron_registry().is_some();
+
+    // Two cron sources to merge:
+    //   1. OS-level entries from the user's system crontab (persistent).
+    //   2. In-session entries from the per-session CronRegistry (die with ata).
+    // Both render in the same "Cron" section of the panel.
+    let mut cron_jobs: Vec<SchedulingCronRow> = if scheduling_enabled {
+        codex_scheduling::os_cron::list()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| {
+                let next_fire_at = codex_scheduling::os_cron::next_fire_after_now_five_field(
+                    &e.cron_expr_five_field,
+                )
+                .map(|t| t.to_rfc3339());
+                let stats = codex_scheduling::os_cron::fire_stats(&e.task_id);
+                SchedulingCronRow {
+                    task_id: e.task_id.as_str().to_string(),
+                    cron_expr: e.cron_expr_five_field,
+                    prompt: e.prompt,
+                    status: "Scheduled".to_string(),
+                    fire_count: stats.fire_count,
+                    last_fired_at: stats.last_fired_at.map(|t| t.to_rfc3339()),
+                    next_fire_at,
+                    name: e.name,
+                    // OS-cron history lives in the log file; the TUI reads it
+                    // directly on detail open.
+                    recent_events: Vec::new(),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    if let Some(reg) = sess.cron_registry() {
+        for job in reg.list() {
+            let recent_events = job
+                .recent_fires
+                .iter()
+                .map(|r| {
+                    format!(
+                        "{}  {}",
+                        r.fired_at.with_timezone(&chrono::Local).format("%H:%M:%S"),
+                        r.outcome
+                    )
+                })
+                .collect();
+            cron_jobs.push(SchedulingCronRow {
+                task_id: job.id.as_str().to_string(),
+                cron_expr: job.cron_expr,
+                prompt: job.prompt,
+                status: format!("{:?}", job.status),
+                fire_count: job.fire_count,
+                last_fired_at: job.last_fired_at.map(|ts| ts.to_rfc3339()),
+                next_fire_at: job.next_fire_at.map(|ts| ts.to_rfc3339()),
+                name: job.name,
+                recent_events,
+            });
+        }
+    }
+
+    let monitors: Vec<SchedulingMonitorRow> = sess
+        .monitor_runtime()
+        .map(|rt| {
+            rt.registry
+                .list()
+                .into_iter()
+                .map(|m| {
+                    let tail = rt.registry.tail_snapshot(&m.id);
+                    SchedulingMonitorRow {
+                        task_id: m.id.as_str().to_string(),
+                        command: m.command,
+                        status: format!("{:?}", m.status),
+                        lines_emitted: m.lines_emitted,
+                        started_at: m.started_at.map(|ts| ts.to_rfc3339()),
+                        stopped_at: m.stopped_at.map(|ts| ts.to_rfc3339()),
+                        name: m.name,
+                        tail,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::SchedulingTasksSnapshot(SchedulingTasksSnapshotEvent {
+            cron_jobs,
+            monitors,
+            scheduling_enabled,
+        }),
+    })
+    .await;
+}
+
+/// ATA: remove a single scheduling task from the registry, aborting it first
+/// if it's still running. Then re-emit a snapshot so the panel reflects the
+/// removal without waiting for its next auto-refresh tick.
+pub async fn delete_scheduling_task(
+    sess: &Session,
+    sub_id: String,
+    task_id: String,
+    kind: codex_protocol::protocol::SchedulingTaskKind,
+) {
+    use codex_protocol::protocol::SchedulingTaskKind;
+    let id = codex_scheduling::TaskId::from(task_id);
+    let kind_str = match kind {
+        SchedulingTaskKind::Cron => "cron",
+        SchedulingTaskKind::Monitor => "monitor",
+    };
+    match kind {
+        SchedulingTaskKind::Cron => {
+            // The panel doesn't distinguish OS cron from in-session cron, so
+            // try both. Whichever owns this task_id will remove it; the other
+            // is a harmless no-op.
+            if let Some(reg) = sess.cron_registry() {
+                let _ = reg.remove(&id);
+                let _ = codex_scheduling::os_cron::delete(&id);
+            }
+        }
+        SchedulingTaskKind::Monitor => {
+            if let Some(rt) = sess.monitor_runtime() {
+                let _ = rt.abort(&id);
+                let _ = rt.registry.remove(&id);
+            }
+        }
+    }
+    tracing::info!(
+        target: "codex_scheduling::panel",
+        task_id = %id,
+        kind = kind_str,
+        "panel.row_deleted"
+    );
+    // Phase 4: durable state is now stale; rewrite so the deletion sticks
+    // across `/quit`.
+    sess.persist_scheduling_state();
+    list_scheduling_tasks(sess, sub_id).await;
+}
+
 pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
     if let Err(err) = sess.update_settings(updates).await {
         sess.send_event_raw(Event {
@@ -880,6 +1033,15 @@ pub(super) async fn submission_loop(
                 }
                 Op::ApproveGuardianDeniedAction { event } => {
                     approve_guardian_denied_action(&sess, event).await;
+                    false
+                }
+                // ATA scheduling: snapshot for the `/scheduling` panel.
+                Op::ListSchedulingTasks => {
+                    list_scheduling_tasks(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::DeleteSchedulingTask { task_id, kind } => {
+                    delete_scheduling_task(&sess, sub.id.clone(), task_id, kind).await;
                     false
                 }
                 _ => false, // Ignore unknown ops; enum is non_exhaustive to allow extensions.

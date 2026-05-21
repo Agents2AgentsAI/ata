@@ -23,6 +23,7 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
+    Scheduling,
     #[strum(to_string = "approve")]
     AutoReview,
     Account,
@@ -137,6 +138,7 @@ impl SlashCommand {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
+            SlashCommand::Scheduling => "view active cron / monitor / loop tasks",
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
             SlashCommand::Account => "sign in / out of your ATA account",
             SlashCommand::ReadingView => "configure the reading-view display mode",
@@ -249,7 +251,8 @@ impl SlashCommand {
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
-            | SlashCommand::Side => true,
+            | SlashCommand::Side
+            | SlashCommand::Scheduling => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,

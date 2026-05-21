@@ -623,6 +623,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
                 started_at: Some(0),
                 completed_at: None,
                 duration_ms: None,
+                background: None,
             },
         }),
         Some(ReplayKind::ThreadSnapshot),
@@ -773,6 +774,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
                 started_at: Some(0),
                 completed_at: None,
                 duration_ms: None,
+                background: None,
             },
         }),
         /*replay_kind*/ None,
@@ -842,6 +844,7 @@ async fn replayed_in_progress_turn_marks_task_running() {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         }],
         ReplayKind::ResumeInitialMessages,
     );

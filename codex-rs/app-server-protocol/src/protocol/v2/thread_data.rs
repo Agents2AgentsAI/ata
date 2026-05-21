@@ -169,6 +169,13 @@ pub struct Turn {
     /// Duration between turn start and completion in milliseconds, if known.
     #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
+    /// ATA scheduling (Slice 5): this turn was started by a background
+    /// cron/loop firing. The TUI hides the user-prompt and agent-reply
+    /// items for these turns so periodic scheduled work doesn't flood the
+    /// chat. Tool call items still render so explicit `echo` alerts come
+    /// through. `None` for non-scheduling turns.
+    #[ts(type = "boolean | null")]
+    pub background: Option<bool>,
 }
 
 #[derive(Default, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

@@ -263,6 +263,9 @@ pub enum Feature {
     /// ATA-private: master toggle for the data tool integrations (HuggingFace /
     /// Kaggle dataset discovery, download, and management).
     DataTools,
+    /// ATA-private: Claude Code-style scheduling primitives (Cron / Monitor / Loop)
+    /// running in-session, plus persistent OS cron jobs.
+    Scheduling,
 }
 
 impl Feature {
@@ -1317,6 +1320,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::DataTools,
         key: "data_tools",
         stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Scheduling,
+        key: "scheduling",
+        stage: Stage::Experimental {
+            name: "Scheduling",
+            menu_description: "OS-cron / in-session loop / in-session monitor tools. Cron entries live in the system crontab and survive ata exit; loops and monitors are scoped to the chat session.",
+            announcement: "",
+        },
         default_enabled: false,
     },
 ];

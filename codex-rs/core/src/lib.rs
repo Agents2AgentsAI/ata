@@ -118,6 +118,7 @@ pub(crate) mod mentions {
 }
 mod sandbox_tags;
 pub mod sandboxing;
+mod scheduling_runtime;
 mod session_prefix;
 mod session_startup_prewarm;
 mod shell_detect;

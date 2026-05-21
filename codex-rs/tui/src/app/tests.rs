@@ -4177,6 +4177,7 @@ fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn 
         started_at: None,
         completed_at: None,
         duration_ms: None,
+        background: None,
     }
 }
 
@@ -4764,6 +4765,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     started_at: None,
                     completed_at: None,
                     duration_ms: None,
+                    background: None,
                 },
                 Turn {
                     id: "turn-2".to_string(),
@@ -4788,6 +4790,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     started_at: None,
                     completed_at: None,
                     duration_ms: None,
+                    background: None,
                 },
             ],
             events: Vec::new(),

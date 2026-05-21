@@ -164,9 +164,19 @@ pub(crate) async fn apply_bespoke_event_handling(
                     started_at: payload.started_at,
                     completed_at: None,
                     duration_ms: None,
+                    background: None,
                 });
                 turn.items.clear();
                 turn.items_view = TurnItemsView::NotLoaded;
+                // ATA scheduling (Slice 5): mark turns spawned by background
+                // cron firings so the TUI can hide their user-prompt /
+                // agent-reply items from chat. The submission id prefix
+                // (`cronbg__`) is set by the in-session cron engine in
+                // `core::session::mod`. The turn_id is the same string as
+                // the submission id.
+                if payload.turn_id.starts_with("cronbg__") {
+                    turn.background = Some(true);
+                }
                 turn
             };
             let notification = TurnStartedNotification {
@@ -1276,6 +1286,29 @@ pub(crate) async fn apply_bespoke_event_handling(
                 ))
                 .await;
         }
+        // ATA scheduling: forward `/scheduling` snapshot from session to TUI.
+        EventMsg::SchedulingTasksSnapshot(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::SchedulingTasksSnapshot(
+                    codex_app_server_protocol::SchedulingTasksSnapshotNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        // ATA scheduling: forward per-line monitor output to the TUI without
+        // ever feeding it back to the LLM. Ephemeral.
+        EventMsg::SchedulingMonitorOutputDelta(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::SchedulingMonitorOutputDelta(
+                    codex_app_server_protocol::SchedulingMonitorOutputDeltaNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
 
         _ => {}
     }
@@ -1344,6 +1377,7 @@ async fn emit_turn_completed_with_status(
             started_at: turn_completion_metadata.started_at,
             completed_at: turn_completion_metadata.completed_at,
             duration_ms: turn_completion_metadata.duration_ms,
+            background: None,
         },
     };
     outgoing
