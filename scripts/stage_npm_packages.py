@@ -89,29 +89,33 @@ def expand_packages(packages: list[str]) -> list[str]:
 
 
 def resolve_release_workflow(version: str) -> dict:
-    stdout = subprocess.check_output(
-        [
-            "gh",
-            "run",
-            "list",
-            "--repo",
-            GITHUB_REPO,
-            "--branch",
-            f"v{version}",
-            "--json",
-            "workflowName,url,headSha",
-            "--workflow",
-            WORKFLOW_NAME,
-            "--jq",
-            "first(.[])",
-        ],
-        cwd=REPO_ROOT,
-        text=True,
-    )
-    workflow = json.loads(stdout or "null")
-    if not workflow:
-        raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
-    return workflow
+    # Try the canonical `v{version}` tag first, then fall back to the
+    # `rust-v{version}` bridge-release prefix so one-time bridge tags (see
+    # rust-release.yml) can still complete the staging step.
+    for branch in (f"v{version}", f"rust-v{version}"):
+        stdout = subprocess.check_output(
+            [
+                "gh",
+                "run",
+                "list",
+                "--repo",
+                GITHUB_REPO,
+                "--branch",
+                branch,
+                "--json",
+                "workflowName,url,headSha",
+                "--workflow",
+                WORKFLOW_NAME,
+                "--jq",
+                "first(.[])",
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+        )
+        workflow = json.loads(stdout or "null")
+        if workflow:
+            return workflow
+    raise RuntimeError(f"Unable to find rust-release workflow for version {version}.")
 
 
 def resolve_workflow_url(version: str, override: str | None) -> tuple[str, str | None]:
