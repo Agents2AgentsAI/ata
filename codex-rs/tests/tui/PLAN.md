@@ -1917,21 +1917,22 @@ Verified 2026-05-22: selecting a row via Enter switches the active agent. Subseq
 - `chat_to_main` matches `^• CCC\b`
 - JSONL: the CCC turn's thread_id equals Main's id from Scenario A
 
-### Scenario I: /agent during in-flight turn — queued, opens after turn ends (verified)
+### Scenario I: /agent during in-flight turn — picker opens immediately, overlay-style (verified)
 
-Verified 2026-05-22: `/agent` invoked during an active turn does NOT open the picker immediately. It is also NOT blocked with an error. Instead, the picker open is deferred — it opens as soon as the turn finishes, whether the finish is via Escape (interrupt) or natural completion.
+Verified 2026-05-22 (re-verification correction): `/agent` invoked during an active turn opens the picker IMMEDIATELY, overlaying the running turn. The turn keeps running underneath the picker — `esc to interrupt` is hidden by the picker chrome but the turn continues. Pressing `Esc` to dismiss the picker also cancels the running turn (Esc's "interrupt-turn" handler takes precedence on dismissal).
 
-27. `tmux send-keys -t <new> "write me a 1000-word essay on espresso"`; sleep 0.3; `Enter`.
-28. Tight-poll up to 10s for `esc to interrupt`. Within window: `tmux send-keys -t <new> "/agent"`; sleep 0.5; `Enter`; sleep 0.5.
+This corrects an earlier observation that suggested `/agent` was queued/deferred — that was a timing artifact (the original turn had already completed in the gap between polling and sending `/agent`).
+
+27. With at least one completed turn so `/agent` doesn't think conversation is fresh: send a 5000-word essay prompt to trigger a long-running turn.
+28. Poll for `esc to interrupt`. As soon as it appears: `tmux send-keys -t <new> "/agent"`; sleep 0.3; `Enter`; sleep 0.5.
 29. → capture `during_turn`.
-30. `tmux send-keys -t <new> Escape`; sleep 1. → capture `after_cancel`.
+30. `tmux send-keys -t <new> Escape`; sleep 2. → capture `after_cancel`.
 
 **Expect**:
-- `during_turn` not contains `Subagents` — picker did NOT open during the turn
-- `during_turn` not contains `unavailable` OR `wait` — no error either (silent deferral)
-- `during_turn` contains `esc to interrupt` — turn is still running
-- `after_cancel` contains `Conversation interrupted` — Escape cancelled the turn (TR-022 invariant)
-- `after_cancel` contains `Subagents` — picker opens immediately after the turn ends (the deferred invocation fires)
+- `during_turn` contains `Subagents` — picker DID open during the turn (immediate, not queued)
+- `during_turn` not contains `esc to interrupt` — the picker overlay hides the turn's interrupt indicator (turn is still running underneath, just not visible)
+- `after_cancel` not contains `Subagents` — picker dismissed by Escape
+- `after_cancel` contains `Conversation interrupted - tell the model what to do differently.` — the SAME Escape that dismissed the picker also cancelled the running turn
 
 ### Scenario J: picker focus state on reopen — resets to current agent (verified)
 
@@ -2239,14 +2240,34 @@ session id or saved chat name and errors otherwise.
 
 ### Scenario D: inline /resume by session id loads that session
 
-7. From a separate shell or by extracting from `find ~/.ata/sessions -name "*.jsonl" -mmin -60 | xargs ls -t | head -1`: record a recent session uuid as `RECENT_ID` (the rollout-<date>-<uuid>.jsonl filename includes it).
-8. `tmux send-keys -t <new> "/resume $RECENT_ID"`; sleep 0.5; `Enter`; sleep 3.
-9. → capture `resumed`.
+Verified 2026-05-22:
+- Resuming the CURRENT session (the uuid currently in use) prints `Already viewing /Users/tim/.ata/sessions/<YYYY/MM/DD>/rollout-<timestamp>-<uuid>.jsonl.` — explicit no-op feedback.
+- Resuming a DIFFERENT recent session swaps the view to that session's chat history; the prior session's messages become visible.
 
-**Expect** (to verify on first run — depending on UI):
-- `resumed` shows the chat history from that session id (the prior session's messages are now visible)
-- `resumed` does NOT contain `No saved chat found matching` — inline lookup succeeded
-- The composer is on a placeholder, the agent label reflects the resumed session's last agent.
+7. Get the UUID of the currently-active session for the no-op test, and one other recent session's UUID for the swap test.
+8. `tmux send-keys -t <new> "/resume <CURRENT_UUID>"`; sleep 0.5; `Enter`; sleep 1.5. → capture `same_session`.
+9. `tmux send-keys -t <new> "/resume <OTHER_UUID>"`; sleep 0.5; `Enter`; sleep 3. → capture `swapped`.
+
+**Expect**:
+- `same_session` matches `Already viewing /.+/rollout-.+\.jsonl\.` — no-op confirmation
+- `same_session` not contains `No saved chat found matching` — lookup succeeded (the uuid is valid)
+- `swapped` does NOT contain `Already viewing` — different session, actually loaded
+- `swapped` shows the OTHER session's chat history (verify by content uniqueness — e.g. messages that don't exist in the current session)
+- `swapped` may also contain a `Token usage:` summary line for the prior session
+
+### Scenario E: /resume is BLOCKED during an in-flight task (verified)
+
+Verified 2026-05-22: unlike `/copy` (allowed) and `/agent` (opens immediate overlay), `/resume` is hard-blocked while a tool call or turn is in progress.
+
+10. Trigger a long-running turn (e.g. ask for a 5000-word essay) so `esc to interrupt` is visible.
+11. Within that window: `tmux send-keys -t <new> "/resume"`; sleep 0.5; `Enter`; sleep 1.5.
+12. → capture `blocked`.
+13. `tmux send-keys -t <new> Escape`; sleep 2 (cancel essay so future tests work).
+
+**Expect** (verified 2026-05-22 — exact error string):
+- `blocked` contains `'/resume' is disabled while a task is in progress.` — exact block error
+- `blocked` not contains `Resume a previous session` — picker did NOT open
+- The in-flight turn keeps running until the explicit Escape cancels it
 
 ---
 
@@ -3232,106 +3253,146 @@ To validate, design a deliberately ridiculous prompt and verify the agent's nega
 
 ---
 
-## TR-063: paper_get — fetch a specific paper by ID (TODO)
+## TR-063: paper_get — fetch a specific paper by ID
 
 `paper_get` retrieves a single paper by its arxiv id, DOI, or Semantic
-Scholar id. Likely triggered by prompts naming a paper or following up
-on a search result.
+Scholar id. The tool DOES exist and works when explicitly named in the
+prompt. Important finding: natural-language prompts like "look up arxiv
+2505.21323" route to `exec_command` (curl scrape of arxiv.org) rather
+than `paper_get`. The dedicated tool is only invoked when the user
+explicitly names it.
 
-**Setup**: TR-003. Use an arxiv id from TR-062's results (e.g. `2505.21323`).
+**Setup**: TR-003.
 
-### Scenario A (TODO)
+### Scenario A: natural prompt falls back to exec_command (weak routing)
 
-1. In ata: `get me paper 2505.21323` OR `look up arxiv 2505.21323`.
-2. → capture response and tool calls.
+1. In ata: `look up arxiv 2505.21323`. Sleep 1; Enter. Poll for the response.
+2. Inspect JSONL.
 
-**Expect** (predict but verify):
-- `tool_counts` contains `paper_get` — dedicated fetch tool
-- `paper_get` args contain the requested id (`arxiv_id`, `doi`, or similar field name)
-- Response renders the paper title, authors, abstract, link
-- No `paper_search` calls (the agent recognized it's a fetch-by-id, not a search)
+**Expect** (verified 2026-05-22):
+- Response contains paper title (`Asynchronous Rust`), authors, DOI — correct content
+- `tool_counts` contains `exec_command` (≥1 — used to curl arxiv.org/abs/2505.21323)
+- `tool_counts` does NOT contain `paper_get` — natural prompt didn't route to the dedicated tool
 
----
+### Scenario B: explicit tool naming triggers paper_get
 
-## TR-064: paper_citations — papers citing a given paper (TODO)
+3. In ata: `use the paper_get tool to fetch the paper with arxiv id 2505.21323 and tell me the abstract`. Sleep 1; Enter. Poll.
+4. Inspect JSONL.
 
-For literature reviews: "find papers that cite X". Should route to
-`paper_citations` with the source paper's id.
-
-### Scenario A (TODO)
-
-1. In ata: `find papers that cite arxiv 2505.21323`.
-2. → capture response and tool calls.
-
-**Expect**:
-- `tool_counts` contains `paper_citations`
-- Args target the right paper id
-- Response is a list of citing papers
+**Expect** (verified 2026-05-22):
+- `tool_counts` contains `paper_get` (count = 1)
+- `paper_get` args match `{"paper_id":"arXiv:2505.21323"}` — id format is `arXiv:<number>` (capital X, colon-prefixed). The arg field name is `paper_id`.
+- Response contains the paper's abstract
 
 ---
 
-## TR-065: paper_references — papers referenced by a given paper (TODO)
+## TR-064: paper_citations — papers citing a given paper
 
-The reverse of paper_citations — what does paper X cite. Should route
-to `paper_references`.
+For literature reviews: "find papers that cite X". When prompted with
+explicit tool naming, the agent calls `paper_citations` with the source
+paper's id.
 
-### Scenario A (TODO)
+### Scenario A
 
-1. In ata: `what papers does arxiv 2505.21323 reference?` OR `show me the references in paper 2505.21323`.
-2. → capture.
+1. In ata: `use paper_citations to find recent papers that cite arxiv 2505.21323`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
 
-**Expect**:
-- `tool_counts` contains `paper_references`
-- Response is the reference list
-
----
-
-## TR-066: paper_recommendations — recommend papers similar to given examples (TODO)
-
-For exploratory research: "given paper X (and maybe Y), recommend
-similar work". Should route to `paper_recommendations`.
-
-### Scenario A (TODO)
-
-1. In ata: `given paper arxiv 2505.21323, recommend 5 similar papers on real-time Rust executors`.
-2. → capture.
-
-**Expect**:
-- `tool_counts` contains `paper_recommendations`
-- Args include the seed paper(s) and possibly a topic
-- Response is a ranked list
+**Expect** (verified 2026-05-22):
+- `tool_counts` contains `paper_citations` (count = 1)
+- Args:
+  - `paper_id: "arXiv:2505.21323"` — same id-format as paper_get
+  - `limit: 20`
+  - `fields[]`: `title`, `authors`, `year`, `venue`, `abstract`, `doi`, `arxiv_id`, `url`, `citation_count`
+  - `max_chars_per_item: 1000`
+- Response is a numbered list of citing papers
 
 ---
 
-## TR-067: patent_search — search patents via EPO / Espacenet (TODO)
+## TR-065: paper_references — papers referenced by a given paper
 
-`patent_search` is the patent-domain equivalent of paper_search. EPO
-(European Patent Office) is the underlying index.
+The reverse of paper_citations — what does paper X cite.
 
-### Scenario A (TODO)
+### Scenario A
 
-1. In ata: `find patents on rust async runtime` OR `search patents for compiler intermediate representation`.
-2. → capture.
+1. In ata: `use paper_references to list the references cited inside arxiv 2505.21323`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
 
-**Expect**:
+**Expect** (verified 2026-05-22):
+- `tool_counts` contains `paper_references` (count = 1)
+- Args:
+  - `paper_id: "arXiv:2505.21323"`
+  - `limit: 50` (larger than citations default — references list tends to be longer)
+  - `fields[]`: title, authors, year, venue, doi, arxiv_id, url, citation_count (NO `abstract` field by default for references)
+  - `max_chars_per_item: 1000`
+
+---
+
+## TR-066: paper_recommendations — recommend papers similar to given examples
+
+For exploratory research. Takes an array of seed paper ids and
+recommends similar work.
+
+### Scenario A
+
+1. In ata: `use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
+
+**Expect** (verified 2026-05-22):
+- `tool_counts` contains `paper_recommendations` (count = 1)
+- Args:
+  - `positive_paper_ids: ["arXiv:2505.21323"]` — ARRAY of ids (note plural and array structure, distinct from `paper_id` in paper_get/citations/references)
+  - `limit: 10` (default — actually returns more than the user asked for; the agent filters down in its response)
+  - `fields[]`: title, authors, year, venue, abstract, doi, arxiv_id, url, citation_count
+  - `max_chars_per_item: 1200`
+
+---
+
+## TR-067: patent_search — agent does NOT route here even with explicit naming (routing bug)
+
+`patent_search` tool exists in source (`core/src/tools/handlers/research.rs:226`) and is registered as `"patent_search"` for the EPO/Espacenet backend. **However, in 0.7.0 the agent fails to route to it even when the user explicitly names the tool in the prompt.** The agent falls back to `exec_command` (curl/scrape Google Patents) and produces reasonable results — but the dedicated tool is never invoked.
+
+This is either:
+- A routing bug: the patent tools are registered but the agent's tool-selection model doesn't surface them
+- A feature flag: patent tools require an opt-in that isn't set in the default config
+
+Worth filing as a finding for whoever owns the research-tools registration.
+
+### Scenario A: even explicit naming falls back to exec_command (current 0.7.0 behavior)
+
+1. In ata: `use patent_search to find patents about rust compiler intermediate representation`. Sleep 1; Enter. Poll up to 3 min.
+2. Inspect JSONL.
+
+**Expect** (verified 2026-05-22):
+- Response contains real patent numbers (e.g. `US12039033B2`, `CN120704658A`) and descriptions — the agent DOES return patent results
+- `tool_counts` does NOT contain `patent_search` — dedicated tool was NOT invoked
+- `tool_counts` contains `exec_command` (≥1) — agent shelled out instead
+- This scenario PASSES when the routing-bug predicate flips: if a future build successfully routes to patent_search, then `tool_counts contains patent_search` becomes the new positive predicate.
+
+### Scenario B: when patent_search routing works (future / TODO)
+
+When the routing is fixed:
 - `tool_counts` contains `patent_search`
-- Args have `query` and likely patent-specific fields (date range, jurisdiction, etc.)
-- Response includes patent numbers and titles
+- Args likely have `query` (string), `limit`, `fields[]`, possibly date range / jurisdiction filters
 
 ---
 
-## TR-068: patent_get — fetch a specific patent by number (TODO)
+## TR-068: patent_get — same routing-bug pattern expected (TODO)
 
-Patent fetch-by-id, parallel to paper_get.
+`patent_get` tool exists at `core/src/tools/handlers/research.rs:231`.
+Given the TR-067 finding, the same weak-routing is expected here — the
+agent likely falls back to `exec_command` even when explicitly told to
+use `patent_get`. Not validated in this pass.
 
-### Scenario A (TODO)
+### Scenario A (TODO — likely same as TR-067)
 
-1. In ata: `look up patent US10000000` OR `get patent EP3000000`.
-2. → capture.
+1. In ata: `use patent_get to fetch patent US12039033B2 and tell me the abstract`.
+2. → capture and inspect.
 
-**Expect**:
-- `tool_counts` contains `patent_get`
-- Args contain the patent number in the right field
-- Response renders patent title, abstract, inventors, dates
+**Expect** (predicted from TR-067 pattern):
+- Response contains patent metadata correctly
+- `tool_counts` does NOT contain `patent_get` (routing bug)
+- `tool_counts` contains `exec_command`
+
+When the routing is fixed: predicates flip.
 
 ---
