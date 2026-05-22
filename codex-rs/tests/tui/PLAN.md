@@ -2021,17 +2021,21 @@ cycle despite the hint saying "to cycle").
 **Setup**: TR-003 setup. Plan-mode must be feature-enabled — verified
 on by default on ata 0.7.0 public release.
 
-### Scenario A: bare /plan toggles ON; second /plan toggles OFF
+### Scenario A: bare /plan turns ON (it does NOT toggle off — Shift+Tab does that)
+
+Verified 2026-05-22 (second pass): bare `/plan` only activates Plan mode. A second `/plan` does NOT turn it off — the footer still shows `Plan mode (shift+tab to cycle)`. The only way to turn off Plan mode is `Shift+Tab` (the binary toggle covered in Scenario C). Earlier-pass observations that suggested `/plan` was a toggle were measuring activation, not deactivation.
 
 1. `tmux send-keys -t <new> "/plan"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `on`.
+2. → capture `on1`.
 3. `tmux send-keys -t <new> "/plan"`; sleep 0.5; `Enter`; sleep 1.
-4. → capture `off`.
+4. → capture `on2_still_on`.
+5. `tmux send-keys -t <new> BTab`; sleep 0.5.  (Shift+Tab)
+6. → capture `off`.
 
-**Expect** (verified 2026-05-22):
-- `on` contains `Plan mode (shift+tab to cycle)` in the bottom-right footer area — mode indicator present
-- `off` not contains `Plan mode (shift+tab to cycle)` — mode indicator gone after second toggle
-- `on` and `off` both still show `Main [default]` in the footer — Plan toggle does NOT change active agent
+**Expect**:
+- `on1` footer contains `Plan mode (shift+tab to cycle)` — mode indicator present after first activation
+- `on2_still_on` footer ALSO contains `Plan mode (shift+tab to cycle)` — second `/plan` did NOT toggle off (re-confirm behavior)
+- `off` footer does NOT contain `Plan mode (shift+tab to cycle)` — Shift+Tab is what actually turns it off
 
 ### Scenario B: /plan with inline args enters mode AND submits
 
