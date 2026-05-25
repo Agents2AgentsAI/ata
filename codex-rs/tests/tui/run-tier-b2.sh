@@ -158,6 +158,101 @@ tr022_a() {
   end_test
 }
 
+# Open a reading-view document for reader-based scenarios. Sends a
+# fixed prompt and waits until "Sections (n/p" appears (the canonical
+# reader-open marker). Each call costs one LLM round-trip.
+boot_reader() {
+  local name=$1
+  if ! boot_ata "$name"; then return 1; fi
+  send_text "$name" "give me 2 short slides on coffee in reading view, don't use any skills"
+  send_key  "$name" Enter
+  local deadline=$(( $(date +%s) + 180 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if tmux capture-pane -t "$name" -p 2>/dev/null | grep -qF "Sections (n/p"; then
+      sleep 1
+      return 0
+    fi
+    sleep 3
+  done
+  red "    [reader] document never opened in 180s. Pane dump:"
+  tmux capture-pane -t "$name" -p 2>/dev/null | sed 's/^/    | /' >&2 || true
+  return 1
+}
+
+tr001_a() {
+  start_test "TR-001 A"
+  local sess=$SESSION-001a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  local out=$WORK/001a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Sections (n/p" "reader marker present"
+  assert_contains "$out" "Slide 1" "first section heading visible"
+  assert_contains "$out" "q: close" "reader footer hint shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr008_a() {
+  start_test "TR-008 A"
+  local sess=$SESSION-008a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "q"
+  sleep 2
+  local out=$WORK/008a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Agent showed document:" "close marker shown in chat"
+  # cleanup: the close triggers a silent follow-up turn; interrupt it
+  send_key "$sess" Escape
+  sleep 2
+  kill_ata "$sess"
+  end_test
+}
+
+tr036_a() {
+  start_test "TR-036 A"
+  local sess=$SESSION-036a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "n"
+  sleep 1.5
+  local out=$WORK/036a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "2/2" "advanced to section 2 of 2"
+  assert_contains "$out" "Slide 2" "second section content visible"
+  kill_ata "$sess"
+  end_test
+}
+
+tr036_b() {
+  start_test "TR-036 B"
+  local sess=$SESSION-036b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "t"
+  sleep 1.5
+  local out=$WORK/036b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Table of Contents" "TOC title shown"
+  assert_contains "$out" "j/k to navigate"   "TOC footer present"
+  assert_contains "$out" "t/Esc to dismiss"  "dismiss hint shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr054_a() {
+  start_test "TR-054 A"
+  local sess=$SESSION-054a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"
+  sleep 1.5
+  local out=$WORK/054a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Reading View Help" "help title shown"
+  assert_contains "$out" "Getting around"    "section heading present"
+  assert_contains "$out" "Next section"      "n shortcut documented"
+  assert_contains "$out" "Previous section"  "p shortcut documented"
+  kill_ata "$sess"
+  end_test
+}
+
 tr016_b() {
   start_test "TR-016 B"
   local sess=$SESSION-016b
@@ -196,9 +291,14 @@ main() {
   log ""
 
   log "Numbered TRs (in order)"
+  tr001_a
   tr005_a
+  tr008_a
   tr016_b
   tr022_a
+  tr036_a
+  tr036_b
+  tr054_a
 
   log ""
   log "----"
