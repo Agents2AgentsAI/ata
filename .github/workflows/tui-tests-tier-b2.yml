@@ -1,0 +1,82 @@
+name: tui-tests-tier-b2
+
+# Tier B2 sends REAL prompts to the model and costs real LLM tokens
+# per run. To keep that cost opt-in, this workflow only fires on
+# workflow_dispatch — i.e. someone clicks "Run workflow" in the Actions
+# UI. It will NEVER auto-run on pull_request or push.
+#
+# Requires the OPENAI_API_KEY secret to be set on the repo (separately
+# per fork; secrets are not inherited).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tier-b2:
+    name: Tier B2 scenarios (TUI + real LLM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify OPENAI_API_KEY is configured
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::error::OPENAI_API_KEY secret is not set on this repository."
+            echo "Add it at: Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
+          echo "OPENAI_API_KEY is configured (length: ${#OPENAI_API_KEY})"
+
+      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            codex-rs/target
+          key: tui-tests-tier-b2-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock') }}
+          restore-keys: |
+            tui-tests-tier-b2-${{ runner.os }}-
+            tui-tests-tier-b1-${{ runner.os }}-
+            tui-tests-tier-a-${{ runner.os }}-
+
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+
+      - name: Build ata
+        run: cargo build -p codex-cli --bin ata
+
+      - name: Bypass login + trust prompts, install API key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p ~/.ata
+          # auth.json with the real OPENAI_API_KEY so the model layer
+          # can actually authenticate.
+          jq -n --arg k "$OPENAI_API_KEY" '{"OPENAI_API_KEY": $k}' > ~/.ata/auth.json
+          chmod 600 ~/.ata/auth.json
+          cat > ~/.ata/config.toml <<EOF
+          [projects."${{ github.workspace }}"]
+          trust_level = "trusted"
+
+          [projects."${{ github.workspace }}/codex-rs"]
+          trust_level = "trusted"
+          EOF
+
+      - name: Run Tier B2 scenarios
+        env:
+          ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: ./tests/tui/run-tier-b2.sh
