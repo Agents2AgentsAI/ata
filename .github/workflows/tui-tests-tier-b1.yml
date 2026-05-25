@@ -49,6 +49,13 @@ jobs:
       - name: Build ata
         run: cargo build -p codex-cli --bin ata
 
+      - name: Bypass login screen with a dummy auth.json
+        # No LLM calls in B1, so any non-empty key skips the welcome
+        # login screen and lets ata boot straight into the composer.
+        run: |
+          mkdir -p ~/.ata
+          printf '{"OPENAI_API_KEY":"fake-tier-b1-key"}' > ~/.ata/auth.json
+
       - name: Run Tier B1 scenarios
         env:
           ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
