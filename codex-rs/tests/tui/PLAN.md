@@ -3293,8 +3293,17 @@ The CLI's `status` reports the effective Zotero mode (`local` vs
 matches and prints a clap-style manual for the top hit (same pattern
 as `ata workspace search-commands`).
 
-**Setup**: ata 0.7.0 installed. Zotero desktop may or may not be
-running — `status` works either way.
+**Setup**: ata 0.7.0 installed. `status` and `search-commands` work without Zotero. Subcommands D–R (collections, search, recent, etc.) need a running Zotero with the local API enabled — see the prerequisite below.
+
+**Zotero workspace prerequisite** (one-time setup, required for Scenarios D–R):
+
+1. Install Zotero desktop from https://www.zotero.org/download/ (or `brew install --cask zotero`).
+2. Launch Zotero. Confirm at least one item exists in your library (use any sample paper — DOI search in Zotero will add one in seconds).
+3. Enable the local API: **Zotero → Settings (Cmd+,) → Advanced → General → "Allow other applications on this computer to communicate with Zotero"**. Effect is immediate, no restart needed.
+4. Verify: `curl -s 'http://localhost:23119/api/users/0/items?limit=1'` should return JSON (an empty `[]` if root library is empty is fine).
+5. Verify ata can talk to it: `ata zotero collections` should return JSON with your collections.
+
+Once those four steps pass, Scenarios D–R below can run against real data.
 
 ### Scenario A: `status` reports effective mode and config
 
