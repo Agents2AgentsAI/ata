@@ -225,7 +225,9 @@ tr018_b() {
   local out=$WORK/018b.txt
   capture "$sess" "$out"
   assert_contains "$out" "Select Reasoning Level" "step 2 reasoning picker open"
-  assert_contains "$out" "Medium (default) (current)" "current reasoning level marked"
+  assert_contains "$out" "Medium (default)" "Medium shown as default"
+  assert_contains "$out" "Low"  "Low option listed"
+  assert_contains "$out" "High" "High option listed"
   send_key "$sess" Escape
   sleep 1
   local out2=$WORK/018b-back.txt
