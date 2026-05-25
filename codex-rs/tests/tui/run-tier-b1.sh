@@ -509,6 +509,149 @@ tr_fast_a() {
   end_test
 }
 
+tr_personality_a() {
+  start_test "/personality"
+  local sess=$SESSION-pers
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/personality"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/pers.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Select Personality" "picker title shown"
+  assert_contains "$out" "Friendly"  "Friendly option listed"
+  assert_contains "$out" "Pragmatic" "Pragmatic option listed"
+  assert_contains "$out" "(current)" "current marker present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_statusline_a() {
+  start_test "/statusline"
+  local sess=$SESSION-sl
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/statusline"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/sl.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Configure Status Line"   "picker title"
+  assert_contains "$out" "model-with-reasoning"    "default toggle listed"
+  assert_contains "$out" "current-dir"             "current-dir toggle listed"
+  assert_contains "$out" "git-branch"              "git-branch toggle listed"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_ide_a() {
+  start_test "/ide"
+  local sess=$SESSION-ide
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/ide"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/ide.txt
+  capture "$sess" "$out"
+  # On a headless runner (no IDE attached) ata reports the no-IDE state.
+  assert_contains "$out" "IDE context could not be enabled" "no-IDE error shown"
+  assert_contains "$out" "VS Code or Cursor"                "hint mentions supported IDEs"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_transcript_a() {
+  start_test "Ctrl-T transcript"
+  local sess=$SESSION-trans
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_key "$sess" C-t
+  sleep 1.5
+  local out=$WORK/trans.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "T R A N S C R I P T" "transcript title bar"
+  assert_contains "$out" "q to quit"           "footer shows q quit hint"
+  kill_ata "$sess"
+  end_test
+}
+
+tr040_a() {
+  start_test "TR-040 A"
+  local sess=$SESSION-040a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/workspace"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/040a.txt
+  capture "$sess" "$out"
+  # Bare /workspace prints the usage line, not an overlay.
+  assert_contains "$out" "Usage: /workspace" "usage line shown"
+  assert_contains "$out" "list"   "lists 'list' subcommand"
+  assert_contains "$out" "use"    "lists 'use' subcommand"
+  kill_ata "$sess"
+  end_test
+}
+
+tr040_b() {
+  start_test "TR-040 B"
+  local sess=$SESSION-040b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/workspace list"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/040b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Workspaces" "list header"
+  assert_contains "$out" "current"    "active workspace marked 'current'"
+  kill_ata "$sess"
+  end_test
+}
+
+tr040_c() {
+  start_test "TR-040 C"
+  local sess=$SESSION-040c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/workspace current"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/040c.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Current workspace:" "current line shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr041_a() {
+  start_test "TR-041 A"
+  local sess=$SESSION-041a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/agent"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/041a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Subagents"          "overlay title"
+  assert_contains "$out" "Main [default]"     "main agent row shown"
+  assert_contains "$out" "(current)"          "current marker present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr046_a() {
+  start_test "TR-046 A"
+  local sess=$SESSION-046a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/resume"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/046a.txt
+  capture "$sess" "$out"
+  # /resume opens a picker. With prior sessions it shows them; with
+  # none it shows an empty state. Either way the title is invariant.
+  assert_contains     "$out" "Resume" "picker recognized /resume"
+  assert_not_contains "$out" "Unrecognized command" "command not rejected"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -535,6 +678,11 @@ main() {
   log ""
   log "Regression guards + toggles"
   tr019_b; tr042_a; tr_keymap_a; tr_vim_a; tr_fast_a
+
+  log ""
+  log "Personalization, workspace, agent, resume"
+  tr_personality_a; tr_statusline_a; tr_ide_a; tr_transcript_a
+  tr040_a; tr040_b; tr040_c; tr041_a; tr046_a
 
   log ""
   log "----"
