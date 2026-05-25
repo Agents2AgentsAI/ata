@@ -61,16 +61,24 @@ boot_ata() {
   local name=$1
   tmux kill-session -t "$name" 2>/dev/null || true
   tmux new-session -d -s "$name" -x 132 -y 40 "$ATA_BIN --yolo"
-  local deadline=$(( $(date +%s) + 30 ))
+  local deadline=$(( $(date +%s) + 60 ))
+  local banner_seen=0
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    if tmux capture-pane -t "$name" -p 2>/dev/null | grep -qF "Agents2Agents ata"; then
-      sleep 0.5  # let the cursor settle in the composer
-      return 0
+    local pane
+    pane=$(tmux capture-pane -t "$name" -p 2>/dev/null || true)
+    if printf '%s' "$pane" | grep -qF "Agents2Agents ata"; then
+      banner_seen=1
+      # ata is fully ready when no background task ("esc to interrupt")
+      # is running. MCP server boot is the usual culprit during startup
+      # and it hard-blocks slash commands while it runs.
+      if ! printf '%s' "$pane" | grep -qF "esc to interrupt"; then
+        sleep 0.5  # let the cursor settle
+        return 0
+      fi
     fi
     sleep 0.5
   done
-  # Boot failed — dump what ata actually showed so it's visible in CI logs.
-  red "    [boot] ata did not show the welcome banner in 30s. Pane dump:"
+  red "    [boot] ata not idle within 60s (banner_seen=$banner_seen). Pane dump:"
   tmux capture-pane -t "$name" -p 2>/dev/null | sed 's/^/    | /' >&2 || true
   return 1
 }
@@ -205,6 +213,93 @@ tr018_d() {
   end_test
 }
 
+tr018_b() {
+  start_test "TR-018 B"
+  local sess=$SESSION-018b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/model"
+  send_key  "$sess" Enter
+  sleep 1.5
+  send_key  "$sess" Enter  # select gpt-5.5 (highlighted)
+  sleep 1.5
+  local out=$WORK/018b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Select Reasoning Level" "step 2 reasoning picker open"
+  assert_contains "$out" "Medium (default) (current)" "current reasoning level marked"
+  send_key "$sess" Escape
+  sleep 1
+  local out2=$WORK/018b-back.txt
+  capture "$sess" "$out2"
+  assert_contains "$out2" "Select Model and Effort" "Esc returns to step 1"
+  assert_not_contains "$out2" "Select Reasoning Level" "step 2 closed"
+  kill_ata "$sess"
+  end_test
+}
+
+tr017_a() {
+  start_test "TR-017 A"
+  local sess=$SESSION-017a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/permissions"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/017a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Update Model Permissions" "permissions picker open"
+  assert_contains "$out" "Default"     "Default option listed"
+  assert_contains "$out" "Auto-review" "Auto-review option listed"
+  assert_contains "$out" "Full Access" "Full Access option listed"
+  assert_contains "$out" "(current)"   "current option marker present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr010_a() {
+  start_test "TR-010 A"
+  local sess=$SESSION-010a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/experimental"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/010a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Experimental features"     "title shown"
+  assert_contains "$out" "Terminal resize reflow"    "first toggle listed"
+  assert_contains "$out" "Press space to select"     "footer hint present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr020_d() {
+  start_test "TR-020 D"
+  local sess=$SESSION-020d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"
+  sleep 1.5
+  local out=$WORK/020d.txt
+  capture "$sess" "$out"
+  # Bare / opens the slash command picker (no Enter pressed).
+  assert_contains "$out" "/model"        "picker lists /model"
+  assert_contains "$out" "/permissions"  "picker lists /permissions"
+  assert_contains "$out" "/experimental" "picker lists /experimental"
+  kill_ata "$sess"
+  end_test
+}
+
+tr019_a() {
+  start_test "TR-019 A"
+  local sess=$SESSION-019a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "@xyznosuchprefix"
+  sleep 1.5
+  local out=$WORK/019a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "@xyznosuchprefix" "typed text echoed in composer"
+  assert_contains "$out" "no matches"       "picker shows no matches"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -222,6 +317,7 @@ main() {
 
   log "Slash command parsing & overlays"
   tr020_a; tr020_b; tr016_a; tr018_a; tr018_d
+  tr018_b; tr017_a; tr010_a; tr020_d; tr019_a
 
   log ""
   log "----"
