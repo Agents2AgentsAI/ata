@@ -3646,29 +3646,30 @@ Once those four steps pass, Scenarios D–R below can run against real data.
 - `<out>` contains `Default write scope: unconfigured`
 - `<out>` contains `Note: The effective Zotero mode is local because no Zotero API key is configured for this shell.` — explanation line
 
-### Scenario A2: `status` reports cloud mode when API key is configured (credential-free)
+### Scenario A2: `status` reports remote mode when API key is configured (credential-free)
 
 `ata zotero status` reports configured state without making API calls — so a dummy key in config.toml is enough to verify the reporting logic. We don't need a real, working key.
 
 **Setup**: Back up your real config first if any: `cp ~/.ata/config.toml ~/.ata/config.toml.bak`.
 
 **Action**:
-1. Append a dummy key:
+1. Append a dummy key under the `[research]` section (this is where ata's config struct reads it from — `zotero_api_key`, not `[zotero] api_key`):
    ```bash
    cat >> ~/.ata/config.toml <<'EOF'
-   [zotero]
-   api_key = "dummy-test-key-not-real"
+   [research]
+   zotero_api_key = "dummy-test-key-not-real"
    EOF
    ```
 2. Run: `ata zotero status > <out>`.
 3. Cleanup: `mv ~/.ata/config.toml.bak ~/.ata/config.toml` (or delete the appended block).
 
 **Expect**:
-- `<out>` contains `Effective mode: cloud` (key flipped the mode from local to cloud)
+- `<out>` contains `Effective mode: remote` (key flips the mode from local to remote — the label is "remote", not "cloud")
 - `<out>` contains `API key configured: yes` (config parsing sees the key)
-- `<out>` `Base URL` reflects the cloud endpoint (api.zotero.org or similar) — NOT the local localhost:23119
+- `<out>` contains `Fallback mode: local` — when a key is set, ata still falls back to local for queries the remote can't answer
+- `<out>` `Base URL` stays at `http://localhost:23119/api` even in remote mode (the base URL is the local-fallback endpoint; remote uses api.zotero.org internally but the status line doesn't show that)
 
-This verifies the config plumbing + status reporting. Actual cloud API behavior (auth, fetches) needs a real key and lives outside this test.
+This verifies the config plumbing + status reporting. Actual remote API behavior (auth, fetches) needs a real key and lives outside this test.
 
 ### Scenario B: `--help` lists all 17 first-level subcommands
 
