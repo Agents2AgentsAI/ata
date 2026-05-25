@@ -49,12 +49,20 @@ jobs:
       - name: Build ata
         run: cargo build -p codex-cli --bin ata
 
-      - name: Bypass login screen with a dummy auth.json
+      - name: Bypass login + directory-trust prompts
         # No LLM calls in B1, so any non-empty key skips the welcome
-        # login screen and lets ata boot straight into the composer.
+        # login screen. The trust entry skips the per-directory prompt
+        # so ata boots straight into the composer.
         run: |
           mkdir -p ~/.ata
           printf '{"OPENAI_API_KEY":"fake-tier-b1-key"}' > ~/.ata/auth.json
+          cat > ~/.ata/config.toml <<EOF
+          [projects."${{ github.workspace }}"]
+          trust_level = "trusted"
+
+          [projects."${{ github.workspace }}/codex-rs"]
+          trust_level = "trusted"
+          EOF
 
       - name: Run Tier B1 scenarios
         env:
