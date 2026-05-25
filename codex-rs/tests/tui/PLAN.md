@@ -54,111 +54,8 @@ three commands above manually before walking away from the machine.
 
 ---
 
-## TR-001: Reading view survives a resize cycle
 
-This is the canonical regression test for the v0.129.0 merge resize-corruption
-bug. It opens a reading view, shrinks the pane, grows it back, and verifies
-that no welcome-banner / chat-composer cells leak into the reader.
-
-**Setup**:
-0. Precondition: reading view is gated by two config flags in
-   `~/.ata/config.toml` that must BOTH be set. Verify and flip if needed:
-   ```toml
-   [features]
-   reading_view = true
-
-   [reading_view]
-   mode = "enabled"
-   ```
-   Without both, ata replies in chat instead of opening a reader and step 6 polls forever. (This precondition applies to TR-001, TR-002, TR-008, and TR-009 — all reading-view tests share this setup.)
-1. `cd "$ATA_REPO/codex-rs" && cargo build -p codex-cli` and confirm the binary at
-   `$ATA_REPO/codex-rs/target/debug/ata` is newer than `tui/src/tui.rs`.
-2. Find the user's tmux session/window via `tmux list-clients` +
-   `tmux display-message`.
-3. Record the original pane width as `BASE_W` (typically 200+).
-4. `tmux split-window -h -t <session>:<window>.<pane> -c "$ATA_REPO/codex-rs" './target/debug/ata --yolo'`.
-   Wait until `tmux capture-pane -t <new> -p` contains `OpenAI Codex (v`.
-5. `tmux send-keys -t <new> "give me 2 short slides on coffee in reading view, don't use any skills"` then sleep 1, then `tmux send-keys -t <new> Enter`.
-6. Poll `tmux capture-pane -t <new> -p` every 6s until it contains
-   `Sections (n/p`. This can take up to 3 minutes.
-
-**Action**:
-1. `tmux capture-pane -t <new> -p > <baseline_capture>`.
-   → capture `baseline`.
-2. `tmux resize-pane -t <new> -x 70`, then sleep 4.
-   (Multi-frame repaint needs ~200ms; 4s leaves a wide margin.)
-   **Detached-session note**: `resize-pane -x` is a no-op on a session
-   with no attached client (its size is governed by the window). For
-   detached runs use `tmux resize-window -t <session> -x 70 -y 50`
-   instead — the inner pane will reflow.
-3. `tmux capture-pane -t <new> -p > <narrow_capture>`.
-   → capture `narrow`.
-4. `tmux resize-pane -t <new> -x $BASE_W`, then sleep 4.
-   (Same detached-session caveat: use `resize-window -x $BASE_W -y 50`.)
-5. `tmux capture-pane -t <new> -p > <restored_capture>`.
-   → capture `restored`.
-6. `tmux send-keys -t <new> "q"` to close the reader (cleanup).
-7. `tmux kill-pane -t <new>`.
-
-**Expect** (every predicate must hold):
-- `baseline` contains `Sections (n/p`
-- `baseline` row 1 starts with `╭`
-- `narrow` contains `Sections (n/p`
-- `narrow` not contains `OpenAI Codex (v`
-- `narrow` not contains `/model to change`
-- `narrow` not contains `directory:   ~/`
-- `narrow` not contains `Tip: New For a limited time`
-- `narrow` row 1 starts with `╭`
-- `narrow` row 1 ends with `╮`
-- `restored` contains `Sections (n/p`
-- `restored` not contains `OpenAI Codex (v`
-- `restored` not contains `/model to change`
-- `restored` not contains `directory:   ~/`
-- `restored` not contains `Tip: New For a limited time`
-- `restored` row 1 starts with `╭`
-- `restored` row 1 ends with `╮`
-
----
-
-## TR-002: Tab-to-ask response stays inline in the reader
-
-When the user is in the reading view and presses Tab to ask a follow-up,
-the agent is supposed to answer by patching the section (via
-`patch_document_section` / `append_to_section`) — the answer should appear
-**inside the reader**, not as a chat bubble above it. This test verifies
-the inline-response path is wired and the system-prompt wrappers don't
-leak into chat.
-
-**Setup**: identical to TR-001 Setup steps 1–6 (build, split a pane, send the
-prompt, wait for `Sections (n/p`).
-
-**Action**:
-1. `tmux capture-pane -t <new> -p > <pre_capture>`.
-   → capture `pre`.
-2. Pick a question whose answer should clearly extend the current section.
-   For the coffee-slides prompt, use:
-   `what is the caffeine content of a typical cup?`
-3. `tmux send-keys -t <new> Tab`, sleep 1, then `tmux send-keys -t <new> "<question>"`, sleep 1, then `tmux send-keys -t <new> Enter`.
-4. Poll `tmux capture-pane -t <new> -p` every 6s, up to 3 minutes. Stop when
-   the capture contains the word `caffeine` AND no longer contains
-   `Tab: ask` on the same line as `q: close` is **absent or unchanged**.
-   (Simpler proxy: stop when the section content visibly differs from
-   `pre`.)
-5. `tmux capture-pane -t <new> -p > <post_capture>`.
-   → capture `post`.
-6. Cleanup: `tmux send-keys -t <new> "q"`, then `tmux kill-pane -t <new>`.
-
-**Expect** (every predicate must hold):
-- `post` contains `caffeine` — the agent's answer mentioned the topic
-- `post` not contains `[The user is reading` — system prompt didn't leak
-- `post` not contains `<!-- READER_TOOL_INSTRUCTIONS` — instructions block didn't leak
-- `post` not contains `The user selected specific text from the section` — selection variant prompt didn't leak
-- `post` not contains `› what is the caffeine content` — the user's question didn't render as a chat bubble (would be a regression of the Tab-question-hide fix)
-- `post` row 1 starts with `╭` — reader frame still intact
-- `post` row 1 ends with `╮`
-- `post` contains `Sections (n/p` — sections list still rendered
-
----
+# Group 1: TUI infrastructure (startup, smoke, escape)
 
 ## TR-003: TUI startup smoke
 
@@ -170,21 +67,6 @@ prompt, wait for `Sections (n/p`).
 - `capture` contains `Agents2Agents ata (v`
 - `capture` contains `YOLO mode` (if launched with `--yolo`)
 - `capture` contains `directory:`
-
----
-
-## TR-004: Slash menu opens
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. `tmux send-keys -t <new> "/"`; sleep 1.
-2. `tmux capture-pane -t <new> -p > <capture>`.
-
-**Expect**:
-- `capture` contains `/model`
-- `capture` contains `/experimental`
-- `capture` contains `/permissions`
 
 ---
 
@@ -200,6 +82,51 @@ prompt, wait for `Sections (n/p`).
 **Expect**:
 - `post` contains `respond with just hi` (the user message, with `›` marker)
 - `post` matches `^• [Hh]i\b` (response line in chat)
+
+---
+
+## TR-022: Escape interrupts an in-flight turn cleanly
+
+The Action below polls at a tight 0.2s cadence and uses a heavy prompt because fast reasoning models can finish a response before a slower poll fires, racing past the interrupt window.
+
+The thinking indicator reads `esc to interrupt`, so Escape is the
+documented interrupt key. Pressing it while the agent is working stops
+the turn and shows `Conversation interrupted - tell the model what to do
+differently.` plus a `/feedback` hint. (Escape has context-dependent
+behavior: it edits the previous message when idle — see TR-013 for the
+voice-mode case — and interrupts when a turn is mid-flight.)
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. `tmux send-keys -t <new> "write me a 5000-word essay analyzing the history of espresso, with detailed sections on origin, technique, and modern variations"`; sleep 0.5; `Enter`.
+2. Tight-poll up to 15s, sleeping 0.2s per iteration, until `tmux capture-pane -t <new> -p` contains `esc to interrupt`. As soon as the substring is seen, immediately `tmux send-keys -t <new> Escape` in the same iteration (do NOT wait for the next poll).
+3. Sleep 1.
+4. → capture `out`.
+
+**Expect**:
+- `out` contains `Conversation interrupted`
+- `out` contains `tell the model what to do differently`
+- `out` contains `/feedback`
+- `out` not contains `esc to interrupt` — thinking indicator cleared
+
+---
+
+
+# Group 2: Composer and history
+
+## TR-004: Slash menu opens
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. `tmux send-keys -t <new> "/"`; sleep 1.
+2. `tmux capture-pane -t <new> -p > <capture>`.
+
+**Expect**:
+- `capture` contains `/model`
+- `capture` contains `/experimental`
+- `capture` contains `/permissions`
 
 ---
 
@@ -246,67 +173,13 @@ prompt, wait for `Sections (n/p`).
 
 ---
 
-## TR-008: Reader close + chat doesn't garble
-
-This regression-tests the v0.129.0 bug where after pressing `q` to close
-the reader, chat would render jumbled escape sequences.
-
-**Setup**: TR-007 + reader open with `Sections (n/p` visible.
-
-### Scenario A: baseline — q closes reader, chat resumes cleanly
-1. `tmux send-keys -t <new> Escape`; sleep 0.5; `q`; sleep 2. → `post_close`.
-2. `tmux send-keys -t <new> "reply with just OK"`; sleep 1; `Enter`.
-3. Poll until `^• OK\b`. → `post_chat`.
-
-**Expect**:
-- `post_close` contains `Agent showed document:` and NOT `Sections (n/p`
-- `post_chat` contains `• OK` and NOT any of `╭ ╮ ╯ ╰` from a leftover reader frame
-
-### Scenario B: Esc does NOT close the reader
-1. From the reader in normal mode (no visual selection, no help overlay).
-2. `tmux send-keys -t <new> Escape`; sleep 1. → `out`.
-
-**Expect**:
-- `out` STILL shows the reader frame and section header
-- Esc has no effect on the reader in normal mode (it's reserved for cancelling sub-modes like visual select)
-
-### Scenario C: Ctrl+C also closes the reader
-1. From the reader in normal mode.
-2. `tmux send-keys -t <new> C-c`; sleep 2. → `out`.
-
-**Expect**:
-- `out` contains `Agent showed document:` (reader closed, same as `q`)
-- Ctrl+C is an equivalent close key — useful when keyboard focus is unclear
-
-### Scenario D: `q` from visual select mode closes reader directly (selection dropped)
-1. Open reader.
-2. `tmux send-keys -t <new> v`; sleep 0.5. (enter visual select)
-3. `tmux send-keys -t <new> j`; `j`; sleep 0.5. (extend selection)
-4. `tmux send-keys -t <new> q`; sleep 2. → `out`.
-
-**Expect**:
-- `out` contains `Agent showed document:` (reader closed)
-- The visual selection is silently dropped — `q` does NOT first dismiss visual mode and require a second `q`
-- No `[The user selected...]` system message in session JSONL — the selection never reached the agent
-
-### Scenario E: closing reader injects a system follow-up prompt to the agent
-1. Open reader, optionally scroll/read sections, then `q`.
-2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -3`.
-
-**Expect**:
-- JSONL contains `[The user closed the document reader for "<title>". They viewed N of M sections.] Check whether follow-up Q&A during this ...` as a user message
-- This prompt is NOT in Up-arrow history (covered by TR-009)
-- It triggers a silent follow-up agent turn that usually produces no visible output
-
----
-
 ## TR-009: Up-arrow history excludes system-injected prompts
 
 When voice-mode prefixes or reading-view question wrappers are sent to the
 agent, they should NOT appear in the up-arrow history (the user typed only
 the visible part).
 
-**Setup**: TR-007 + at least one Tab-to-ask submission from the reader.
+**Setup**: TR-001 setup (reader open) + at least one Tab-to-ask submission from the reader.
 
 ### Scenario A: baseline — reader/voice wrappers excluded from Up
 1. Close reader, return to chat.
@@ -342,6 +215,191 @@ the visible part).
 - This divergence is intentional: session-level buffer is broader; persistent buffer is restricted to chat input.
 
 ---
+
+## TR-019: @ file-mention autocomplete + Tab accepts top match
+
+Typing `@<prefix>` in the composer pops an autocomplete with matching repo
+files; Tab selects the top entry and inserts it into the composer. An
+empty `@` should render "no matches" (i.e. the picker is alive but has
+nothing to suggest yet).
+
+**Setup**: TR-003 setup. Run from a repo with multiple `Cargo.toml` files
+(`$ATA_REPO/codex-rs` is the canonical case).
+
+### Scenario A: baseline — Cargo prefix + Tab
+1. `tmux send-keys -t <new> "@"`; sleep 0.5. → capture `empty`.
+2. `tmux send-keys -t <new> "Cargo"`; sleep 0.5. → capture `prefix`.
+3. `tmux send-keys -t <new> Tab`; sleep 0.5. → capture `accepted`.
+4. Cleanup: `tmux send-keys -t <new> C-u`.
+
+**Expect**:
+- `empty` contains `no matches`
+- `prefix` contains `Cargo.toml` AND `Cargo.lock` (multi-result rendered)
+- `accepted` contains `› Cargo.toml` (top match inserted)
+- `accepted` not contains `no matches` AND not contains `@Cargo`
+
+### Scenario B: no-match prefix shows "no matches" (picker stays open)
+1. `tmux send-keys -t <new> "@xyznosuchprefix"`; sleep 1.
+2. → capture `out`.
+3. Cleanup: backspace until composer empty.
+
+**Expect**:
+- `out` contains `no matches`
+- Picker remains open (still under composer)
+
+### Scenario B2 (BUG): Tab on a no-match query gets stuck on `loading...`
+1. After Scenario B's `@xyznosuchprefix` is typed (no matches visible):
+2. `tmux send-keys -t <new> Tab`; sleep 3.
+3. → capture `out`.
+
+**Expect (current buggy behavior — regression guard)**:
+- `out` contains `loading...` (replaces `no matches`)
+- `out` does NOT resolve back to `no matches` after wait
+- Escape does NOT dismiss — only backspacing through the `@` clears the state
+
+**When the bug is fixed** (see `reports/2026-05-25T13-15.md` for root cause: Tab handler doesn't set `dismissed_file_popup_token` in `tui/src/bottom_pane/chat_composer.rs:1991`), flip predicates to:
+- `out` contains `no matches`
+- `out` not contains `loading...`
+
+### Scenario C: subdirectory path traversal in @-picker
+1. `tmux send-keys -t <new> "@core/src"`; sleep 1.
+2. → capture `out`.
+3. Cleanup: backspace clear.
+
+**Expect**:
+- `out` contains `core/src` (top entry)
+- `out` contains multiple `core/src/<subdir>` entries (proves subdir traversal)
+- Picker accepts both files AND directories
+
+### Scenario D: Tab accepts top match; second Tab does NOT cycle
+1. `tmux send-keys -t <new> "@Cargo"`; sleep 0.5.
+2. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab1`.
+3. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab2`.
+
+**Expect**:
+- `tab1` contains `› Cargo.toml` (top match accepted into composer, picker dismissed)
+- `tab2` does NOT show the second-match entry (`tui/Cargo.toml`) in composer — Tab does not cycle through matches; it either submits or triggers focus action depending on context
+- After tab2: composer either submits `Cargo.toml` or the agent indicator appears (`• Working`)
+
+### Scenario E: Escape does NOT dismiss the @-picker
+1. `tmux send-keys -t <new> "@xyz"`; sleep 0.5.
+2. `tmux send-keys -t <new> Escape`; sleep 0.5.
+3. → capture `out`.
+
+**Expect**:
+- `out` still shows the @-picker (no matches view or matches view)
+- Escape is consumed by the composer, NOT by the picker
+- Only backspacing through the `@` (or accepting via Tab) closes the picker
+
+---
+
+## TR-020: Unknown slash command shows a helpful hint
+
+ata does not have a `/help` command; when an unrecognized slash is sent,
+the TUI must print `Unrecognized command '<name>'. Type "/" for a list…`
+rather than silently forwarding the text to the agent or crashing.
+
+**Setup**: TR-003 setup.
+
+### Scenario A: baseline — unknown slash
+1. `tmux send-keys -t <new> "/help"`; sleep 0.5; `Enter`; sleep 1.
+2. → capture `out`.
+
+**Expect**:
+- `out` contains `Unrecognized command '/help'`
+- `out` contains `Type "/" for a list of supported commands`
+
+### Scenario B: typo of a real command (no fuzzy hint, composer retains text)
+1. `tmux send-keys -t <new> "/clera"`; sleep 0.5; `Enter`; sleep 1.
+2. → capture `out`.
+
+**Expect**:
+- `out` contains `Unrecognized command '/clera'`
+- `out` not contains `did you mean` (ata does NOT suggest near-matches)
+- Composer keeps the typed text (`/clera`) so the user can edit and resend without re-typing
+
+### Scenario C: slash commands are case-insensitive
+1. Plant a marker: `tmux send-keys "marker-xyz"; Enter; sleep 8` (let agent reply).
+2. `tmux send-keys -t <new> "/CLEAR"`; sleep 0.3; `Enter`; sleep 2.
+3. → capture `out`.
+
+**Expect**:
+- `out` not contains `marker-xyz` (uppercase `/CLEAR` actually cleared the chat — proves case-insensitive parser)
+- `out` contains `To continue this session, run ata resume`
+- `out` not contains `Unrecognized command`
+
+### Scenario D: recognized command with extra args falls through to chat
+1. `tmux send-keys -t <new> "/clear extra junk args"`; sleep 0.3; `Enter`; sleep 8.
+2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -1`.
+
+**Expect**:
+- JSONL contains `/clear extra junk args` as a user message (sent to agent, not parsed as slash command)
+- TUI output shows the agent's reply, NOT the system `Cleared.` ack
+- Slash parser is strict for arg-less commands: trailing text disables slash routing
+
+### Scenario E: bare `/` opens slash picker
+1. `tmux send-keys -t <new> "/"`; sleep 1.
+2. → capture `out`.
+
+**Expect**:
+- `out` contains `/model` and `/permissions` and `/scheduling` (picker list visible)
+- `out` not contains `Unrecognized command`
+
+---
+
+## TR-034: `@` file mention is path-injection, not content-injection
+
+A common user misconception: typing `@Cargo.toml` and sending must
+auto-attach the file's content to the agent's prompt. It does NOT.
+Tab-accepting the `@` completion inserts the literal filename as
+plain text into the composer; the user message that reaches the agent
+contains only the path string, no file content. The agent has to
+explicitly read the file via a tool call (`exec_command sed`, `read`,
+etc.) to actually inspect it. This test documents that invariant and
+catches two regression classes:
+
+1. False auto-attach: a future change "improves" @ mention by silently
+   attaching content. That might be a feature, but it must be intentional
+   and detectable — this test would catch the unannounced change.
+2. Lost path injection: a future change breaks the Tab-accept path so
+   the filename never reaches the user message at all (agent has nothing
+   to read).
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, type `@Cargo` (no Enter yet); sleep 0.5. Picker should show matches.
+2. Press `Tab` to accept the top match (`Cargo.toml`); sleep 0.3.
+3. Type ` explain this file` (space + question); sleep 0.5.
+4. Press `Enter`. Sleep 1.
+5. Poll up to 3 min until pane contains `[workspace]` OR `workspace members` OR a clear sign the agent actually read the file (ata-specific terms like `reading-view-server`, `scheduling`, `codex-workspace`).
+6. → capture `response`.
+7. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
+   - `grep -o '"text":"[^"]*Cargo[^"]*"' "$SESS" | head -1 > <user_msg>` → capture `user_msg`.
+   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>` → capture `tool_counts`.
+   - `jq -r 'select(.payload.name=="exec_command") | .payload.arguments' "$SESS" > <exec_args>` → capture `exec_args`.
+
+**Expect** (all must hold):
+
+User message — path string is what reaches the agent:
+- `user_msg` contains `Cargo.toml explain this file` — literal filename + question
+- `user_msg` not contains `[workspace]` — the FILE CONTENT was NOT injected into the user message (this is the headline invariant)
+- `user_msg` not contains `[patch.crates-io]` — same: no content auto-attached
+- `user_msg` not contains `serde =` — same: no inline manifest dependencies
+
+Agent — must read the file via a tool to answer:
+- `tool_counts` contains `exec_command` OR a dedicated read-file tool — the agent went and read the file itself
+- `exec_args` contains `Cargo.toml` — the read call targeted the right file
+
+Pane — response cites ata-specific Cargo.toml content (proves the read actually happened):
+- `response` contains `reading-view-server` OR `scheduling` OR `codex-workspace` — names that only exist in ata's Cargo.toml, not a hallucinated generic manifest
+- `response` contains `Cargo.toml` — the file is named in the response
+
+---
+
+
+# Group 3: Slash commands
 
 ## TR-010: /experimental menu
 
@@ -389,36 +447,6 @@ the visible part).
 **Expect**:
 - `out` contains `'/experimental' is disabled while a task is in progress.`
 - Menu does NOT open
-
----
-
-## TR-011: Code-understanding via code_intel tool
-
-The repo_context / code_intel tool uses LSP + treesitter to answer symbol
-queries. This test verifies the tool is registered and successfully
-returns a definition location.
-
-**Setup**: TR-003 setup. Run inside a Rust workspace (`$ATA_REPO/codex-rs`
-works) so the LSP has something to index.
-
-**Action**:
-1. `tmux send-keys -t <new> "use code_intel to find where parse_sections is defined"`; sleep 1; `Enter`.
-2. Poll up to 3 min until response contains `parse_sections` AND a file
-   path like `.rs:`.
-3. → capture `resp`.
-4. Inspect the active session JSONL (`~/.ata/sessions/<latest>.jsonl`):
-   `jq -r 'select(.payload.name=="code_intel") | .payload.arguments' <file>`.
-   → save as `tool_calls`.
-
-**Expect**:
-- `resp` matches `parse_sections.*\.rs:\d+`
-- `tool_calls` contains `symbolSearch` (the operation)
-- `tool_calls` contains `parse_sections` (the query)
-
-If `code_intel` falls back to `exec_command` grep (i.e. `tool_calls` is
-empty for `code_intel`), the test still passes if `resp` cites correct
-locations — but the failure mode is "tool not registered", which is a
-real regression worth noting in the report.
 
 ---
 
@@ -679,999 +707,6 @@ must reflect the same value.
 5. `gpt-5.2`
 
 Note: the picker also says `Access legacy models by running codex -m <model_name> or in your config` — so the visible 5 are the curated set, not exhaustive.
-
----
-
-## TR-019: @ file-mention autocomplete + Tab accepts top match
-
-Typing `@<prefix>` in the composer pops an autocomplete with matching repo
-files; Tab selects the top entry and inserts it into the composer. An
-empty `@` should render "no matches" (i.e. the picker is alive but has
-nothing to suggest yet).
-
-**Setup**: TR-003 setup. Run from a repo with multiple `Cargo.toml` files
-(`$ATA_REPO/codex-rs` is the canonical case).
-
-### Scenario A: baseline — Cargo prefix + Tab
-1. `tmux send-keys -t <new> "@"`; sleep 0.5. → capture `empty`.
-2. `tmux send-keys -t <new> "Cargo"`; sleep 0.5. → capture `prefix`.
-3. `tmux send-keys -t <new> Tab`; sleep 0.5. → capture `accepted`.
-4. Cleanup: `tmux send-keys -t <new> C-u`.
-
-**Expect**:
-- `empty` contains `no matches`
-- `prefix` contains `Cargo.toml` AND `Cargo.lock` (multi-result rendered)
-- `accepted` contains `› Cargo.toml` (top match inserted)
-- `accepted` not contains `no matches` AND not contains `@Cargo`
-
-### Scenario B: no-match prefix shows "no matches" (picker stays open)
-1. `tmux send-keys -t <new> "@xyznosuchprefix"`; sleep 1.
-2. → capture `out`.
-3. Cleanup: backspace until composer empty.
-
-**Expect**:
-- `out` contains `no matches`
-- Picker remains open (still under composer)
-
-### Scenario B2 (BUG): Tab on a no-match query gets stuck on `loading...`
-1. After Scenario B's `@xyznosuchprefix` is typed (no matches visible):
-2. `tmux send-keys -t <new> Tab`; sleep 3.
-3. → capture `out`.
-
-**Expect (current buggy behavior — regression guard)**:
-- `out` contains `loading...` (replaces `no matches`)
-- `out` does NOT resolve back to `no matches` after wait
-- Escape does NOT dismiss — only backspacing through the `@` clears the state
-
-**When the bug is fixed** (see `reports/2026-05-25T13-15.md` for root cause: Tab handler doesn't set `dismissed_file_popup_token` in `tui/src/bottom_pane/chat_composer.rs:1991`), flip predicates to:
-- `out` contains `no matches`
-- `out` not contains `loading...`
-
-### Scenario C: subdirectory path traversal in @-picker
-1. `tmux send-keys -t <new> "@core/src"`; sleep 1.
-2. → capture `out`.
-3. Cleanup: backspace clear.
-
-**Expect**:
-- `out` contains `core/src` (top entry)
-- `out` contains multiple `core/src/<subdir>` entries (proves subdir traversal)
-- Picker accepts both files AND directories
-
-### Scenario D: Tab accepts top match; second Tab does NOT cycle
-1. `tmux send-keys -t <new> "@Cargo"`; sleep 0.5.
-2. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab1`.
-3. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab2`.
-
-**Expect**:
-- `tab1` contains `› Cargo.toml` (top match accepted into composer, picker dismissed)
-- `tab2` does NOT show the second-match entry (`tui/Cargo.toml`) in composer — Tab does not cycle through matches; it either submits or triggers focus action depending on context
-- After tab2: composer either submits `Cargo.toml` or the agent indicator appears (`• Working`)
-
-### Scenario E: Escape does NOT dismiss the @-picker
-1. `tmux send-keys -t <new> "@xyz"`; sleep 0.5.
-2. `tmux send-keys -t <new> Escape`; sleep 0.5.
-3. → capture `out`.
-
-**Expect**:
-- `out` still shows the @-picker (no matches view or matches view)
-- Escape is consumed by the composer, NOT by the picker
-- Only backspacing through the `@` (or accepting via Tab) closes the picker
-
----
-
-## TR-020: Unknown slash command shows a helpful hint
-
-ata does not have a `/help` command; when an unrecognized slash is sent,
-the TUI must print `Unrecognized command '<name>'. Type "/" for a list…`
-rather than silently forwarding the text to the agent or crashing.
-
-**Setup**: TR-003 setup.
-
-### Scenario A: baseline — unknown slash
-1. `tmux send-keys -t <new> "/help"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `out`.
-
-**Expect**:
-- `out` contains `Unrecognized command '/help'`
-- `out` contains `Type "/" for a list of supported commands`
-
-### Scenario B: typo of a real command (no fuzzy hint, composer retains text)
-1. `tmux send-keys -t <new> "/clera"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `out`.
-
-**Expect**:
-- `out` contains `Unrecognized command '/clera'`
-- `out` not contains `did you mean` (ata does NOT suggest near-matches)
-- Composer keeps the typed text (`/clera`) so the user can edit and resend without re-typing
-
-### Scenario C: slash commands are case-insensitive
-1. Plant a marker: `tmux send-keys "marker-xyz"; Enter; sleep 8` (let agent reply).
-2. `tmux send-keys -t <new> "/CLEAR"`; sleep 0.3; `Enter`; sleep 2.
-3. → capture `out`.
-
-**Expect**:
-- `out` not contains `marker-xyz` (uppercase `/CLEAR` actually cleared the chat — proves case-insensitive parser)
-- `out` contains `To continue this session, run ata resume`
-- `out` not contains `Unrecognized command`
-
-### Scenario D: recognized command with extra args falls through to chat
-1. `tmux send-keys -t <new> "/clear extra junk args"`; sleep 0.3; `Enter`; sleep 8.
-2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -1`.
-
-**Expect**:
-- JSONL contains `/clear extra junk args` as a user message (sent to agent, not parsed as slash command)
-- TUI output shows the agent's reply, NOT the system `Cleared.` ack
-- Slash parser is strict for arg-less commands: trailing text disables slash routing
-
-### Scenario E: bare `/` opens slash picker
-1. `tmux send-keys -t <new> "/"`; sleep 1.
-2. → capture `out`.
-
-**Expect**:
-- `out` contains `/model` and `/permissions` and `/scheduling` (picker list visible)
-- `out` not contains `Unrecognized command`
-
----
-
-## TR-021: Agent picks the Hacker News tool on its own
-
-When the user asks for HN content, ata must call the dedicated `hn_search`
-tool — NOT `web_search` and NOT shell out via `exec_command` / `curl`.
-This test guards against silent tool-routing regressions that the rendered
-text alone won't catch (the model can produce a plausible inline answer
-even while calling the wrong tool, or no tool at all).
-
-The prompt deliberately does NOT name `hn_search`. Naming the tool tests
-nothing; the point is to verify the model picks it.
-
-**Setup**: TR-003 setup + precondition below.
-
-**Precondition**: the Hacker News research skill must be enabled. It
-ships `default_enabled: true`, so a fresh install passes — but if a user
-turned it off via `/research`, the test will fail because the agent has
-no `hn_search` tool to route to. Verify `~/.ata/config.toml` does NOT
-have:
-
-```toml
-[features]
-research_hacker_news = false
-```
-
-(Absence of the key or `= true` both work.)
-
-**Action**:
-1. `tmux send-keys -t <new> "find me a top story on Hacker News about Rust"`; sleep 1; `Enter`.
-2. Poll up to 3 min until `tmux capture-pane -t <new> -p` contains
-   `news.ycombinator.com` (proves a real HN response landed).
-3. → capture `resp`.
-4. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`.
-5. `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts_capture>`.
-   → capture `tool_counts`.
-6. `jq -r 'select(.payload.name=="hn_search") | .payload.arguments' "$SESS" > <hn_args_capture>`.
-   → capture `hn_args`.
-
-**Expect** (all must hold):
-- `resp` contains `Hacker News` — feature answered
-- `resp` contains `news.ycombinator.com` — real HN URL cited
-- `tool_counts` contains `hn_search` — dedicated tool was invoked
-- `tool_counts` not contains `web_search` — did not fall back to generic search
-- `tool_counts` not contains `shell` — did not shell out
-- `tool_counts` not contains `exec_command` — did not shell out
-- `hn_args` contains `"query"` — arguments object well-formed
-- `hn_args` contains `Rust` — query reflected the user's topic
-
----
-
-## TR-022: Escape interrupts an in-flight turn cleanly
-
-The Action below polls at a tight 0.2s cadence and uses a heavy prompt because fast reasoning models can finish a response before a slower poll fires, racing past the interrupt window.
-
-The thinking indicator reads `esc to interrupt`, so Escape is the
-documented interrupt key. Pressing it while the agent is working stops
-the turn and shows `Conversation interrupted - tell the model what to do
-differently.` plus a `/feedback` hint. (Escape has context-dependent
-behavior: it edits the previous message when idle — see TR-013 for the
-voice-mode case — and interrupts when a turn is mid-flight.)
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. `tmux send-keys -t <new> "write me a 5000-word essay analyzing the history of espresso, with detailed sections on origin, technique, and modern variations"`; sleep 0.5; `Enter`.
-2. Tight-poll up to 15s, sleeping 0.2s per iteration, until `tmux capture-pane -t <new> -p` contains `esc to interrupt`. As soon as the substring is seen, immediately `tmux send-keys -t <new> Escape` in the same iteration (do NOT wait for the next poll).
-3. Sleep 1.
-4. → capture `out`.
-
-**Expect**:
-- `out` contains `Conversation interrupted`
-- `out` contains `tell the model what to do differently`
-- `out` contains `/feedback`
-- `out` not contains `esc to interrupt` — thinking indicator cleared
-
----
-
-## TR-023: /scheduling empty panel opens, dismisses, chat survives
-
-Opens the `/scheduling` panel on a session with no cron/monitor tasks
-and verifies the empty state renders correctly, Escape dismisses the
-panel cleanly, and the chat composer still accepts input afterward. The
-"dismiss + chat round-trip" half is the deep regression guard — if the
-panel leaves frame cells or focus state behind on close, the next
-message gets garbled (same failure mode TR-008 guards against for the
-reading view).
-
-**Setup**: TR-003 setup on a session with no scheduling tasks (a fresh
-ata launch is always empty).
-
-**Action**:
-1. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `panel`.
-3. `tmux send-keys -t <new> Escape`; sleep 1.
-4. `tmux send-keys -t <new> "say ok"`; sleep 1; `Enter`.
-5. Poll up to 60s until `tmux capture-pane -t <new> -p` matches `^• [oO][kK]\b`.
-6. → capture `after`.
-
-**Expect**:
-- `panel` contains `Scheduling tasks in this session`
-- `panel` contains `Active cron jobs and monitors for this thread.`
-- `panel` contains `Cron (0)`
-- `panel` contains `Monitors (0)`
-- `panel` contains `(none)` — empty-state copy
-- `panel` contains `↑/↓ select · enter details · d delete · esc close` — footer help
-- `panel` contains `Updated:` — timestamp present
-- `after` matches `^• [oO][kK]\b` — agent responded after the panel dismissed
-- `after` contains `› say ok` — user message landed in chat
-- `after` not contains `Scheduling tasks in this session` — panel content fully gone
-- `after` not contains `Cron (0)` — panel content fully gone
-- `after` not contains `↑/↓ select` — panel footer fully gone
-
----
-
-## TR-024: /scheduling `d` deletes OS cron + kills in-flight subprocesses (PR #20 regression guard)
-
-The headline bug PR #20 fixed: pressing `d` in `/scheduling` on an OS-cron
-row removed the crontab entry but left already-spawned `ata exec`
-children running until their natural end. This test guards against
-re-introducing that orphan-process leak. It's cross-layer — pane (row
-gone), filesystem (crontab entry gone), AND kernel (no matching
-processes) must all agree.
-
-**Setup**: TR-003 setup + precondition below.
-
-**Precondition (macOS)**: Terminal needs Full Disk Access in System
-Settings → Privacy & Security → Full Disk Access. Without it,
-`crontab -l` / `crontab` writes fail with `Operation not permitted`
-and the `cron_create` tool returns an error. Verify by running
-`crontab -l` from the same shell before the test and confirming it
-does not error.
-
-**Action**:
-1. In ata, send: `create a cron job named tr024-test that runs every minute and does: sleep 90 && echo done`
-2. Poll up to 30s until `tmux capture-pane -t <new> -p` contains `Created persistent cron job tr024-test` (proves the cron tool succeeded).
-3. Extract the `Task ID:` from the response (UUID) — call this `TASK_ID`.
-4. Wait up to 65s for the first fire: poll the cron log path `~/.ata/cron/<TASK_ID>.log` for non-zero size.
-5. Snapshot pre-delete state:
-   - `crontab -l | grep <TASK_ID> > <crontab_before>` → capture `crontab_before`.
-   - Record the in-flight process tree as a fixed set of PIDs:
-     `pgrep -f "<TASK_ID>" > /tmp/pre_pids.txt` — these are the specific PIDs whose death we will assert. (Recording PIDs rather than re-pgrep'ing later avoids a documented OS cron race; see "Known caveat" below.)
-   - `pgrep -fl "<TASK_ID>" > <procs_before>` → capture `procs_before` (human-readable form for predicates).
-6. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-7. → capture `panel_before`.
-8. `tmux send-keys -t <new> d`; sleep 10.  (10s settle window — kill is async per PR #20 fix and macOS process reaping takes a beat.)
-9. → capture `panel_after`.
-10. Snapshot post-delete state:
-    - `crontab -l | grep <TASK_ID> > <crontab_after>` → capture `crontab_after`.
-    - Check whether each PID from `/tmp/pre_pids.txt` is still alive:
-      `for p in $(cat /tmp/pre_pids.txt); do ps -p $p -o pid= 2>/dev/null; done > <pre_pids_alive>` → capture `pre_pids_alive`.
-
-**Expect** (all must hold):
-- `panel_before` contains `tr024-test` — row visible in panel
-- `panel_before` contains `Cron (1)` — count reflects one job
-- `crontab_before` contains the task id — crontab entry present
-- `procs_before` contains `ata exec` — at least one `ata exec` subprocess in flight
-- `panel_after` contains `Cron (0)` — row removed from panel
-- `panel_after` not contains `tr024-test` — row gone
-- `crontab_after` is empty — crontab entry removed
-- `pre_pids_alive` is empty — every process that was in flight at delete time is gone (this is the precise PR #20 invariant: in-flight subprocesses get killed; the test does NOT assert "no new processes ever spawn matching the task id", because a known OS-cron race can leak one extra fire — see caveat)
-
-**Known caveat — macOS cron-daemon race**:
-macOS's cron daemon caches the next-fire schedule from the crontab. If
-the `d` press happens within the same minute as a scheduled fire, the
-daemon may have already enqueued that fire from its in-memory state
-even after the crontab entry is removed — the result is a new process
-tree (with a NEW set of PIDs, distinct from the pre-delete ones) that
-runs to natural completion. The PR #20 fix correctly kills the
-*pre-delete* process tree, but cannot pre-empt a fire that the cron
-daemon already scheduled. This is why the post-delete predicate is
-"every PID we recorded pre-delete is dead", not "no processes match
-the task id" — the latter is too strict and flags the OS race as a
-test failure.
-
-**Teardown** (mandatory, pass or fail): run the three commands in the "OS cron safety" section at the top of this file. Verify the crontab is empty and no `ata exec` children remain. Skipping this leaves a popup-spamming cron firing every minute.
-
----
-
-## TR-025: Monitor lifecycle — start, stream output, complete, retain row, delete
-
-Covers the full monitor task lifecycle: a `monitor_start` call streams
-stdout lines into chat live, fires a completion event when the command
-exits, and the `/scheduling` panel retains the row as `[Completed]`
-with an accurate line count until the user presses `d` to clear it.
-This exercises three layers (chat stream, scheduling panel, session
-JSONL) for one feature — the kind of coverage a single-pane smoke test
-would miss.
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: ``start a monitor named tr025-watch that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done``
-2. Sleep 1; `Enter`.
-3. Poll up to 30s until `tmux capture-pane -t <new> -p` contains both `Started monitor tr025-watch.` AND `completed successfully` (monitor announced + terminated).
-4. → capture `chat`.
-5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-6. → capture `panel_retained`.
-7. `tmux send-keys -t <new> d`; sleep 1.
-8. → capture `panel_deleted`.
-9. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-10. `jq -r 'select(.payload.name=="monitor_start") | .payload.arguments' "$SESS" > <monitor_args>`. → capture `monitor_args`.
-
-**Expect** (all must hold):
-
-Chat stream:
-- `chat` contains `Started monitor tr025-watch.` — start announced
-- `chat` contains `tick 1` — first stream line delivered
-- `chat` contains `tick 5` — last stream line delivered (proves all 5 made it through, not just the first)
-- `chat` contains `completed` — completion event present in chat
-- `chat` contains `Monitor tr025-watch completed successfully.` — final agent summary
-- `chat` matches `\[m [a-f0-9]+ out\] tick` — stream prefix format is the `[m <prefix> out]` shape
-
-Scheduling panel — retention:
-- `panel_retained` contains `Monitors (1)` — count reflects the completed monitor
-- `panel_retained` contains `tr025-watch` — name visible
-- `panel_retained` contains `[Completed]` — status reflects termination
-- `panel_retained` contains `lines 5` — line count reflects actual stream output
-
-Scheduling panel — delete:
-- `panel_deleted` contains `Monitors (0)` — count zeroed
-- `panel_deleted` not contains `tr025-watch` — row gone
-
-Session JSONL:
-- `tool_counts` contains `monitor_start` — the dedicated monitor tool was used
-- `tool_counts` not contains `shell` — not a shell-tool fallback
-- `monitor_args` contains `"name"` and `tr025-watch` — name argument passed correctly
-- `monitor_args` contains `tick` — the for-loop command argument made it through
-
----
-
-## TR-026: In-session cron lifecycle — create, fire, panel update, delete
-
-In-session cron (`cron_create_session`) lives entirely in the chat
-session — no crontab, no Full Disk Access precondition. It fires the
-agent in chat on a sub-minute schedule. This test verifies the
-full lifecycle: tool routes to `cron_create_session` (not the OS `cron_create`),
-the panel shows status `[Pending]`, the fire counter increments after
-each fire, the cron's prompt actually runs the agent inline, and `d`
-removes the row before it fires again.
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: ``create an in-session cron named tr026-ping that runs every 30 seconds and says: respond with just "ping"``
-2. Sleep 1; `Enter`.
-3. Poll up to 30s until `tmux capture-pane -t <new> -p` contains `Created in-session cron tr026-ping.` — proves the cron was registered.
-4. → capture `created`.
-5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-6. → capture `panel_pending`.
-7. `tmux send-keys -t <new> Escape`; sleep 1.
-8. Poll up to 60s until pane contains both `Respond with just "ping"` on a `›` line AND `• ping` on a `•` line (first fire completed).
-9. → capture `after_fire`.
-10. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-11. → capture `panel_after_fire`.
-12. `tmux send-keys -t <new> d`; sleep 1.
-13. → capture `panel_deleted`.
-14. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-
-**Expect** (all must hold):
-
-Creation:
-- `created` contains `Created in-session cron tr026-ping.`
-- `created` contains `every 30 seconds while this session is active.` — in-session signature copy
-
-Panel — pending state (before first fire):
-- `panel_pending` contains `Cron (1)`
-- `panel_pending` contains `tr026-ping`
-- `panel_pending` contains `[Pending` — in-session status (differs from OS cron's `[Scheduled]`)
-- `panel_pending` contains `fired 0` — no fires yet
-- `panel_pending` contains `next in ` — countdown rendering
-
-Fire — chat:
-- `after_fire` contains `› Respond with just "ping"` — cron prompt rendered as a user message
-- `after_fire` matches `^• ping` — agent responded with the expected literal
-
-Panel — after first fire:
-- `panel_after_fire` contains `fired 1` — fire counter incremented
-- `panel_after_fire` contains `[Pending` — still scheduled for next fire (in-session crons stay Pending between fires)
-
-Delete:
-- `panel_deleted` contains `Cron (0)` — row removed
-- `panel_deleted` not contains `tr026-ping`
-
-Session JSONL — correct tool routing:
-- `tool_counts` contains `cron_create_session` — in-session creator, not OS `cron_create`
-- `tool_counts` contains `cron_delete_session` — in-session deleter (from the `d` press, which routes through the panel's delete handler)
-
----
-
-## TR-027: OS cron survives ata restart and keeps firing while ata is off
-
-OS cron lives in the system crontab — not in the ata session — so it
-must (a) persist across ata exits, (b) keep firing from the system
-crontab while ata isn't running, and (c) reappear in `/scheduling` on
-the next launch with its accumulated fire count intact. This is the
-core "OS cron vs in-session cron" distinction (compare TR-026, which
-verifies in-session crons are explicitly session-scoped).
-
-**Setup**: TR-003 setup + TR-024's macOS Full Disk Access precondition.
-
-**Action**:
-1. In ata, send: `create a cron job named tr027-persist that runs every minute and does: echo done`
-2. Sleep 1; `Enter`.
-3. Poll up to 30s until pane contains `Created persistent cron job tr027-persist`. Extract `Task ID:` → `TASK_ID`.
-4. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-5. → capture `panel_session1`.
-6. `tmux send-keys -t <new> Escape`; sleep 1.
-7. `crontab -l | grep "$TASK_ID" > <crontab_active>`. → capture `crontab_active`.
-8. Quit ata: `tmux send-keys -t <new> C-d`; sleep 2.
-9. Verify ata exited: pane should now show a shell prompt (e.g. contains `$ ` or `% ` near the bottom). → capture `exited`.
-10. Wait 70 seconds (lets the system cron fire at least once while ata is off).
-11. Relaunch ata in the same pane: `tmux send-keys -t <new> "./target/debug/ata --yolo"`; sleep 1; `Enter`; sleep 6.
-12. Wait for the welcome banner (`OpenAI Codex (v` substring).
-13. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-14. → capture `panel_session2`.
-15. `tmux send-keys -t <new> d`; sleep 1.
-16. → capture `panel_deleted`.
-17. `crontab -l | grep "$TASK_ID" > <crontab_clean>` (expected empty). → capture `crontab_clean`.
-
-**Expect** (all must hold):
-
-Session 1 — cron registered:
-- `panel_session1` contains `Cron (1)`
-- `panel_session1` contains `tr027-persist`
-- `panel_session1` contains `[Scheduled]` — OS cron status
-- `panel_session1` contains `fired 0` — no fires yet at creation
-- `crontab_active` contains the task id — system crontab entry was written
-
-Exit:
-- `exited` not contains `/scheduling` — TUI dismissed
-- `exited` matches `(\$|%) $` OR contains `To continue this session, run ata resume` — shell prompt or ata's exit message visible
-
-Session 2 — cron persisted across restart:
-- `panel_session2` contains `Cron (1)` — cron reappears in fresh session
-- `panel_session2` contains `tr027-persist` — same task name
-- `panel_session2` contains `[Scheduled]` — still scheduled
-- `panel_session2` not contains `fired 0` — fire counter is non-zero (at least one fire happened while ata was off; proves the cron is running from the system crontab, not from ata)
-
-Cleanup:
-- `panel_deleted` contains `Cron (0)` — row removed in session 2
-- `panel_deleted` not contains `tr027-persist`
-- `crontab_clean` is empty — system crontab entry removed too
-
-**Teardown** (mandatory, pass or fail): run the three commands in the "OS cron safety" section at the top of this file. Even if the test passed and `/scheduling d` already removed the row, verify the crontab is empty and no `ata exec` children remain. Skipping this leaves a popup-spamming cron firing every minute.
-
----
-
-## TR-028: Agent picks monitor_watch_for (not monitor_wait) when prompt asks to react to a pattern
-
-The monitor agent has two blocking primitives: `monitor_wait` (block
-until the subprocess terminates) and `monitor_watch_for` (block until
-a specific line appears on stdout/stderr). The right tool depends on
-intent: "tell me when it finishes" → `monitor_wait`; "tell me when
-'X' appears" → `monitor_watch_for`. This test verifies the model
-disambiguates correctly. The monitor-stream rendering already gets
-coverage in TR-025; here the depth is in tool-routing correctness,
-verified via JSONL cross-check (the pane can render a plausible
-"matched X" response even when the wrong primitive was called).
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: ``start a monitor that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done. Watch for the line "tick 3" and tell me when it appears.``
-2. Sleep 1; `Enter`.
-3. Poll up to 30s until pane contains `tick 3 appeared` OR `matched` OR a similar agent-narrated success line referencing `tick 3` (proves the watch returned).
-4. → capture `chat`.
-5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-6. → capture `panel`.
-7. `tmux send-keys -t <new> d`; sleep 1.  (cleanup — remove the completed monitor row.)
-8. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-9. `jq -r 'select(.payload.name=="monitor_watch_for") | .payload.arguments' "$SESS" > <watch_args>`. → capture `watch_args`.
-
-**Expect** (all must hold):
-
-Chat:
-- `chat` contains `tick 3` — the matched line appears in the agent's response
-- `chat` contains `appeared` OR `matched` — agent narrated the match outcome
-- `chat` not contains `did not match` — no fallback to terminated-without-match
-
-Tool routing:
-- `tool_counts` contains `monitor_start` — monitor was spawned
-- `tool_counts` contains `monitor_watch_for` — pattern-matching variant was used
-- `tool_counts` not contains `monitor_wait` — did NOT fall back to wait-for-completion
-- `tool_counts` not contains `shell` — did not shell out to grep / tail / etc.
-
-Argument fidelity:
-- `watch_args` contains `"pattern"` — arguments include a pattern field
-- `watch_args` contains `tick 3` — the pattern value reflects the user's literal request (not a paraphrase like "tick three" or "third tick")
-- `watch_args` contains `"task_id"` — the args target the just-spawned monitor
-
-Panel state — completed monitor retained:
-- `panel` contains `Monitors (1)` — completed monitor still visible until user dismisses it
-- `panel` contains `[Completed]` — status reflects natural termination
-- `panel` contains `lines 5` — line count reflects all 5 ticks streamed (the watch returning early on tick 3 did NOT abort the underlying monitor process)
-
----
-
-## TR-029: /scheduling panel renders both sections populated (mixed task kinds)
-
-Earlier tests verified single-section states (empty in TR-023, one cron in
-TR-024/026/027, one monitor in TR-025/028). This test exercises the layout
-when *both* sections are populated — catches layout regressions that only
-surface with mixed task kinds (e.g. wrong section ordering, missing
-section header when adjacent section is non-empty, status-string spacing
-that only breaks under simultaneous rendering).
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: `create an in-session cron named tr029-cron that runs every 60 seconds and says: hi`. Sleep 1; `Enter`.
-2. Poll up to 30s until pane contains `Created in-session cron tr029-cron`.
-3. In ata, send: `start a monitor named tr029-mon that runs: sleep 30`. Sleep 1; `Enter`.
-4. Poll up to 30s until pane contains `Started monitor tr029-mon`.
-5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-6. → capture `panel`.
-7. Cleanup: press `d` to remove the focused row, sleep 1, capture `after_first_d`, press `d` again to remove the second, sleep 1, capture `after_second_d`.
-
-**Expect** (all must hold):
-
-Layout:
-- `panel` contains `Cron (1)` — cron section non-empty
-- `panel` contains `Monitors (1)` — monitor section non-empty (same panel render)
-- `panel` contains `tr029-cron` — cron row name
-- `panel` contains `tr029-mon` — monitor row name
-
-Status disambiguation — both kinds visible side-by-side:
-- `panel` contains `[Pending` — in-session cron status
-- `panel` contains `[Running` — live monitor status
-- `panel` not contains `[Scheduled` — no OS cron present
-- `panel` not contains `[Completed` — monitor hasn't terminated yet
-
-Cleanup — sequential `d` clears both rows independently:
-- `after_first_d` contains either `Cron (0)` (cron was focused first) OR `Monitors (0)` (monitor was focused first)
-- `after_second_d` contains `Cron (0)` — both sections cleared
-- `after_second_d` contains `Monitors (0)`
-- `after_second_d` not contains `tr029-cron`
-- `after_second_d` not contains `tr029-mon`
-
----
-
-## TR-030: /scheduling row detail view shows id, command, and output tail
-
-Pressing Enter on a row in `/scheduling` opens a detail view with full
-task metadata: id, status, command, line count, and a recent-output
-tail. The list view truncates command + status into a single line for
-density; the detail view is where users actually inspect task internals.
-Worth its own regression guard because (a) detail rendering is a
-separate code path from list rendering and can rot independently, and
-(b) the tail formatting (e.g. `[stdout]` prefix per line) is a small
-contract that downstream tools rely on.
-
-Also documents a UI behavior: Escape from the detail view exits the
-whole panel — it does NOT go back to the list view. (To return to the
-list, the user has to reopen `/scheduling`.)
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: `start a monitor named tr030-detail that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 2; done`. Sleep 1; `Enter`.
-2. Poll up to 30s until pane contains `Started monitor tr030-detail`.
-3. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
-4. `tmux send-keys -t <new> Enter`; sleep 1.  (Enter on the focused monitor row → detail view.)
-5. → capture `detail`.
-6. `tmux send-keys -t <new> Escape`; sleep 1.  (Escape from detail.)
-7. → capture `after_escape`.
-8. Cleanup: `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1; `tmux send-keys -t <new> d`; sleep 1.
-
-**Expect** (all must hold):
-
-Detail view rendering:
-- `detail` contains `Monitor · tr030-detail` — heading uses `Kind · Name` format
-- `detail` contains `id ` — task id label rendered
-- `detail` matches `id [a-f0-9-]{36}` — id field shows a UUID-shaped value
-- `detail` contains `status ` — status field label
-- `detail` contains `Completed` OR `Running` — status reflects monitor state at the moment of capture
-- `detail` contains `lines 5` — line count present (the 5-iteration loop takes ~10s; by the time you press Enter on the row it should be complete)
-- `detail` contains `command:` — command label
-- `detail` contains `for i in 1 2 3 4 5;` — full command shown (the list view truncates at row width; detail view shows the full string)
-- `detail` contains `Recent output tail:` — output section header
-- `detail` contains `[stdout] tick 1` — first output line with stream-tag prefix
-- `detail` contains `[stdout] tick 5` — last output line with stream-tag prefix (proves the tail isn't truncated for a 5-line run)
-
-Escape behavior — exits the entire panel:
-- `after_escape` not contains `Monitor · tr030-detail` — detail view gone
-- `after_escape` not contains `Recent output tail:` — detail content gone
-- `after_escape` not contains `Scheduling tasks in this session` — list view ALSO gone (Escape from detail does NOT bounce back to the list; it exits the panel entirely)
-
----
-
-## TR-031: Reading view visual selection → scoped patch hits the right section only
-
-The hardest reading-view regression class: selection state in the
-viewer must be passed to the agent as the patch scope, the agent must
-call `patch_document_section` / `update_document_section` with the
-correct `section_index`, and the patch must NOT touch adjacent
-sections. Single-pane smoke tests cannot catch wrong-section patching
-because the rendering may look fine while the JSONL shows scope drift.
-This test is the strongest cross-layer guard for reading view because
-it triangulates pane content, JSONL tool args, and pane-after-patch
-state.
-
-**Setup**: TR-003 setup + TR-001's reading-view precondition (both
-`[features] reading_view = true` AND `[reading_view] mode = "enabled"`
-in `~/.ata/config.toml`).
-
-**Action**:
-1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
-2. Poll up to 3 min until pane contains `Sections (n/p` (reader open). → capture `pre`.
-3. Press `v` to enter visual selection mode. Sleep 0.3.
-4. Press `l` 25 times (extends the selection ~25 characters across the section title). Sleep 0.3 between batches.
-5. Press `Tab` to enter ask-about mode. Sleep 0.3.
-6. Type `rewrite this to be shorter`; sleep 1; press `Enter`.
-7. Poll up to 3 min until pane shows the new content (proxy: section 1 text is visibly shorter than the original — easiest signal is `pre` contained the phrase `roasted coffee beans, which are the seeds of coffee cherries` and the post-patch capture does NOT). → capture `post`.
-8. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
-   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-   - `jq -r 'select(.payload.name=="patch_document_section" or .payload.name=="update_document_section") | .payload.arguments' "$SESS" > <patch_args>`. → capture `patch_args`.
-9. Cleanup: press `q` to close the reader.
-
-**Expect** (all must hold):
-
-Pane — patch landed in section 1 only:
-- `post` contains `Sections (n/p` — reader still open
-- `post` contains `Slide 1` — section 1 title still visible
-- `post` not contains `roasted coffee beans, which are the seeds of coffee cherries` — original section-1 long form is gone (proves it was actually rewritten)
-- `post` contains `Slide 2: Why People Drink It` — section 2 title unchanged
-- `post` contains `Slide 3: Common Brewing Styles` — section 3 title unchanged
-
-Tool routing:
-- `tool_counts` contains `present_reading_view` — reader was opened via the right tool
-- `tool_counts` contains `patch_document_section` OR `update_document_section` — at least one scoped-edit tool was used (the agent may use both, or just one, depending on whether it interprets the selection as a literal patch target or as scope context)
-- `tool_counts` not contains `apply_patch` — did NOT fall back to the raw apply-patch tool (which would bypass the section model and risk wrong-section edits)
-- `tool_counts` not contains `shell` — did NOT shell out
-
-Section scoping — the deep regression guard:
-- `patch_args` contains `"section_index": 0` OR `"section_index":0` — every scoped-edit call targeted section index 0 (Slide 1, zero-indexed)
-- `patch_args` not contains `"section_index": 1` — section 2 was untouched
-- `patch_args` not contains `"section_index": 2` — section 3 was untouched
-- `patch_args` contains `"document_id"` — argument shape includes a document id (proves the patch is scoped to this document, not the global namespace)
-
-Selection-text fidelity:
-- `patch_args` contains text from the user's selection (substring of `"Slide 1: What Coffee Is"`, e.g. `"Slide 1: What Coffee I"` reflecting the 25-char selection length) — proves the selected text actually reached the agent's prompt, not the whole section
-
----
-
-## TR-032: Reading view — agent adds a new section with the right tool
-
-Reading-view has 5 write tools (`present_reading_view`, `add_document_section`,
-`append_to_section`, `patch_document_section`, `update_document_section`).
-Each has different semantics; the agent must disambiguate based on the user's
-intent. This test verifies that "add a new section" routes specifically to
-`add_document_section` (NOT `patch` / `update`, which would mutate existing
-content), and that the new section is inserted at the right position with
-sections 1-3 untouched.
-
-**Setup**: TR-003 setup + TR-001's reading-view precondition.
-
-**Action**:
-1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
-2. Poll up to 3 min until pane contains `Sections (n/p` (reader open) AND `Slide 3` (third section rendered). → capture `pre`.
-3. Press `Tab` (from outside visual selection mode) to enter the ask prompt. Sleep 0.5.
-4. Type `add a slide 4 about espresso`; sleep 1; press `Enter`.
-5. Poll up to 3 min until pane contains `Slide 4` AND `4/4` (header section counter shows 4-of-4). → capture `post`.
-6. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
-   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-   - `jq -r 'select(.payload.name=="add_document_section") | .payload.arguments' "$SESS" > <add_args>`. → capture `add_args`.
-7. Cleanup: press `q` to close the reader.
-
-**Expect** (all must hold):
-
-Pane — new section inserted at the end:
-- `pre` contains `Slide 3` AND `Sections (n/p` — initial 3-section state
-- `pre` not contains `Slide 4` — section 4 didn't exist before
-- `post` contains `Slide 4` — new section visible
-- `post` contains `4/4` — header section counter updated from `1/3` (or wherever) to `4/4`
-- `post` contains `end of document` — slide 4 is now the last, so the bottom edge marker says end-of-document
-- `post` contains `Slide 1: What Coffee Is` — section 1 title preserved
-- `post` contains `Slide 2: Why People Drink It` — section 2 title preserved
-- `post` contains `Slide 3: Common Brewing Styles` — section 3 title preserved
-
-Tool routing:
-- `tool_counts` contains `present_reading_view` — initial open
-- `tool_counts` contains `add_document_section` — the dedicated add tool was used
-- `tool_counts` not contains `patch_document_section` — did NOT mutate existing content
-- `tool_counts` not contains `update_document_section` — did NOT replace an existing section
-- `tool_counts` not contains `append_to_section` — did NOT append to an existing section
-
-Argument fidelity — correct insertion point:
-- `add_args` contains `"after_section_index": 2` OR `"after_section_index":2` — insert after section index 2 (zero-indexed Slide 3); new section becomes index 3 (Slide 4)
-- `add_args` contains `"heading"` — heading argument present
-- `add_args` contains `Slide 4` OR `Espresso` — heading reflects the user's request
-- `add_args` contains `"content"` — content argument present
-- `add_args` contains `espresso` (case-insensitive substring) — content about the requested topic
-- `add_args` contains `"document_id"` — scoped to a document
-
----
-
-## TR-033: Reading view — agent picks append_to_section (NOT update_document_section)
-
-The trickiest reading-view tool disambiguation. `append_to_section` preserves
-existing content and adds new text at the end; `update_document_section`
-replaces the entire section. A user asking "add X to slide N" almost
-always wants append semantics — but a model may incorrectly call update
-with concatenated content, which works visually but is semantically
-wrong (it sends the entire section content as a fresh write every time,
-making any concurrent edits or partial-content history brittle).
-
-This is THE classic "rendering looks fine, wrong tool got called"
-regression that a pane-only test cannot catch.
-
-**Setup**: TR-003 setup + TR-001's reading-view precondition.
-
-**Action**:
-1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
-2. Poll up to 3 min until pane contains `Sections (n/p` AND `Slide 3`. → capture `pre`.
-3. Press `Tab` to enter ask mode. Sleep 0.5.
-4. Type `add a fun fact about coffee to the end of slide 1`; sleep 1; press `Enter`.
-5. Poll up to 3 min until the agent's patch is reflected — proxy: capture pane and check that `Fun fact` substring is now present somewhere.
-6. Navigate back to Slide 1: `tmux send-keys -t <new> p p p` (or until `1/3` / `1/4` shows in the header). Sleep 1.
-7. → capture `post`.
-8. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
-   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
-   - `jq -r 'select(.payload.name=="append_to_section") | .payload.arguments' "$SESS" > <append_args>`. → capture `append_args`.
-9. Cleanup: press `q` to close the reader.
-
-**Expect** (all must hold):
-
-Pane — original content preserved + new content appended:
-- `pre` contains `roasted` (substring of original Slide 1 content) — original exists
-- `post` contains `Slide 1: What Coffee Is` — title preserved
-- `post` contains `roasted` — ORIGINAL Slide 1 content preserved (this is the key append-vs-update predicate)
-- `post` contains `Fun fact` — new appended content present
-- `post` contains `Slide 2: Why People Drink It` — section 2 unchanged
-- `post` contains `Slide 3: Common Brewing Styles` — section 3 unchanged
-
-Tool routing — append, NOT update:
-- `tool_counts` contains `append_to_section` — correct append tool was used
-- `tool_counts` not contains `update_document_section` — did NOT replace the whole section
-- `tool_counts` not contains `patch_document_section` — did NOT use the find-and-replace patcher
-- `tool_counts` not contains `add_document_section` — did NOT add a new section
-
-Argument fidelity — right section, right scope:
-- `append_args` contains `"section_index": 0` OR `"section_index":0` — append targets Slide 1 (zero-indexed)
-- `append_args` not contains `"section_index": 1` — Slide 2 untouched
-- `append_args` not contains `"section_index": 2` — Slide 3 untouched
-- `append_args` contains `"content"` — content field present
-- `append_args` contains `Fun fact` OR `fun fact` — content reflects the user's "fun fact" request
-- `append_args` not contains `roasted` — content is ONLY the new fun fact, NOT a re-paste of the existing section (proves the agent used append semantics, not "update with concatenation")
-
----
-
-## TR-034: `@` file mention is path-injection, not content-injection
-
-A common user misconception: typing `@Cargo.toml` and sending must
-auto-attach the file's content to the agent's prompt. It does NOT.
-Tab-accepting the `@` completion inserts the literal filename as
-plain text into the composer; the user message that reaches the agent
-contains only the path string, no file content. The agent has to
-explicitly read the file via a tool call (`exec_command sed`, `read`,
-etc.) to actually inspect it. This test documents that invariant and
-catches two regression classes:
-
-1. False auto-attach: a future change "improves" @ mention by silently
-   attaching content. That might be a feature, but it must be intentional
-   and detectable — this test would catch the unannounced change.
-2. Lost path injection: a future change breaks the Tab-accept path so
-   the filename never reaches the user message at all (agent has nothing
-   to read).
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, type `@Cargo` (no Enter yet); sleep 0.5. Picker should show matches.
-2. Press `Tab` to accept the top match (`Cargo.toml`); sleep 0.3.
-3. Type ` explain this file` (space + question); sleep 0.5.
-4. Press `Enter`. Sleep 1.
-5. Poll up to 3 min until pane contains `[workspace]` OR `workspace members` OR a clear sign the agent actually read the file (ata-specific terms like `reading-view-server`, `scheduling`, `codex-workspace`).
-6. → capture `response`.
-7. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
-   - `grep -o '"text":"[^"]*Cargo[^"]*"' "$SESS" | head -1 > <user_msg>` → capture `user_msg`.
-   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>` → capture `tool_counts`.
-   - `jq -r 'select(.payload.name=="exec_command") | .payload.arguments' "$SESS" > <exec_args>` → capture `exec_args`.
-
-**Expect** (all must hold):
-
-User message — path string is what reaches the agent:
-- `user_msg` contains `Cargo.toml explain this file` — literal filename + question
-- `user_msg` not contains `[workspace]` — the FILE CONTENT was NOT injected into the user message (this is the headline invariant)
-- `user_msg` not contains `[patch.crates-io]` — same: no content auto-attached
-- `user_msg` not contains `serde =` — same: no inline manifest dependencies
-
-Agent — must read the file via a tool to answer:
-- `tool_counts` contains `exec_command` OR a dedicated read-file tool — the agent went and read the file itself
-- `exec_args` contains `Cargo.toml` — the read call targeted the right file
-
-Pane — response cites ata-specific Cargo.toml content (proves the read actually happened):
-- `response` contains `reading-view-server` OR `scheduling` OR `codex-workspace` — names that only exist in ata's Cargo.toml, not a hallucinated generic manifest
-- `response` contains `Cargo.toml` — the file is named in the response
-
----
-
-## TR-035: Multi-source synthesis — agent uses BOTH papers and Hacker News (direct calls or sub-agents)
-
-TR-021 verified that a single-source HN prompt routes to `hn_search`.
-This test extends to a *two-source* prompt that legitimately requires
-BOTH academic and practitioner sources. The failure mode it catches:
-the agent picks one source, silently drops the other, and writes a
-plausible-looking answer with vague references to the missed source.
-
-A key empirical finding from authoring this test: ata's multi-source
-strategy is often NOT "call two skills directly". For complex queries
-the main agent spawns sub-agents (one per source / per thread) via
-`spawn_agent` + `wait_agent`, and only the main session shows the
-orchestration — the underlying `hn_search` / `web_search` calls live
-inside each sub-agent's session. Predicates therefore accept either
-pattern: direct skill calls in the main session, OR sub-agent
-delegation with evidence of both sources reached.
-
-**Setup**: TR-003 setup.
-
-**Action**:
-1. In ata, send: `find recent papers on Rust async performance and check Hacker News for related discussion`. Sleep 1; `Enter`.
-2. Poll up to 10 minutes (this can be slow — multi-skill orchestration, sub-agent boots, MCP servers) until pane contains a clear synthesis signal: either a reading-view banner like `Papers and HN Signal` / `Papers and HN` / a `1/6` section counter on the final synthesis document, OR an inline response that mentions both `Hacker News` AND `paper`.
-3. → capture `response`.
-4. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -15 | xargs ls -t | head -1)`
-   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>` → capture `tool_counts`.
-   - `ls ~/.ata/workspaces/global/knowledge-base/staging/ 2>/dev/null > <staging>` → capture `staging` (sub-agent output dir).
-
-**Expect** (all must hold — the "OR" predicates accept either pattern):
-
-Response content — both sources actually contributed:
-- `response` contains `Hacker News` OR `HN Signal` — practitioner source represented in a section title or body
-- `response` contains `Paper` OR `literature` OR `academic` — academic source represented
-- `response` contains `Bottom Line` — synthesis includes a unified bottom-line section (the typical multi-source synthesis pattern)
-- `response` not contains `I couldn't find any` — the agent didn't bail on either source
-- `response` not contains `no results` — same
-- `response` contains a numbered TOC entry that's HN-specific (e.g. `Hacker News Signal`) AND a numbered TOC entry that's paper-specific (e.g. `Paper Landscape` / `Recent Paper`) — proves the synthesis dedicated section structure to each source, not just lip service
-
-Tool routing — either direct calls OR sub-agent orchestration:
-- `tool_counts` contains `paper_search` OR `spawn_agent` — academic side was either searched directly or delegated
-- `tool_counts` contains `hn_search` OR `spawn_agent` — HN side same
-- `tool_counts` not contains `shell` — did NOT shell out via `curl https://news.ycombinator.com` (a fallback regression)
-
-Sub-agent evidence (if delegation route was taken):
-- Either `tool_counts` contains `hn_search` (direct route, no delegation needed) OR `staging` contains `hn-` (sub-agent delegation route — `hn-<thread-id>.md` staging notes were produced and saved to `~/.ata/workspaces/global/knowledge-base/staging/`)
-
-(Note: this is intentionally a permissive predicate set. The point is to assert "both sources contributed", not to mandate one orchestration strategy. A future refactor that changes from direct calls to sub-agents — or vice versa — should still pass.)
-
----
-
-## TR-036: Reading view navigation — n/p, t (TOC), and TOC jump
-
-Reading view's section navigation has three modes that intersect:
-section-level (`n`/`p`), TOC overlay (`t`), and intra-section scroll
-(`j`/`k`). Each can break independently and silently. This test exercises
-all of them on a single multi-section document, plus the read-indicator
-(`✓`) state machine, plus header boundary affordances (no `◀` at section
-1, no `▶` at the last section).
-
-**Setup**: TR-003 setup + TR-001's reading-view precondition. Use a
-6-section document for full nav coverage (TR-035's synthesis output
-naturally produces one — alternatively, ask: `give me 6 short slides on
-Rust async performance in reading view`).
-
-**Action**:
-1. Open a 6-section reading view (per Setup).
-2. Wait for `1/6` in the header. → capture `at_1`.
-3. Press `n`; sleep 0.5. → capture `at_2`.
-4. Press `p`; sleep 0.5. → capture `back_at_1`.
-5. Press `t`; sleep 0.5. → capture `toc_open`.
-6. Press `j j j Enter`; sleep 0.5. → capture `jumped_to_4`.
-7. Press `n n n`; sleep 1 (advance to the last section). → capture `at_last`.
-8. Cleanup: press `q` to close the reader.
-
-**Expect** (all must hold):
-
-Section navigation:
-- `at_1` contains `1/6 ▶` — header shows position + right arrow (more sections forward)
-- `at_1` not contains `◀ 1/6` — no left arrow at section 1 (boundary affordance)
-- `at_2` contains `◀ 2/6 ▶` — header now shows both arrows (sections in both directions)
-- `back_at_1` contains `1/6 ▶` — back at section 1 cleanly
-- `at_last` contains `◀ 6/6` — at the last section, header shows only left arrow
-- `at_last` not contains `6/6 ▶` — no right arrow at the last section (boundary affordance)
-
-TOC overlay:
-- `toc_open` contains `Table of Contents` — dedicated TOC view rendered (not just the inline TOC at the bottom of section 1)
-- `toc_open` contains `j/k to navigate | Enter to jump | t/Esc to dismiss` — TOC has its own help footer
-- `toc_open` contains `▶ 1. Bottom Line` OR `▶ 1. ` — current section marked with `▶`
-
-TOC jump:
-- `jumped_to_4` contains `4/6` — landed on section 4 after `j j j Enter`
-- `jumped_to_4` not contains `Table of Contents` — TOC overlay dismissed by the jump
-- `jumped_to_4` contains a section-4-specific term (e.g. `Hacker News Signal` for TR-035's output, or whatever the section-4 title is) — actually rendered the target section
-
-Read indicators:
-- `back_at_1` contains `✓ 2. ` — section 2 marked as read after visiting it
-- `at_last` contains `✓ 4. ` — section 4 also marked (visited via TOC jump)
-
----
-
-## TR-037: Tab-to-ask in a reader section produces a scoped, foldable inline answer
-
-When the user is reading a section and presses Tab to ask a follow-up,
-ata's design is: agent receives ONLY this section as context, answer
-gets appended INTO that section as a foldable Q&A subsection, and the
-user's question does NOT render as a chat bubble. Three layers
-intersect: pane (foldable `[-]` block visible with the answer), reader
-state (footer gains the `f: fold` key), and protocol (the
-`append_to_section` call has `foldable: true` and `section_index`
-matching the focused section).
-
-This is THE strongest reading-view regression guard because the entire
-inline-Q&A pipeline collapses if any one piece breaks: wrong section
-context = wrong answer; wrong patch target = answer in wrong section;
-`foldable: false` = the Q&A is permanently expanded; `foldable: true`
-on the wrong section_index = silent corruption.
-
-**Setup**: TR-003 setup + TR-001's reading-view precondition. Reader
-open on a multi-section document with content that supports a clearly
-section-scoped question. The cleanest setup: run TR-035 first (produces
-a `rust-async-performance-papers-hn` synthesis with HN data in section
-4), then navigate to section 4. Alternative: any 3+ section document
-where section N has a fact that's NOT in sections 1..N-1.
-
-**Action**:
-1. Open the reading view per Setup.
-2. Navigate to a specific section using `n`/`p` (or TOC jump). For the
-   TR-035-based setup: `t`, then `j j j Enter` to land on section 4
-   "Hacker News Signal". → capture `pre`.
-3. Press `Tab` to enter ask mode. Sleep 0.5.
-4. Type a section-scoped question. For TR-035's section 4: `which thread on this page had the most upvotes?`. Sleep 1.
-5. Press `Enter`. Sleep 1.
-6. Poll up to 2 min until the section's content visibly changes (pane contains the answer phrase, e.g. `most-upvoted` or `446 points` for TR-035's section 4).
-7. → capture `post`.
-8. Inspect session JSONL:
-   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
-   - `jq -c 'select(.payload.name=="append_to_section") | .payload.arguments' "$SESS" | tail -1 > <append_args>` → capture `append_args` (the most recent append, which should be the Tab-ask one).
-
-**Expect** (all must hold):
-
-Pane — answer rendered inline with the right structure:
-- `post` contains the correct factual answer for the section's content. For TR-035's section 4: `Async Rust never left the MVP state` AND `446 points`.
-- `post` contains `┊` — left-margin indicator on the foldable Q&A block
-- `post` contains `[-]` OR `[+]` — foldable marker on the Q&A heading
-- `post` contains `f: fold` — help footer gained the fold key (proves dynamic key registration when a foldable element appears)
-- `post` not contains `› which thread on this page` — user's question NOT rendered as a chat bubble (the TR-002 inline-only invariant carries over)
-- `post` not contains `[The user is reading` — system-prompt wrapper didn't leak
-- `post` not contains `<!-- READER_TOOL_INSTRUCTIONS` — instructions block didn't leak
-
-Protocol — append targeted the right section as a foldable Q&A:
-- `append_args` contains `"foldable":true` OR `"foldable": true` — Tab-ask path produces foldable Q&A entries (NOT the `foldable: false` that explicit content additions use, like TR-033's fun-fact)
-- `append_args` contains the correct `section_index` for the section the user was on (e.g. `"section_index": 3` OR `"section_index":3` for section 4 in TR-035's doc)
-- `append_args` not contains `"section_index": 0` — section 1 was NOT touched (proves scope respected)
-- `append_args` contains a `"content"` field with the answer text — the answer payload is in the patch, not just generated client-side
-- `append_args` contains a `"summary"` field — Tab-ask path generates summaries for collapsed view
-- `append_args` contains `"document_id"` — scoped to the right document
 
 ---
 
@@ -2573,6 +1608,442 @@ Note: do not test `/goal` on builds without the feature flag. "Unrecognized comm
 
 ---
 
+
+# Group 4: Reading view
+
+## TR-001: Reading view survives a resize cycle
+
+This is the canonical regression test for the v0.129.0 merge resize-corruption
+bug. It opens a reading view, shrinks the pane, grows it back, and verifies
+that no welcome-banner / chat-composer cells leak into the reader.
+
+**Setup**:
+0. Precondition: reading view is gated by two config flags in
+   `~/.ata/config.toml` that must BOTH be set. Verify and flip if needed:
+   ```toml
+   [features]
+   reading_view = true
+
+   [reading_view]
+   mode = "enabled"
+   ```
+   Without both, ata replies in chat instead of opening a reader and step 6 polls forever. (This precondition applies to TR-001, TR-002, TR-008, and TR-009 — all reading-view tests share this setup.)
+1. `cd "$ATA_REPO/codex-rs" && cargo build -p codex-cli` and confirm the binary at
+   `$ATA_REPO/codex-rs/target/debug/ata` is newer than `tui/src/tui.rs`.
+2. Find the user's tmux session/window via `tmux list-clients` +
+   `tmux display-message`.
+3. Record the original pane width as `BASE_W` (typically 200+).
+4. `tmux split-window -h -t <session>:<window>.<pane> -c "$ATA_REPO/codex-rs" './target/debug/ata --yolo'`.
+   Wait until `tmux capture-pane -t <new> -p` contains `OpenAI Codex (v`.
+5. `tmux send-keys -t <new> "give me 2 short slides on coffee in reading view, don't use any skills"` then sleep 1, then `tmux send-keys -t <new> Enter`.
+6. Poll `tmux capture-pane -t <new> -p` every 6s until it contains
+   `Sections (n/p`. This can take up to 3 minutes.
+
+**Action**:
+1. `tmux capture-pane -t <new> -p > <baseline_capture>`.
+   → capture `baseline`.
+2. `tmux resize-pane -t <new> -x 70`, then sleep 4.
+   (Multi-frame repaint needs ~200ms; 4s leaves a wide margin.)
+   **Detached-session note**: `resize-pane -x` is a no-op on a session
+   with no attached client (its size is governed by the window). For
+   detached runs use `tmux resize-window -t <session> -x 70 -y 50`
+   instead — the inner pane will reflow.
+3. `tmux capture-pane -t <new> -p > <narrow_capture>`.
+   → capture `narrow`.
+4. `tmux resize-pane -t <new> -x $BASE_W`, then sleep 4.
+   (Same detached-session caveat: use `resize-window -x $BASE_W -y 50`.)
+5. `tmux capture-pane -t <new> -p > <restored_capture>`.
+   → capture `restored`.
+6. `tmux send-keys -t <new> "q"` to close the reader (cleanup).
+7. `tmux kill-pane -t <new>`.
+
+**Expect** (every predicate must hold):
+- `baseline` contains `Sections (n/p`
+- `baseline` row 1 starts with `╭`
+- `narrow` contains `Sections (n/p`
+- `narrow` not contains `OpenAI Codex (v`
+- `narrow` not contains `/model to change`
+- `narrow` not contains `directory:   ~/`
+- `narrow` not contains `Tip: New For a limited time`
+- `narrow` row 1 starts with `╭`
+- `narrow` row 1 ends with `╮`
+- `restored` contains `Sections (n/p`
+- `restored` not contains `OpenAI Codex (v`
+- `restored` not contains `/model to change`
+- `restored` not contains `directory:   ~/`
+- `restored` not contains `Tip: New For a limited time`
+- `restored` row 1 starts with `╭`
+- `restored` row 1 ends with `╮`
+
+---
+
+## TR-002: Tab-to-ask response stays inline in the reader
+
+When the user is in the reading view and presses Tab to ask a follow-up,
+the agent is supposed to answer by patching the section (via
+`patch_document_section` / `append_to_section`) — the answer should appear
+**inside the reader**, not as a chat bubble above it. This test verifies
+the inline-response path is wired and the system-prompt wrappers don't
+leak into chat.
+
+**Setup**: identical to TR-001 Setup steps 1–6 (build, split a pane, send the
+prompt, wait for `Sections (n/p`).
+
+**Action**:
+1. `tmux capture-pane -t <new> -p > <pre_capture>`.
+   → capture `pre`.
+2. Pick a question whose answer should clearly extend the current section.
+   For the coffee-slides prompt, use:
+   `what is the caffeine content of a typical cup?`
+3. `tmux send-keys -t <new> Tab`, sleep 1, then `tmux send-keys -t <new> "<question>"`, sleep 1, then `tmux send-keys -t <new> Enter`.
+4. Poll `tmux capture-pane -t <new> -p` every 6s, up to 3 minutes. Stop when
+   the capture contains the word `caffeine` AND no longer contains
+   `Tab: ask` on the same line as `q: close` is **absent or unchanged**.
+   (Simpler proxy: stop when the section content visibly differs from
+   `pre`.)
+5. `tmux capture-pane -t <new> -p > <post_capture>`.
+   → capture `post`.
+6. Cleanup: `tmux send-keys -t <new> "q"`, then `tmux kill-pane -t <new>`.
+
+**Expect** (every predicate must hold):
+- `post` contains `caffeine` — the agent's answer mentioned the topic
+- `post` not contains `[The user is reading` — system prompt didn't leak
+- `post` not contains `<!-- READER_TOOL_INSTRUCTIONS` — instructions block didn't leak
+- `post` not contains `The user selected specific text from the section` — selection variant prompt didn't leak
+- `post` not contains `› what is the caffeine content` — the user's question didn't render as a chat bubble (would be a regression of the Tab-question-hide fix)
+- `post` row 1 starts with `╭` — reader frame still intact
+- `post` row 1 ends with `╮`
+- `post` contains `Sections (n/p` — sections list still rendered
+
+---
+
+## TR-008: Reader close + chat doesn't garble
+
+This regression-tests the v0.129.0 bug where after pressing `q` to close
+the reader, chat would render jumbled escape sequences.
+
+**Setup**: TR-001 setup (reader open) + reader open with `Sections (n/p` visible.
+
+### Scenario A: baseline — q closes reader, chat resumes cleanly
+1. `tmux send-keys -t <new> Escape`; sleep 0.5; `q`; sleep 2. → `post_close`.
+2. `tmux send-keys -t <new> "reply with just OK"`; sleep 1; `Enter`.
+3. Poll until `^• OK\b`. → `post_chat`.
+
+**Expect**:
+- `post_close` contains `Agent showed document:` and NOT `Sections (n/p`
+- `post_chat` contains `• OK` and NOT any of `╭ ╮ ╯ ╰` from a leftover reader frame
+
+### Scenario B: Esc does NOT close the reader
+1. From the reader in normal mode (no visual selection, no help overlay).
+2. `tmux send-keys -t <new> Escape`; sleep 1. → `out`.
+
+**Expect**:
+- `out` STILL shows the reader frame and section header
+- Esc has no effect on the reader in normal mode (it's reserved for cancelling sub-modes like visual select)
+
+### Scenario C: Ctrl+C also closes the reader
+1. From the reader in normal mode.
+2. `tmux send-keys -t <new> C-c`; sleep 2. → `out`.
+
+**Expect**:
+- `out` contains `Agent showed document:` (reader closed, same as `q`)
+- Ctrl+C is an equivalent close key — useful when keyboard focus is unclear
+
+### Scenario D: `q` from visual select mode closes reader directly (selection dropped)
+1. Open reader.
+2. `tmux send-keys -t <new> v`; sleep 0.5. (enter visual select)
+3. `tmux send-keys -t <new> j`; `j`; sleep 0.5. (extend selection)
+4. `tmux send-keys -t <new> q`; sleep 2. → `out`.
+
+**Expect**:
+- `out` contains `Agent showed document:` (reader closed)
+- The visual selection is silently dropped — `q` does NOT first dismiss visual mode and require a second `q`
+- No `[The user selected...]` system message in session JSONL — the selection never reached the agent
+
+### Scenario E: closing reader injects a system follow-up prompt to the agent
+1. Open reader, optionally scroll/read sections, then `q`.
+2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -3`.
+
+**Expect**:
+- JSONL contains `[The user closed the document reader for "<title>". They viewed N of M sections.] Check whether follow-up Q&A during this ...` as a user message
+- This prompt is NOT in Up-arrow history (covered by TR-009)
+- It triggers a silent follow-up agent turn that usually produces no visible output
+
+---
+
+## TR-031: Reading view visual selection → scoped patch hits the right section only
+
+The hardest reading-view regression class: selection state in the
+viewer must be passed to the agent as the patch scope, the agent must
+call `patch_document_section` / `update_document_section` with the
+correct `section_index`, and the patch must NOT touch adjacent
+sections. Single-pane smoke tests cannot catch wrong-section patching
+because the rendering may look fine while the JSONL shows scope drift.
+This test is the strongest cross-layer guard for reading view because
+it triangulates pane content, JSONL tool args, and pane-after-patch
+state.
+
+**Setup**: TR-003 setup + TR-001's reading-view precondition (both
+`[features] reading_view = true` AND `[reading_view] mode = "enabled"`
+in `~/.ata/config.toml`).
+
+**Action**:
+1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
+2. Poll up to 3 min until pane contains `Sections (n/p` (reader open). → capture `pre`.
+3. Press `v` to enter visual selection mode. Sleep 0.3.
+4. Press `l` 25 times (extends the selection ~25 characters across the section title). Sleep 0.3 between batches.
+5. Press `Tab` to enter ask-about mode. Sleep 0.3.
+6. Type `rewrite this to be shorter`; sleep 1; press `Enter`.
+7. Poll up to 3 min until pane shows the new content (proxy: section 1 text is visibly shorter than the original — easiest signal is `pre` contained the phrase `roasted coffee beans, which are the seeds of coffee cherries` and the post-patch capture does NOT). → capture `post`.
+8. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
+   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+   - `jq -r 'select(.payload.name=="patch_document_section" or .payload.name=="update_document_section") | .payload.arguments' "$SESS" > <patch_args>`. → capture `patch_args`.
+9. Cleanup: press `q` to close the reader.
+
+**Expect** (all must hold):
+
+Pane — patch landed in section 1 only:
+- `post` contains `Sections (n/p` — reader still open
+- `post` contains `Slide 1` — section 1 title still visible
+- `post` not contains `roasted coffee beans, which are the seeds of coffee cherries` — original section-1 long form is gone (proves it was actually rewritten)
+- `post` contains `Slide 2: Why People Drink It` — section 2 title unchanged
+- `post` contains `Slide 3: Common Brewing Styles` — section 3 title unchanged
+
+Tool routing:
+- `tool_counts` contains `present_reading_view` — reader was opened via the right tool
+- `tool_counts` contains `patch_document_section` OR `update_document_section` — at least one scoped-edit tool was used (the agent may use both, or just one, depending on whether it interprets the selection as a literal patch target or as scope context)
+- `tool_counts` not contains `apply_patch` — did NOT fall back to the raw apply-patch tool (which would bypass the section model and risk wrong-section edits)
+- `tool_counts` not contains `shell` — did NOT shell out
+
+Section scoping — the deep regression guard:
+- `patch_args` contains `"section_index": 0` OR `"section_index":0` — every scoped-edit call targeted section index 0 (Slide 1, zero-indexed)
+- `patch_args` not contains `"section_index": 1` — section 2 was untouched
+- `patch_args` not contains `"section_index": 2` — section 3 was untouched
+- `patch_args` contains `"document_id"` — argument shape includes a document id (proves the patch is scoped to this document, not the global namespace)
+
+Selection-text fidelity:
+- `patch_args` contains text from the user's selection (substring of `"Slide 1: What Coffee Is"`, e.g. `"Slide 1: What Coffee I"` reflecting the 25-char selection length) — proves the selected text actually reached the agent's prompt, not the whole section
+
+---
+
+## TR-032: Reading view — agent adds a new section with the right tool
+
+Reading-view has 5 write tools (`present_reading_view`, `add_document_section`,
+`append_to_section`, `patch_document_section`, `update_document_section`).
+Each has different semantics; the agent must disambiguate based on the user's
+intent. This test verifies that "add a new section" routes specifically to
+`add_document_section` (NOT `patch` / `update`, which would mutate existing
+content), and that the new section is inserted at the right position with
+sections 1-3 untouched.
+
+**Setup**: TR-003 setup + TR-001's reading-view precondition.
+
+**Action**:
+1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
+2. Poll up to 3 min until pane contains `Sections (n/p` (reader open) AND `Slide 3` (third section rendered). → capture `pre`.
+3. Press `Tab` (from outside visual selection mode) to enter the ask prompt. Sleep 0.5.
+4. Type `add a slide 4 about espresso`; sleep 1; press `Enter`.
+5. Poll up to 3 min until pane contains `Slide 4` AND `4/4` (header section counter shows 4-of-4). → capture `post`.
+6. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
+   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+   - `jq -r 'select(.payload.name=="add_document_section") | .payload.arguments' "$SESS" > <add_args>`. → capture `add_args`.
+7. Cleanup: press `q` to close the reader.
+
+**Expect** (all must hold):
+
+Pane — new section inserted at the end:
+- `pre` contains `Slide 3` AND `Sections (n/p` — initial 3-section state
+- `pre` not contains `Slide 4` — section 4 didn't exist before
+- `post` contains `Slide 4` — new section visible
+- `post` contains `4/4` — header section counter updated from `1/3` (or wherever) to `4/4`
+- `post` contains `end of document` — slide 4 is now the last, so the bottom edge marker says end-of-document
+- `post` contains `Slide 1: What Coffee Is` — section 1 title preserved
+- `post` contains `Slide 2: Why People Drink It` — section 2 title preserved
+- `post` contains `Slide 3: Common Brewing Styles` — section 3 title preserved
+
+Tool routing:
+- `tool_counts` contains `present_reading_view` — initial open
+- `tool_counts` contains `add_document_section` — the dedicated add tool was used
+- `tool_counts` not contains `patch_document_section` — did NOT mutate existing content
+- `tool_counts` not contains `update_document_section` — did NOT replace an existing section
+- `tool_counts` not contains `append_to_section` — did NOT append to an existing section
+
+Argument fidelity — correct insertion point:
+- `add_args` contains `"after_section_index": 2` OR `"after_section_index":2` — insert after section index 2 (zero-indexed Slide 3); new section becomes index 3 (Slide 4)
+- `add_args` contains `"heading"` — heading argument present
+- `add_args` contains `Slide 4` OR `Espresso` — heading reflects the user's request
+- `add_args` contains `"content"` — content argument present
+- `add_args` contains `espresso` (case-insensitive substring) — content about the requested topic
+- `add_args` contains `"document_id"` — scoped to a document
+
+---
+
+## TR-033: Reading view — agent picks append_to_section (NOT update_document_section)
+
+The trickiest reading-view tool disambiguation. `append_to_section` preserves
+existing content and adds new text at the end; `update_document_section`
+replaces the entire section. A user asking "add X to slide N" almost
+always wants append semantics — but a model may incorrectly call update
+with concatenated content, which works visually but is semantically
+wrong (it sends the entire section content as a fresh write every time,
+making any concurrent edits or partial-content history brittle).
+
+This is THE classic "rendering looks fine, wrong tool got called"
+regression that a pane-only test cannot catch.
+
+**Setup**: TR-003 setup + TR-001's reading-view precondition.
+
+**Action**:
+1. In ata, send: `give me 3 short slides on coffee in reading view, don't use any skills`. Sleep 1; `Enter`.
+2. Poll up to 3 min until pane contains `Sections (n/p` AND `Slide 3`. → capture `pre`.
+3. Press `Tab` to enter ask mode. Sleep 0.5.
+4. Type `add a fun fact about coffee to the end of slide 1`; sleep 1; press `Enter`.
+5. Poll up to 3 min until the agent's patch is reflected — proxy: capture pane and check that `Fun fact` substring is now present somewhere.
+6. Navigate back to Slide 1: `tmux send-keys -t <new> p p p` (or until `1/3` / `1/4` shows in the header). Sleep 1.
+7. → capture `post`.
+8. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
+   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+   - `jq -r 'select(.payload.name=="append_to_section") | .payload.arguments' "$SESS" > <append_args>`. → capture `append_args`.
+9. Cleanup: press `q` to close the reader.
+
+**Expect** (all must hold):
+
+Pane — original content preserved + new content appended:
+- `pre` contains `roasted` (substring of original Slide 1 content) — original exists
+- `post` contains `Slide 1: What Coffee Is` — title preserved
+- `post` contains `roasted` — ORIGINAL Slide 1 content preserved (this is the key append-vs-update predicate)
+- `post` contains `Fun fact` — new appended content present
+- `post` contains `Slide 2: Why People Drink It` — section 2 unchanged
+- `post` contains `Slide 3: Common Brewing Styles` — section 3 unchanged
+
+Tool routing — append, NOT update:
+- `tool_counts` contains `append_to_section` — correct append tool was used
+- `tool_counts` not contains `update_document_section` — did NOT replace the whole section
+- `tool_counts` not contains `patch_document_section` — did NOT use the find-and-replace patcher
+- `tool_counts` not contains `add_document_section` — did NOT add a new section
+
+Argument fidelity — right section, right scope:
+- `append_args` contains `"section_index": 0` OR `"section_index":0` — append targets Slide 1 (zero-indexed)
+- `append_args` not contains `"section_index": 1` — Slide 2 untouched
+- `append_args` not contains `"section_index": 2` — Slide 3 untouched
+- `append_args` contains `"content"` — content field present
+- `append_args` contains `Fun fact` OR `fun fact` — content reflects the user's "fun fact" request
+- `append_args` not contains `roasted` — content is ONLY the new fun fact, NOT a re-paste of the existing section (proves the agent used append semantics, not "update with concatenation")
+
+---
+
+## TR-036: Reading view navigation — n/p, t (TOC), and TOC jump
+
+Reading view's section navigation has three modes that intersect:
+section-level (`n`/`p`), TOC overlay (`t`), and intra-section scroll
+(`j`/`k`). Each can break independently and silently. This test exercises
+all of them on a single multi-section document, plus the read-indicator
+(`✓`) state machine, plus header boundary affordances (no `◀` at section
+1, no `▶` at the last section).
+
+**Setup**: TR-003 setup + TR-001's reading-view precondition. Use a
+6-section document for full nav coverage (TR-035's synthesis output
+naturally produces one — alternatively, ask: `give me 6 short slides on
+Rust async performance in reading view`).
+
+**Action**:
+1. Open a 6-section reading view (per Setup).
+2. Wait for `1/6` in the header. → capture `at_1`.
+3. Press `n`; sleep 0.5. → capture `at_2`.
+4. Press `p`; sleep 0.5. → capture `back_at_1`.
+5. Press `t`; sleep 0.5. → capture `toc_open`.
+6. Press `j j j Enter`; sleep 0.5. → capture `jumped_to_4`.
+7. Press `n n n`; sleep 1 (advance to the last section). → capture `at_last`.
+8. Cleanup: press `q` to close the reader.
+
+**Expect** (all must hold):
+
+Section navigation:
+- `at_1` contains `1/6 ▶` — header shows position + right arrow (more sections forward)
+- `at_1` not contains `◀ 1/6` — no left arrow at section 1 (boundary affordance)
+- `at_2` contains `◀ 2/6 ▶` — header now shows both arrows (sections in both directions)
+- `back_at_1` contains `1/6 ▶` — back at section 1 cleanly
+- `at_last` contains `◀ 6/6` — at the last section, header shows only left arrow
+- `at_last` not contains `6/6 ▶` — no right arrow at the last section (boundary affordance)
+
+TOC overlay:
+- `toc_open` contains `Table of Contents` — dedicated TOC view rendered (not just the inline TOC at the bottom of section 1)
+- `toc_open` contains `j/k to navigate | Enter to jump | t/Esc to dismiss` — TOC has its own help footer
+- `toc_open` contains `▶ 1. Bottom Line` OR `▶ 1. ` — current section marked with `▶`
+
+TOC jump:
+- `jumped_to_4` contains `4/6` — landed on section 4 after `j j j Enter`
+- `jumped_to_4` not contains `Table of Contents` — TOC overlay dismissed by the jump
+- `jumped_to_4` contains a section-4-specific term (e.g. `Hacker News Signal` for TR-035's output, or whatever the section-4 title is) — actually rendered the target section
+
+Read indicators:
+- `back_at_1` contains `✓ 2. ` — section 2 marked as read after visiting it
+- `at_last` contains `✓ 4. ` — section 4 also marked (visited via TOC jump)
+
+---
+
+## TR-037: Tab-to-ask in a reader section produces a scoped, foldable inline answer
+
+When the user is reading a section and presses Tab to ask a follow-up,
+ata's design is: agent receives ONLY this section as context, answer
+gets appended INTO that section as a foldable Q&A subsection, and the
+user's question does NOT render as a chat bubble. Three layers
+intersect: pane (foldable `[-]` block visible with the answer), reader
+state (footer gains the `f: fold` key), and protocol (the
+`append_to_section` call has `foldable: true` and `section_index`
+matching the focused section).
+
+This is THE strongest reading-view regression guard because the entire
+inline-Q&A pipeline collapses if any one piece breaks: wrong section
+context = wrong answer; wrong patch target = answer in wrong section;
+`foldable: false` = the Q&A is permanently expanded; `foldable: true`
+on the wrong section_index = silent corruption.
+
+**Setup**: TR-003 setup + TR-001's reading-view precondition. Reader
+open on a multi-section document with content that supports a clearly
+section-scoped question. The cleanest setup: run TR-035 first (produces
+a `rust-async-performance-papers-hn` synthesis with HN data in section
+4), then navigate to section 4. Alternative: any 3+ section document
+where section N has a fact that's NOT in sections 1..N-1.
+
+**Action**:
+1. Open the reading view per Setup.
+2. Navigate to a specific section using `n`/`p` (or TOC jump). For the
+   TR-035-based setup: `t`, then `j j j Enter` to land on section 4
+   "Hacker News Signal". → capture `pre`.
+3. Press `Tab` to enter ask mode. Sleep 0.5.
+4. Type a section-scoped question. For TR-035's section 4: `which thread on this page had the most upvotes?`. Sleep 1.
+5. Press `Enter`. Sleep 1.
+6. Poll up to 2 min until the section's content visibly changes (pane contains the answer phrase, e.g. `most-upvoted` or `446 points` for TR-035's section 4).
+7. → capture `post`.
+8. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`
+   - `jq -c 'select(.payload.name=="append_to_section") | .payload.arguments' "$SESS" | tail -1 > <append_args>` → capture `append_args` (the most recent append, which should be the Tab-ask one).
+
+**Expect** (all must hold):
+
+Pane — answer rendered inline with the right structure:
+- `post` contains the correct factual answer for the section's content. For TR-035's section 4: `Async Rust never left the MVP state` AND `446 points`.
+- `post` contains `┊` — left-margin indicator on the foldable Q&A block
+- `post` contains `[-]` OR `[+]` — foldable marker on the Q&A heading
+- `post` contains `f: fold` — help footer gained the fold key (proves dynamic key registration when a foldable element appears)
+- `post` not contains `› which thread on this page` — user's question NOT rendered as a chat bubble (the TR-002 inline-only invariant carries over)
+- `post` not contains `[The user is reading` — system-prompt wrapper didn't leak
+- `post` not contains `<!-- READER_TOOL_INSTRUCTIONS` — instructions block didn't leak
+
+Protocol — append targeted the right section as a foldable Q&A:
+- `append_args` contains `"foldable":true` OR `"foldable": true` — Tab-ask path produces foldable Q&A entries (NOT the `foldable: false` that explicit content additions use, like TR-033's fun-fact)
+- `append_args` contains the correct `section_index` for the section the user was on (e.g. `"section_index": 3` OR `"section_index":3` for section 4 in TR-035's doc)
+- `append_args` not contains `"section_index": 0` — section 1 was NOT touched (proves scope respected)
+- `append_args` contains a `"content"` field with the answer text — the answer payload is in the patch, not just generated client-side
+- `append_args` contains a `"summary"` field — Tab-ask path generates summaries for collapsed view
+- `append_args` contains `"document_id"` — scoped to the right document
+
+---
+
 ## TR-049: Reading view — vim-style scroll within a section
 
 Reader supports vim-style scrolling within a section. The `?` help
@@ -2965,6 +2436,788 @@ predicates flip and become positive.
 - The full footer (which DOES list `r: read`) is in `help_closed` not in `help` — the bottom footer documents more bindings than the help overlay does
 
 ---
+
+
+# Group 5: Scheduling
+
+## TR-023: /scheduling empty panel opens, dismisses, chat survives
+
+Opens the `/scheduling` panel on a session with no cron/monitor tasks
+and verifies the empty state renders correctly, Escape dismisses the
+panel cleanly, and the chat composer still accepts input afterward. The
+"dismiss + chat round-trip" half is the deep regression guard — if the
+panel leaves frame cells or focus state behind on close, the next
+message gets garbled (same failure mode TR-008 guards against for the
+reading view).
+
+**Setup**: TR-003 setup on a session with no scheduling tasks (a fresh
+ata launch is always empty).
+
+**Action**:
+1. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+2. → capture `panel`.
+3. `tmux send-keys -t <new> Escape`; sleep 1.
+4. `tmux send-keys -t <new> "say ok"`; sleep 1; `Enter`.
+5. Poll up to 60s until `tmux capture-pane -t <new> -p` matches `^• [oO][kK]\b`.
+6. → capture `after`.
+
+**Expect**:
+- `panel` contains `Scheduling tasks in this session`
+- `panel` contains `Active cron jobs and monitors for this thread.`
+- `panel` contains `Cron (0)`
+- `panel` contains `Monitors (0)`
+- `panel` contains `(none)` — empty-state copy
+- `panel` contains `↑/↓ select · enter details · d delete · esc close` — footer help
+- `panel` contains `Updated:` — timestamp present
+- `after` matches `^• [oO][kK]\b` — agent responded after the panel dismissed
+- `after` contains `› say ok` — user message landed in chat
+- `after` not contains `Scheduling tasks in this session` — panel content fully gone
+- `after` not contains `Cron (0)` — panel content fully gone
+- `after` not contains `↑/↓ select` — panel footer fully gone
+
+---
+
+## TR-024: /scheduling `d` deletes OS cron + kills in-flight subprocesses (PR #20 regression guard)
+
+The headline bug PR #20 fixed: pressing `d` in `/scheduling` on an OS-cron
+row removed the crontab entry but left already-spawned `ata exec`
+children running until their natural end. This test guards against
+re-introducing that orphan-process leak. It's cross-layer — pane (row
+gone), filesystem (crontab entry gone), AND kernel (no matching
+processes) must all agree.
+
+**Setup**: TR-003 setup + precondition below.
+
+**Precondition (macOS)**: Terminal needs Full Disk Access in System
+Settings → Privacy & Security → Full Disk Access. Without it,
+`crontab -l` / `crontab` writes fail with `Operation not permitted`
+and the `cron_create` tool returns an error. Verify by running
+`crontab -l` from the same shell before the test and confirming it
+does not error.
+
+**Action**:
+1. In ata, send: `create a cron job named tr024-test that runs every minute and does: sleep 90 && echo done`
+2. Poll up to 30s until `tmux capture-pane -t <new> -p` contains `Created persistent cron job tr024-test` (proves the cron tool succeeded).
+3. Extract the `Task ID:` from the response (UUID) — call this `TASK_ID`.
+4. Wait up to 65s for the first fire: poll the cron log path `~/.ata/cron/<TASK_ID>.log` for non-zero size.
+5. Snapshot pre-delete state:
+   - `crontab -l | grep <TASK_ID> > <crontab_before>` → capture `crontab_before`.
+   - Record the in-flight process tree as a fixed set of PIDs:
+     `pgrep -f "<TASK_ID>" > /tmp/pre_pids.txt` — these are the specific PIDs whose death we will assert. (Recording PIDs rather than re-pgrep'ing later avoids a documented OS cron race; see "Known caveat" below.)
+   - `pgrep -fl "<TASK_ID>" > <procs_before>` → capture `procs_before` (human-readable form for predicates).
+6. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+7. → capture `panel_before`.
+8. `tmux send-keys -t <new> d`; sleep 10.  (10s settle window — kill is async per PR #20 fix and macOS process reaping takes a beat.)
+9. → capture `panel_after`.
+10. Snapshot post-delete state:
+    - `crontab -l | grep <TASK_ID> > <crontab_after>` → capture `crontab_after`.
+    - Check whether each PID from `/tmp/pre_pids.txt` is still alive:
+      `for p in $(cat /tmp/pre_pids.txt); do ps -p $p -o pid= 2>/dev/null; done > <pre_pids_alive>` → capture `pre_pids_alive`.
+
+**Expect** (all must hold):
+- `panel_before` contains `tr024-test` — row visible in panel
+- `panel_before` contains `Cron (1)` — count reflects one job
+- `crontab_before` contains the task id — crontab entry present
+- `procs_before` contains `ata exec` — at least one `ata exec` subprocess in flight
+- `panel_after` contains `Cron (0)` — row removed from panel
+- `panel_after` not contains `tr024-test` — row gone
+- `crontab_after` is empty — crontab entry removed
+- `pre_pids_alive` is empty — every process that was in flight at delete time is gone (this is the precise PR #20 invariant: in-flight subprocesses get killed; the test does NOT assert "no new processes ever spawn matching the task id", because a known OS-cron race can leak one extra fire — see caveat)
+
+**Known caveat — macOS cron-daemon race**:
+macOS's cron daemon caches the next-fire schedule from the crontab. If
+the `d` press happens within the same minute as a scheduled fire, the
+daemon may have already enqueued that fire from its in-memory state
+even after the crontab entry is removed — the result is a new process
+tree (with a NEW set of PIDs, distinct from the pre-delete ones) that
+runs to natural completion. The PR #20 fix correctly kills the
+*pre-delete* process tree, but cannot pre-empt a fire that the cron
+daemon already scheduled. This is why the post-delete predicate is
+"every PID we recorded pre-delete is dead", not "no processes match
+the task id" — the latter is too strict and flags the OS race as a
+test failure.
+
+**Teardown** (mandatory, pass or fail): run the three commands in the "OS cron safety" section at the top of this file. Verify the crontab is empty and no `ata exec` children remain. Skipping this leaves a popup-spamming cron firing every minute.
+
+---
+
+## TR-025: Monitor lifecycle — start, stream output, complete, retain row, delete
+
+Covers the full monitor task lifecycle: a `monitor_start` call streams
+stdout lines into chat live, fires a completion event when the command
+exits, and the `/scheduling` panel retains the row as `[Completed]`
+with an accurate line count until the user presses `d` to clear it.
+This exercises three layers (chat stream, scheduling panel, session
+JSONL) for one feature — the kind of coverage a single-pane smoke test
+would miss.
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: ``start a monitor named tr025-watch that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done``
+2. Sleep 1; `Enter`.
+3. Poll up to 30s until `tmux capture-pane -t <new> -p` contains both `Started monitor tr025-watch.` AND `completed successfully` (monitor announced + terminated).
+4. → capture `chat`.
+5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+6. → capture `panel_retained`.
+7. `tmux send-keys -t <new> d`; sleep 1.
+8. → capture `panel_deleted`.
+9. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+10. `jq -r 'select(.payload.name=="monitor_start") | .payload.arguments' "$SESS" > <monitor_args>`. → capture `monitor_args`.
+
+**Expect** (all must hold):
+
+Chat stream:
+- `chat` contains `Started monitor tr025-watch.` — start announced
+- `chat` contains `tick 1` — first stream line delivered
+- `chat` contains `tick 5` — last stream line delivered (proves all 5 made it through, not just the first)
+- `chat` contains `completed` — completion event present in chat
+- `chat` contains `Monitor tr025-watch completed successfully.` — final agent summary
+- `chat` matches `\[m [a-f0-9]+ out\] tick` — stream prefix format is the `[m <prefix> out]` shape
+
+Scheduling panel — retention:
+- `panel_retained` contains `Monitors (1)` — count reflects the completed monitor
+- `panel_retained` contains `tr025-watch` — name visible
+- `panel_retained` contains `[Completed]` — status reflects termination
+- `panel_retained` contains `lines 5` — line count reflects actual stream output
+
+Scheduling panel — delete:
+- `panel_deleted` contains `Monitors (0)` — count zeroed
+- `panel_deleted` not contains `tr025-watch` — row gone
+
+Session JSONL:
+- `tool_counts` contains `monitor_start` — the dedicated monitor tool was used
+- `tool_counts` not contains `shell` — not a shell-tool fallback
+- `monitor_args` contains `"name"` and `tr025-watch` — name argument passed correctly
+- `monitor_args` contains `tick` — the for-loop command argument made it through
+
+---
+
+## TR-026: In-session cron lifecycle — create, fire, panel update, delete
+
+In-session cron (`cron_create_session`) lives entirely in the chat
+session — no crontab, no Full Disk Access precondition. It fires the
+agent in chat on a sub-minute schedule. This test verifies the
+full lifecycle: tool routes to `cron_create_session` (not the OS `cron_create`),
+the panel shows status `[Pending]`, the fire counter increments after
+each fire, the cron's prompt actually runs the agent inline, and `d`
+removes the row before it fires again.
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: ``create an in-session cron named tr026-ping that runs every 30 seconds and says: respond with just "ping"``
+2. Sleep 1; `Enter`.
+3. Poll up to 30s until `tmux capture-pane -t <new> -p` contains `Created in-session cron tr026-ping.` — proves the cron was registered.
+4. → capture `created`.
+5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+6. → capture `panel_pending`.
+7. `tmux send-keys -t <new> Escape`; sleep 1.
+8. Poll up to 60s until pane contains both `Respond with just "ping"` on a `›` line AND `• ping` on a `•` line (first fire completed).
+9. → capture `after_fire`.
+10. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+11. → capture `panel_after_fire`.
+12. `tmux send-keys -t <new> d`; sleep 1.
+13. → capture `panel_deleted`.
+14. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+
+**Expect** (all must hold):
+
+Creation:
+- `created` contains `Created in-session cron tr026-ping.`
+- `created` contains `every 30 seconds while this session is active.` — in-session signature copy
+
+Panel — pending state (before first fire):
+- `panel_pending` contains `Cron (1)`
+- `panel_pending` contains `tr026-ping`
+- `panel_pending` contains `[Pending` — in-session status (differs from OS cron's `[Scheduled]`)
+- `panel_pending` contains `fired 0` — no fires yet
+- `panel_pending` contains `next in ` — countdown rendering
+
+Fire — chat:
+- `after_fire` contains `› Respond with just "ping"` — cron prompt rendered as a user message
+- `after_fire` matches `^• ping` — agent responded with the expected literal
+
+Panel — after first fire:
+- `panel_after_fire` contains `fired 1` — fire counter incremented
+- `panel_after_fire` contains `[Pending` — still scheduled for next fire (in-session crons stay Pending between fires)
+
+Delete:
+- `panel_deleted` contains `Cron (0)` — row removed
+- `panel_deleted` not contains `tr026-ping`
+
+Session JSONL — correct tool routing:
+- `tool_counts` contains `cron_create_session` — in-session creator, not OS `cron_create`
+- `tool_counts` contains `cron_delete_session` — in-session deleter (from the `d` press, which routes through the panel's delete handler)
+
+---
+
+## TR-027: OS cron survives ata restart and keeps firing while ata is off
+
+OS cron lives in the system crontab — not in the ata session — so it
+must (a) persist across ata exits, (b) keep firing from the system
+crontab while ata isn't running, and (c) reappear in `/scheduling` on
+the next launch with its accumulated fire count intact. This is the
+core "OS cron vs in-session cron" distinction (compare TR-026, which
+verifies in-session crons are explicitly session-scoped).
+
+**Setup**: TR-003 setup + TR-024's macOS Full Disk Access precondition.
+
+**Action**:
+1. In ata, send: `create a cron job named tr027-persist that runs every minute and does: echo done`
+2. Sleep 1; `Enter`.
+3. Poll up to 30s until pane contains `Created persistent cron job tr027-persist`. Extract `Task ID:` → `TASK_ID`.
+4. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+5. → capture `panel_session1`.
+6. `tmux send-keys -t <new> Escape`; sleep 1.
+7. `crontab -l | grep "$TASK_ID" > <crontab_active>`. → capture `crontab_active`.
+8. Quit ata: `tmux send-keys -t <new> C-d`; sleep 2.
+9. Verify ata exited: pane should now show a shell prompt (e.g. contains `$ ` or `% ` near the bottom). → capture `exited`.
+10. Wait 70 seconds (lets the system cron fire at least once while ata is off).
+11. Relaunch ata in the same pane: `tmux send-keys -t <new> "./target/debug/ata --yolo"`; sleep 1; `Enter`; sleep 6.
+12. Wait for the welcome banner (`OpenAI Codex (v` substring).
+13. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+14. → capture `panel_session2`.
+15. `tmux send-keys -t <new> d`; sleep 1.
+16. → capture `panel_deleted`.
+17. `crontab -l | grep "$TASK_ID" > <crontab_clean>` (expected empty). → capture `crontab_clean`.
+
+**Expect** (all must hold):
+
+Session 1 — cron registered:
+- `panel_session1` contains `Cron (1)`
+- `panel_session1` contains `tr027-persist`
+- `panel_session1` contains `[Scheduled]` — OS cron status
+- `panel_session1` contains `fired 0` — no fires yet at creation
+- `crontab_active` contains the task id — system crontab entry was written
+
+Exit:
+- `exited` not contains `/scheduling` — TUI dismissed
+- `exited` matches `(\$|%) $` OR contains `To continue this session, run ata resume` — shell prompt or ata's exit message visible
+
+Session 2 — cron persisted across restart:
+- `panel_session2` contains `Cron (1)` — cron reappears in fresh session
+- `panel_session2` contains `tr027-persist` — same task name
+- `panel_session2` contains `[Scheduled]` — still scheduled
+- `panel_session2` not contains `fired 0` — fire counter is non-zero (at least one fire happened while ata was off; proves the cron is running from the system crontab, not from ata)
+
+Cleanup:
+- `panel_deleted` contains `Cron (0)` — row removed in session 2
+- `panel_deleted` not contains `tr027-persist`
+- `crontab_clean` is empty — system crontab entry removed too
+
+**Teardown** (mandatory, pass or fail): run the three commands in the "OS cron safety" section at the top of this file. Even if the test passed and `/scheduling d` already removed the row, verify the crontab is empty and no `ata exec` children remain. Skipping this leaves a popup-spamming cron firing every minute.
+
+---
+
+## TR-028: Agent picks monitor_watch_for (not monitor_wait) when prompt asks to react to a pattern
+
+The monitor agent has two blocking primitives: `monitor_wait` (block
+until the subprocess terminates) and `monitor_watch_for` (block until
+a specific line appears on stdout/stderr). The right tool depends on
+intent: "tell me when it finishes" → `monitor_wait`; "tell me when
+'X' appears" → `monitor_watch_for`. This test verifies the model
+disambiguates correctly. The monitor-stream rendering already gets
+coverage in TR-025; here the depth is in tool-routing correctness,
+verified via JSONL cross-check (the pane can render a plausible
+"matched X" response even when the wrong primitive was called).
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: ``start a monitor that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done. Watch for the line "tick 3" and tell me when it appears.``
+2. Sleep 1; `Enter`.
+3. Poll up to 30s until pane contains `tick 3 appeared` OR `matched` OR a similar agent-narrated success line referencing `tick 3` (proves the watch returned).
+4. → capture `chat`.
+5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+6. → capture `panel`.
+7. `tmux send-keys -t <new> d`; sleep 1.  (cleanup — remove the completed monitor row.)
+8. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`. → capture `tool_counts`.
+9. `jq -r 'select(.payload.name=="monitor_watch_for") | .payload.arguments' "$SESS" > <watch_args>`. → capture `watch_args`.
+
+**Expect** (all must hold):
+
+Chat:
+- `chat` contains `tick 3` — the matched line appears in the agent's response
+- `chat` contains `appeared` OR `matched` — agent narrated the match outcome
+- `chat` not contains `did not match` — no fallback to terminated-without-match
+
+Tool routing:
+- `tool_counts` contains `monitor_start` — monitor was spawned
+- `tool_counts` contains `monitor_watch_for` — pattern-matching variant was used
+- `tool_counts` not contains `monitor_wait` — did NOT fall back to wait-for-completion
+- `tool_counts` not contains `shell` — did not shell out to grep / tail / etc.
+
+Argument fidelity:
+- `watch_args` contains `"pattern"` — arguments include a pattern field
+- `watch_args` contains `tick 3` — the pattern value reflects the user's literal request (not a paraphrase like "tick three" or "third tick")
+- `watch_args` contains `"task_id"` — the args target the just-spawned monitor
+
+Panel state — completed monitor retained:
+- `panel` contains `Monitors (1)` — completed monitor still visible until user dismisses it
+- `panel` contains `[Completed]` — status reflects natural termination
+- `panel` contains `lines 5` — line count reflects all 5 ticks streamed (the watch returning early on tick 3 did NOT abort the underlying monitor process)
+
+---
+
+## TR-029: /scheduling panel renders both sections populated (mixed task kinds)
+
+Earlier tests verified single-section states (empty in TR-023, one cron in
+TR-024/026/027, one monitor in TR-025/028). This test exercises the layout
+when *both* sections are populated — catches layout regressions that only
+surface with mixed task kinds (e.g. wrong section ordering, missing
+section header when adjacent section is non-empty, status-string spacing
+that only breaks under simultaneous rendering).
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: `create an in-session cron named tr029-cron that runs every 60 seconds and says: hi`. Sleep 1; `Enter`.
+2. Poll up to 30s until pane contains `Created in-session cron tr029-cron`.
+3. In ata, send: `start a monitor named tr029-mon that runs: sleep 30`. Sleep 1; `Enter`.
+4. Poll up to 30s until pane contains `Started monitor tr029-mon`.
+5. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+6. → capture `panel`.
+7. Cleanup: press `d` to remove the focused row, sleep 1, capture `after_first_d`, press `d` again to remove the second, sleep 1, capture `after_second_d`.
+
+**Expect** (all must hold):
+
+Layout:
+- `panel` contains `Cron (1)` — cron section non-empty
+- `panel` contains `Monitors (1)` — monitor section non-empty (same panel render)
+- `panel` contains `tr029-cron` — cron row name
+- `panel` contains `tr029-mon` — monitor row name
+
+Status disambiguation — both kinds visible side-by-side:
+- `panel` contains `[Pending` — in-session cron status
+- `panel` contains `[Running` — live monitor status
+- `panel` not contains `[Scheduled` — no OS cron present
+- `panel` not contains `[Completed` — monitor hasn't terminated yet
+
+Cleanup — sequential `d` clears both rows independently:
+- `after_first_d` contains either `Cron (0)` (cron was focused first) OR `Monitors (0)` (monitor was focused first)
+- `after_second_d` contains `Cron (0)` — both sections cleared
+- `after_second_d` contains `Monitors (0)`
+- `after_second_d` not contains `tr029-cron`
+- `after_second_d` not contains `tr029-mon`
+
+---
+
+## TR-030: /scheduling row detail view shows id, command, and output tail
+
+Pressing Enter on a row in `/scheduling` opens a detail view with full
+task metadata: id, status, command, line count, and a recent-output
+tail. The list view truncates command + status into a single line for
+density; the detail view is where users actually inspect task internals.
+Worth its own regression guard because (a) detail rendering is a
+separate code path from list rendering and can rot independently, and
+(b) the tail formatting (e.g. `[stdout]` prefix per line) is a small
+contract that downstream tools rely on.
+
+Also documents a UI behavior: Escape from the detail view exits the
+whole panel — it does NOT go back to the list view. (To return to the
+list, the user has to reopen `/scheduling`.)
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: `start a monitor named tr030-detail that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 2; done`. Sleep 1; `Enter`.
+2. Poll up to 30s until pane contains `Started monitor tr030-detail`.
+3. `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
+4. `tmux send-keys -t <new> Enter`; sleep 1.  (Enter on the focused monitor row → detail view.)
+5. → capture `detail`.
+6. `tmux send-keys -t <new> Escape`; sleep 1.  (Escape from detail.)
+7. → capture `after_escape`.
+8. Cleanup: `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1; `tmux send-keys -t <new> d`; sleep 1.
+
+**Expect** (all must hold):
+
+Detail view rendering:
+- `detail` contains `Monitor · tr030-detail` — heading uses `Kind · Name` format
+- `detail` contains `id ` — task id label rendered
+- `detail` matches `id [a-f0-9-]{36}` — id field shows a UUID-shaped value
+- `detail` contains `status ` — status field label
+- `detail` contains `Completed` OR `Running` — status reflects monitor state at the moment of capture
+- `detail` contains `lines 5` — line count present (the 5-iteration loop takes ~10s; by the time you press Enter on the row it should be complete)
+- `detail` contains `command:` — command label
+- `detail` contains `for i in 1 2 3 4 5;` — full command shown (the list view truncates at row width; detail view shows the full string)
+- `detail` contains `Recent output tail:` — output section header
+- `detail` contains `[stdout] tick 1` — first output line with stream-tag prefix
+- `detail` contains `[stdout] tick 5` — last output line with stream-tag prefix (proves the tail isn't truncated for a 5-line run)
+
+Escape behavior — exits the entire panel:
+- `after_escape` not contains `Monitor · tr030-detail` — detail view gone
+- `after_escape` not contains `Recent output tail:` — detail content gone
+- `after_escape` not contains `Scheduling tasks in this session` — list view ALSO gone (Escape from detail does NOT bounce back to the list; it exits the panel entirely)
+
+---
+
+
+# Group 6: Tool routing
+
+## TR-011: Code-understanding via code_intel tool
+
+The repo_context / code_intel tool uses LSP + treesitter to answer symbol
+queries. This test verifies the tool is registered and successfully
+returns a definition location.
+
+**Setup**: TR-003 setup. Run inside a Rust workspace (`$ATA_REPO/codex-rs`
+works) so the LSP has something to index.
+
+**Action**:
+1. `tmux send-keys -t <new> "use code_intel to find where parse_sections is defined"`; sleep 1; `Enter`.
+2. Poll up to 3 min until response contains `parse_sections` AND a file
+   path like `.rs:`.
+3. → capture `resp`.
+4. Inspect the active session JSONL (`~/.ata/sessions/<latest>.jsonl`):
+   `jq -r 'select(.payload.name=="code_intel") | .payload.arguments' <file>`.
+   → save as `tool_calls`.
+
+**Expect**:
+- `resp` matches `parse_sections.*\.rs:\d+`
+- `tool_calls` contains `symbolSearch` (the operation)
+- `tool_calls` contains `parse_sections` (the query)
+
+If `code_intel` falls back to `exec_command` grep (i.e. `tool_calls` is
+empty for `code_intel`), the test still passes if `resp` cites correct
+locations — but the failure mode is "tool not registered", which is a
+real regression worth noting in the report.
+
+---
+
+## TR-021: Agent picks the Hacker News tool on its own
+
+When the user asks for HN content, ata must call the dedicated `hn_search`
+tool — NOT `web_search` and NOT shell out via `exec_command` / `curl`.
+This test guards against silent tool-routing regressions that the rendered
+text alone won't catch (the model can produce a plausible inline answer
+even while calling the wrong tool, or no tool at all).
+
+The prompt deliberately does NOT name `hn_search`. Naming the tool tests
+nothing; the point is to verify the model picks it.
+
+**Setup**: TR-003 setup + precondition below.
+
+**Precondition**: the Hacker News research skill must be enabled. It
+ships `default_enabled: true`, so a fresh install passes — but if a user
+turned it off via `/research`, the test will fail because the agent has
+no `hn_search` tool to route to. Verify `~/.ata/config.toml` does NOT
+have:
+
+```toml
+[features]
+research_hacker_news = false
+```
+
+(Absence of the key or `= true` both work.)
+
+**Action**:
+1. `tmux send-keys -t <new> "find me a top story on Hacker News about Rust"`; sleep 1; `Enter`.
+2. Poll up to 3 min until `tmux capture-pane -t <new> -p` contains
+   `news.ycombinator.com` (proves a real HN response landed).
+3. → capture `resp`.
+4. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)`.
+5. `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts_capture>`.
+   → capture `tool_counts`.
+6. `jq -r 'select(.payload.name=="hn_search") | .payload.arguments' "$SESS" > <hn_args_capture>`.
+   → capture `hn_args`.
+
+**Expect** (all must hold):
+- `resp` contains `Hacker News` — feature answered
+- `resp` contains `news.ycombinator.com` — real HN URL cited
+- `tool_counts` contains `hn_search` — dedicated tool was invoked
+- `tool_counts` not contains `web_search` — did not fall back to generic search
+- `tool_counts` not contains `shell` — did not shell out
+- `tool_counts` not contains `exec_command` — did not shell out
+- `hn_args` contains `"query"` — arguments object well-formed
+- `hn_args` contains `Rust` — query reflected the user's topic
+
+---
+
+## TR-035: Multi-source synthesis — agent uses BOTH papers and Hacker News (direct calls or sub-agents)
+
+TR-021 verified that a single-source HN prompt routes to `hn_search`.
+This test extends to a *two-source* prompt that legitimately requires
+BOTH academic and practitioner sources. The failure mode it catches:
+the agent picks one source, silently drops the other, and writes a
+plausible-looking answer with vague references to the missed source.
+
+A key empirical finding from authoring this test: ata's multi-source
+strategy is often NOT "call two skills directly". For complex queries
+the main agent spawns sub-agents (one per source / per thread) via
+`spawn_agent` + `wait_agent`, and only the main session shows the
+orchestration — the underlying `hn_search` / `web_search` calls live
+inside each sub-agent's session. Predicates therefore accept either
+pattern: direct skill calls in the main session, OR sub-agent
+delegation with evidence of both sources reached.
+
+**Setup**: TR-003 setup.
+
+**Action**:
+1. In ata, send: `find recent papers on Rust async performance and check Hacker News for related discussion`. Sleep 1; `Enter`.
+2. Poll up to 10 minutes (this can be slow — multi-skill orchestration, sub-agent boots, MCP servers) until pane contains a clear synthesis signal: either a reading-view banner like `Papers and HN Signal` / `Papers and HN` / a `1/6` section counter on the final synthesis document, OR an inline response that mentions both `Hacker News` AND `paper`.
+3. → capture `response`.
+4. Inspect session JSONL:
+   - `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -15 | xargs ls -t | head -1)`
+   - `jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>` → capture `tool_counts`.
+   - `ls ~/.ata/workspaces/global/knowledge-base/staging/ 2>/dev/null > <staging>` → capture `staging` (sub-agent output dir).
+
+**Expect** (all must hold — the "OR" predicates accept either pattern):
+
+Response content — both sources actually contributed:
+- `response` contains `Hacker News` OR `HN Signal` — practitioner source represented in a section title or body
+- `response` contains `Paper` OR `literature` OR `academic` — academic source represented
+- `response` contains `Bottom Line` — synthesis includes a unified bottom-line section (the typical multi-source synthesis pattern)
+- `response` not contains `I couldn't find any` — the agent didn't bail on either source
+- `response` not contains `no results` — same
+- `response` contains a numbered TOC entry that's HN-specific (e.g. `Hacker News Signal`) AND a numbered TOC entry that's paper-specific (e.g. `Paper Landscape` / `Recent Paper`) — proves the synthesis dedicated section structure to each source, not just lip service
+
+Tool routing — either direct calls OR sub-agent orchestration:
+- `tool_counts` contains `paper_search` OR `spawn_agent` — academic side was either searched directly or delegated
+- `tool_counts` contains `hn_search` OR `spawn_agent` — HN side same
+- `tool_counts` not contains `shell` — did NOT shell out via `curl https://news.ycombinator.com` (a fallback regression)
+
+Sub-agent evidence (if delegation route was taken):
+- Either `tool_counts` contains `hn_search` (direct route, no delegation needed) OR `staging` contains `hn-` (sub-agent delegation route — `hn-<thread-id>.md` staging notes were produced and saved to `~/.ata/workspaces/global/knowledge-base/staging/`)
+
+(Note: this is intentionally a permissive predicate set. The point is to assert "both sources contributed", not to mandate one orchestration strategy. A future refactor that changes from direct calls to sub-agents — or vice versa — should still pass.)
+
+---
+
+## TR-062: paper_search tool — multi-source academic search with paraphrasing orchestration
+
+`paper_search` is the agent-callable tool for searching academic
+papers across three indexes (Semantic Scholar, arXiv, OpenAlex). When
+prompted to find papers, the agent typically orchestrates MULTIPLE
+calls — paraphrasing the user's query and routing different variations
+to different sources, then synthesizing the best match.
+
+This routing is implicit (the user does NOT name the tool). The deep
+regression guard is: under a paper-finding prompt, paper_search is the
+tool that gets called, NOT web_search and NOT shell-out via curl.
+
+**Note on `paper_discovery`**: this is a SKILL (markdown file in
+`.system-research/paper-discovery/SKILL.md`), not a tool. The skill
+instructs the agent to: (a) check the local knowledge base via `rg`,
+(b) make paper_search calls, (c) write a research-journal entry. The
+agent loads the skill when the user's prompt has a paper-discovery
+intent.
+
+**Setup**: TR-003 setup. Network access. No state preconditions.
+
+### Scenario A: natural-language prompt routes to paper_search (multi-source orchestration)
+
+1. In ata: `find me a recent paper on rust async performance`. Sleep 1; Enter.
+2. Poll up to 3 minutes until the agent prints sources / paper titles / DOI / arxiv ids.
+3. → capture `resp`.
+4. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`.
+5. `jq -r 'select(.payload.name=="paper_search") | .payload.arguments' "$SESS" > <search_args>`.
+
+**Expect**:
+- `resp` contains a paper title and/or `arxiv.org`, `dblp.org`, or `dagstuhl.de` link — proves an actual paper landed
+- `resp` not contains `I couldn't find` OR `no results` — agent didn't bail
+- `tool_counts` matches `[0-9]+ paper_search` with the leading count ≥ 1 — paper_search WAS called
+- `tool_counts` typically shows paper_search called 3-6 times (orchestrated paraphrasing across sources — observed 6 calls on first verification run)
+- `tool_counts` does NOT contain `web_search` — agent did NOT fall back to generic web search
+- `tool_counts` does NOT contain `shell` — no shell-out fallback
+- `tool_counts` may contain `exec_command` (count 1-4) for KB grep / journal writes — these are skill-orchestrated side effects, not search fallbacks
+
+### Scenario B: argument schema verified across calls
+
+6. Inspect `<search_args>` (one JSON object per line, one per call).
+
+**Expect**:
+- Each call's args contain `query` (string) — the search term
+- Each call's args contain `source` with one of: `semantic_scholar`, `arxiv`, `openalex`
+- The 6+ calls collectively cover ALL THREE sources (the orchestration is breadth-first across sources, not depth-first into one)
+- Each call has `year_from` and `year_to` (numeric) — date range filter
+- Each call has `limit` (numeric, typically 8-10)
+- Each call has `fields[]` (array of strings) including at least `title`, `year`, `abstract`, `authors`, `url` — field-selection schema
+- Each call has `include_abstract: true`
+- Each call has `sort_by: "year"` — recent-first
+- Each call has `max_chars_per_item` (numeric, 1200-1500) — abstract truncation control
+- Query strings VARY across calls (agent paraphrases — e.g. `Rust async performance Tokio async runtime benchmark` vs `Rust asynchronous programming performance futures async await runtime` vs `performance evaluation Rust async await runtime`)
+
+### Scenario C: paper_discovery skill is loaded and orchestrates KB search
+
+7. Inspect `resp` for the skill-loading log line.
+
+**Expect**:
+- `resp` contains `Read SKILL.md (paper-discovery skill)` — the skill was loaded
+- `resp` contains a `Ran KB_DIR=` shell line (the skill's local-KB pre-check before searching papers)
+- `resp` contains a `Ran KB_DIR=... mkdir -p ... research-journal.md` line — the skill writes a journal entry as final step
+
+### Scenario D: bad query / no results path
+
+`find me a paper about quantum entangled toaster pancakes from 2071`.
+
+**Action**:
+1. In ata: `find me a paper about quantum entangled toaster pancakes from 2071`; sleep 1; Enter.
+2. Poll up to 3 min for completion.
+3. Capture response; inspect session JSONL.
+
+**Expect** (verified):
+- `tool_counts` contains `paper_search` (count ≥ 1, often 2–3 — the agent retries with paraphrased queries before giving up)
+- `resp` contains an explicit negative statement (e.g. `didn't find any real paper from 2071`, `no papers found matching`, or similar literal disclaimer). Pin the actual phrase on first run.
+- The agent does NOT fabricate a fake paper with an invented DOI — instead it falls back to a real adjacent paper with a verifiable DOI or arxiv id, AND explicitly notes the substitution.
+- `tool_counts` does NOT contain a write tool like `add-paper` (the agent doesn't add the fake to your library).
+
+Anti-regression: if a future build silently makes up a `quantum entangled toaster pancake 2071` paper with a plausible-sounding DOI, this test fails — that's a fabrication-prevention guard.
+
+---
+
+## TR-063: paper_get — fetch a specific paper by ID
+
+`paper_get` retrieves a single paper by its arxiv id, DOI, or Semantic
+Scholar id. The tool DOES exist and works when explicitly named in the
+prompt. Important finding: natural-language prompts like "look up arxiv
+2505.21323" route to `exec_command` (curl scrape of arxiv.org) rather
+than `paper_get`. The dedicated tool is only invoked when the user
+explicitly names it.
+
+**Setup**: TR-003.
+
+### Scenario A: natural prompt falls back to exec_command (weak routing)
+
+1. In ata: `look up arxiv 2505.21323`. Sleep 1; Enter. Poll for the response.
+2. Inspect JSONL.
+
+**Expect**:
+- Response contains paper title (`Asynchronous Rust`), authors, DOI — correct content
+- `tool_counts` contains `exec_command` (≥1 — used to curl arxiv.org/abs/2505.21323)
+- `tool_counts` does NOT contain `paper_get` — natural prompt didn't route to the dedicated tool
+
+### Scenario B: explicit tool naming triggers paper_get
+
+3. In ata: `use the paper_get tool to fetch the paper with arxiv id 2505.21323 and tell me the abstract`. Sleep 1; Enter. Poll.
+4. Inspect JSONL.
+
+**Expect**:
+- `tool_counts` contains `paper_get` (count = 1)
+- `paper_get` args match `{"paper_id":"arXiv:2505.21323"}` — id format is `arXiv:<number>` (capital X, colon-prefixed). The arg field name is `paper_id`.
+- Response contains the paper's abstract
+
+---
+
+## TR-064: paper_citations — papers citing a given paper
+
+For literature reviews: "find papers that cite X". When prompted with
+explicit tool naming, the agent calls `paper_citations` with the source
+paper's id.
+
+### Scenario A
+
+1. In ata: `use paper_citations to find recent papers that cite arxiv 2505.21323`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
+
+**Expect**:
+- `tool_counts` contains `paper_citations` (count = 1)
+- Args:
+  - `paper_id: "arXiv:2505.21323"` — same id-format as paper_get
+  - `limit: 20`
+  - `fields[]`: `title`, `authors`, `year`, `venue`, `abstract`, `doi`, `arxiv_id`, `url`, `citation_count`
+  - `max_chars_per_item: 1000`
+- Response is a numbered list of citing papers
+
+---
+
+## TR-065: paper_references — papers referenced by a given paper
+
+The reverse of paper_citations — what does paper X cite.
+
+### Scenario A
+
+1. In ata: `use paper_references to list the references cited inside arxiv 2505.21323`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
+
+**Expect**:
+- `tool_counts` contains `paper_references` (count = 1)
+- Args:
+  - `paper_id: "arXiv:2505.21323"`
+  - `limit: 50` (larger than citations default — references list tends to be longer)
+  - `fields[]`: title, authors, year, venue, doi, arxiv_id, url, citation_count (NO `abstract` field by default for references)
+  - `max_chars_per_item: 1000`
+
+---
+
+## TR-066: paper_recommendations — recommend papers similar to given examples
+
+For exploratory research. Takes an array of seed paper ids and
+recommends similar work.
+
+### Scenario A
+
+1. In ata: `use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors`. Sleep 1; Enter. Poll.
+2. Inspect JSONL.
+
+**Expect**:
+- `tool_counts` contains `paper_recommendations` (count = 1)
+- Args:
+  - `positive_paper_ids: ["arXiv:2505.21323"]` — ARRAY of ids (note plural and array structure, distinct from `paper_id` in paper_get/citations/references)
+  - `limit: 10` (default — actually returns more than the user asked for; the agent filters down in its response)
+  - `fields[]`: title, authors, year, venue, abstract, doi, arxiv_id, url, citation_count
+  - `max_chars_per_item: 1200`
+
+---
+
+## TR-067: patent_search — agent does NOT route here even with explicit naming (routing bug)
+
+`patent_search` tool exists in source (`core/src/tools/handlers/research.rs:226`) and is registered as `"patent_search"` for the EPO/Espacenet backend. **However, in 0.7.0 the agent fails to route to it even when the user explicitly names the tool in the prompt.** The agent falls back to `exec_command` (curl/scrape Google Patents) and produces reasonable results — but the dedicated tool is never invoked.
+
+This is either:
+- A routing bug: the patent tools are registered but the agent's tool-selection model doesn't surface them
+- A feature flag: patent tools require an opt-in that isn't set in the default config
+
+Worth filing as a finding for whoever owns the research-tools registration.
+
+### Scenario A: even explicit naming falls back to exec_command (current 0.7.0 behavior)
+
+1. In ata: `use patent_search to find patents about rust compiler intermediate representation`. Sleep 1; Enter. Poll up to 3 min.
+2. Inspect JSONL.
+
+**Expect**:
+- Response contains real patent numbers (e.g. `US12039033B2`, `CN120704658A`) and descriptions — the agent DOES return patent results
+- `tool_counts` does NOT contain `patent_search` — dedicated tool was NOT invoked
+- `tool_counts` contains `exec_command` (≥1) — agent shelled out instead
+- This scenario PASSES when the routing-bug predicate flips: if a future build successfully routes to patent_search, then `tool_counts contains patent_search` becomes the new positive predicate.
+
+### Scenario B: when patent_search routing is fixed (predicate flip)
+
+When someone fixes the routing (likely by tweaking tool descriptions or registering patent_search higher in the priority list):
+- `tool_counts` contains `patent_search`
+- `tool_counts` does NOT contain `exec_command` (no fallback shellout)
+- Args likely have `query` (string), `limit`, `fields[]`, possibly date range / jurisdiction filters
+
+The current Scenario A predicates flip from `not contains` to `contains` and vice versa. This is a regression-guard pair, not a TODO — both states are documented and only one is true at a time.
+
+---
+
+## TR-068: patent_get — same routing-bug pattern as TR-067
+
+`patent_get` tool exists at `core/src/tools/handlers/research.rs:231`. Same registration mechanism as `patent_search`, same observed weak-routing — the agent falls back to `exec_command` even when explicitly told to use `patent_get`.
+
+### Scenario A: even explicit naming falls back to exec_command (current behavior)
+
+1. In ata: `use patent_get to fetch patent US12039033B2 and tell me the abstract`. Sleep 1; Enter. Poll up to 3 min.
+2. Inspect JSONL.
+
+**Expect** (current buggy behavior — regression guard, to verify on next tmux pass):
+- Response contains patent metadata correctly (agent returns useful results via fallback)
+- `tool_counts` does NOT contain `patent_get` (dedicated tool not invoked)
+- `tool_counts` contains `exec_command` (≥1, agent shelled out)
+
+### Scenario B: when routing is fixed (predicate flip)
+
+- `tool_counts` contains `patent_get`
+- `tool_counts` does NOT contain `exec_command` (no fallback)
+- Args likely have `patent_id` (string, e.g. `"US12039033B2"`), possibly `fields[]`
+
+Same regression-guard pair structure as TR-067 — only one state is true at a time.
+
+---
+
+
+# Group 7: Workspace CLI
 
 ## TR-055: `ata workspace` CLI — read-only inspection surface
 
@@ -3359,6 +3612,9 @@ a new workspace.
 
 ---
 
+
+# Group 8: Zotero CLI
+
 ## TR-061: `ata zotero` CLI — status, search-commands, and subcommand inventory
 
 The CLI's `status` reports the effective Zotero mode (`local` vs
@@ -3486,238 +3742,6 @@ The following subcommands either MUTATE the user's library (`add-paper`, `items 
 - `<out>` contains a connection error referencing `http://localhost:23119/api` (the local endpoint).
 - Exit code is non-zero.
 - Error string is stable across versions (pin it).
-
----
-
-## TR-062: paper_search tool — multi-source academic search with paraphrasing orchestration
-
-`paper_search` is the agent-callable tool for searching academic
-papers across three indexes (Semantic Scholar, arXiv, OpenAlex). When
-prompted to find papers, the agent typically orchestrates MULTIPLE
-calls — paraphrasing the user's query and routing different variations
-to different sources, then synthesizing the best match.
-
-This routing is implicit (the user does NOT name the tool). The deep
-regression guard is: under a paper-finding prompt, paper_search is the
-tool that gets called, NOT web_search and NOT shell-out via curl.
-
-**Note on `paper_discovery`**: this is a SKILL (markdown file in
-`.system-research/paper-discovery/SKILL.md`), not a tool. The skill
-instructs the agent to: (a) check the local knowledge base via `rg`,
-(b) make paper_search calls, (c) write a research-journal entry. The
-agent loads the skill when the user's prompt has a paper-discovery
-intent.
-
-**Setup**: TR-003 setup. Network access. No state preconditions.
-
-### Scenario A: natural-language prompt routes to paper_search (multi-source orchestration)
-
-1. In ata: `find me a recent paper on rust async performance`. Sleep 1; Enter.
-2. Poll up to 3 minutes until the agent prints sources / paper titles / DOI / arxiv ids.
-3. → capture `resp`.
-4. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`.
-5. `jq -r 'select(.payload.name=="paper_search") | .payload.arguments' "$SESS" > <search_args>`.
-
-**Expect**:
-- `resp` contains a paper title and/or `arxiv.org`, `dblp.org`, or `dagstuhl.de` link — proves an actual paper landed
-- `resp` not contains `I couldn't find` OR `no results` — agent didn't bail
-- `tool_counts` matches `[0-9]+ paper_search` with the leading count ≥ 1 — paper_search WAS called
-- `tool_counts` typically shows paper_search called 3-6 times (orchestrated paraphrasing across sources — observed 6 calls on first verification run)
-- `tool_counts` does NOT contain `web_search` — agent did NOT fall back to generic web search
-- `tool_counts` does NOT contain `shell` — no shell-out fallback
-- `tool_counts` may contain `exec_command` (count 1-4) for KB grep / journal writes — these are skill-orchestrated side effects, not search fallbacks
-
-### Scenario B: argument schema verified across calls
-
-6. Inspect `<search_args>` (one JSON object per line, one per call).
-
-**Expect**:
-- Each call's args contain `query` (string) — the search term
-- Each call's args contain `source` with one of: `semantic_scholar`, `arxiv`, `openalex`
-- The 6+ calls collectively cover ALL THREE sources (the orchestration is breadth-first across sources, not depth-first into one)
-- Each call has `year_from` and `year_to` (numeric) — date range filter
-- Each call has `limit` (numeric, typically 8-10)
-- Each call has `fields[]` (array of strings) including at least `title`, `year`, `abstract`, `authors`, `url` — field-selection schema
-- Each call has `include_abstract: true`
-- Each call has `sort_by: "year"` — recent-first
-- Each call has `max_chars_per_item` (numeric, 1200-1500) — abstract truncation control
-- Query strings VARY across calls (agent paraphrases — e.g. `Rust async performance Tokio async runtime benchmark` vs `Rust asynchronous programming performance futures async await runtime` vs `performance evaluation Rust async await runtime`)
-
-### Scenario C: paper_discovery skill is loaded and orchestrates KB search
-
-7. Inspect `resp` for the skill-loading log line.
-
-**Expect**:
-- `resp` contains `Read SKILL.md (paper-discovery skill)` — the skill was loaded
-- `resp` contains a `Ran KB_DIR=` shell line (the skill's local-KB pre-check before searching papers)
-- `resp` contains a `Ran KB_DIR=... mkdir -p ... research-journal.md` line — the skill writes a journal entry as final step
-
-### Scenario D: bad query / no results path
-
-`find me a paper about quantum entangled toaster pancakes from 2071`.
-
-**Action**:
-1. In ata: `find me a paper about quantum entangled toaster pancakes from 2071`; sleep 1; Enter.
-2. Poll up to 3 min for completion.
-3. Capture response; inspect session JSONL.
-
-**Expect** (verified):
-- `tool_counts` contains `paper_search` (count ≥ 1, often 2–3 — the agent retries with paraphrased queries before giving up)
-- `resp` contains an explicit negative statement (e.g. `didn't find any real paper from 2071`, `no papers found matching`, or similar literal disclaimer). Pin the actual phrase on first run.
-- The agent does NOT fabricate a fake paper with an invented DOI — instead it falls back to a real adjacent paper with a verifiable DOI or arxiv id, AND explicitly notes the substitution.
-- `tool_counts` does NOT contain a write tool like `add-paper` (the agent doesn't add the fake to your library).
-
-Anti-regression: if a future build silently makes up a `quantum entangled toaster pancake 2071` paper with a plausible-sounding DOI, this test fails — that's a fabrication-prevention guard.
-
----
-
-## TR-063: paper_get — fetch a specific paper by ID
-
-`paper_get` retrieves a single paper by its arxiv id, DOI, or Semantic
-Scholar id. The tool DOES exist and works when explicitly named in the
-prompt. Important finding: natural-language prompts like "look up arxiv
-2505.21323" route to `exec_command` (curl scrape of arxiv.org) rather
-than `paper_get`. The dedicated tool is only invoked when the user
-explicitly names it.
-
-**Setup**: TR-003.
-
-### Scenario A: natural prompt falls back to exec_command (weak routing)
-
-1. In ata: `look up arxiv 2505.21323`. Sleep 1; Enter. Poll for the response.
-2. Inspect JSONL.
-
-**Expect**:
-- Response contains paper title (`Asynchronous Rust`), authors, DOI — correct content
-- `tool_counts` contains `exec_command` (≥1 — used to curl arxiv.org/abs/2505.21323)
-- `tool_counts` does NOT contain `paper_get` — natural prompt didn't route to the dedicated tool
-
-### Scenario B: explicit tool naming triggers paper_get
-
-3. In ata: `use the paper_get tool to fetch the paper with arxiv id 2505.21323 and tell me the abstract`. Sleep 1; Enter. Poll.
-4. Inspect JSONL.
-
-**Expect**:
-- `tool_counts` contains `paper_get` (count = 1)
-- `paper_get` args match `{"paper_id":"arXiv:2505.21323"}` — id format is `arXiv:<number>` (capital X, colon-prefixed). The arg field name is `paper_id`.
-- Response contains the paper's abstract
-
----
-
-## TR-064: paper_citations — papers citing a given paper
-
-For literature reviews: "find papers that cite X". When prompted with
-explicit tool naming, the agent calls `paper_citations` with the source
-paper's id.
-
-### Scenario A
-
-1. In ata: `use paper_citations to find recent papers that cite arxiv 2505.21323`. Sleep 1; Enter. Poll.
-2. Inspect JSONL.
-
-**Expect**:
-- `tool_counts` contains `paper_citations` (count = 1)
-- Args:
-  - `paper_id: "arXiv:2505.21323"` — same id-format as paper_get
-  - `limit: 20`
-  - `fields[]`: `title`, `authors`, `year`, `venue`, `abstract`, `doi`, `arxiv_id`, `url`, `citation_count`
-  - `max_chars_per_item: 1000`
-- Response is a numbered list of citing papers
-
----
-
-## TR-065: paper_references — papers referenced by a given paper
-
-The reverse of paper_citations — what does paper X cite.
-
-### Scenario A
-
-1. In ata: `use paper_references to list the references cited inside arxiv 2505.21323`. Sleep 1; Enter. Poll.
-2. Inspect JSONL.
-
-**Expect**:
-- `tool_counts` contains `paper_references` (count = 1)
-- Args:
-  - `paper_id: "arXiv:2505.21323"`
-  - `limit: 50` (larger than citations default — references list tends to be longer)
-  - `fields[]`: title, authors, year, venue, doi, arxiv_id, url, citation_count (NO `abstract` field by default for references)
-  - `max_chars_per_item: 1000`
-
----
-
-## TR-066: paper_recommendations — recommend papers similar to given examples
-
-For exploratory research. Takes an array of seed paper ids and
-recommends similar work.
-
-### Scenario A
-
-1. In ata: `use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors`. Sleep 1; Enter. Poll.
-2. Inspect JSONL.
-
-**Expect**:
-- `tool_counts` contains `paper_recommendations` (count = 1)
-- Args:
-  - `positive_paper_ids: ["arXiv:2505.21323"]` — ARRAY of ids (note plural and array structure, distinct from `paper_id` in paper_get/citations/references)
-  - `limit: 10` (default — actually returns more than the user asked for; the agent filters down in its response)
-  - `fields[]`: title, authors, year, venue, abstract, doi, arxiv_id, url, citation_count
-  - `max_chars_per_item: 1200`
-
----
-
-## TR-067: patent_search — agent does NOT route here even with explicit naming (routing bug)
-
-`patent_search` tool exists in source (`core/src/tools/handlers/research.rs:226`) and is registered as `"patent_search"` for the EPO/Espacenet backend. **However, in 0.7.0 the agent fails to route to it even when the user explicitly names the tool in the prompt.** The agent falls back to `exec_command` (curl/scrape Google Patents) and produces reasonable results — but the dedicated tool is never invoked.
-
-This is either:
-- A routing bug: the patent tools are registered but the agent's tool-selection model doesn't surface them
-- A feature flag: patent tools require an opt-in that isn't set in the default config
-
-Worth filing as a finding for whoever owns the research-tools registration.
-
-### Scenario A: even explicit naming falls back to exec_command (current 0.7.0 behavior)
-
-1. In ata: `use patent_search to find patents about rust compiler intermediate representation`. Sleep 1; Enter. Poll up to 3 min.
-2. Inspect JSONL.
-
-**Expect**:
-- Response contains real patent numbers (e.g. `US12039033B2`, `CN120704658A`) and descriptions — the agent DOES return patent results
-- `tool_counts` does NOT contain `patent_search` — dedicated tool was NOT invoked
-- `tool_counts` contains `exec_command` (≥1) — agent shelled out instead
-- This scenario PASSES when the routing-bug predicate flips: if a future build successfully routes to patent_search, then `tool_counts contains patent_search` becomes the new positive predicate.
-
-### Scenario B: when patent_search routing is fixed (predicate flip)
-
-When someone fixes the routing (likely by tweaking tool descriptions or registering patent_search higher in the priority list):
-- `tool_counts` contains `patent_search`
-- `tool_counts` does NOT contain `exec_command` (no fallback shellout)
-- Args likely have `query` (string), `limit`, `fields[]`, possibly date range / jurisdiction filters
-
-The current Scenario A predicates flip from `not contains` to `contains` and vice versa. This is a regression-guard pair, not a TODO — both states are documented and only one is true at a time.
-
----
-
-## TR-068: patent_get — same routing-bug pattern as TR-067
-
-`patent_get` tool exists at `core/src/tools/handlers/research.rs:231`. Same registration mechanism as `patent_search`, same observed weak-routing — the agent falls back to `exec_command` even when explicitly told to use `patent_get`.
-
-### Scenario A: even explicit naming falls back to exec_command (current behavior)
-
-1. In ata: `use patent_get to fetch patent US12039033B2 and tell me the abstract`. Sleep 1; Enter. Poll up to 3 min.
-2. Inspect JSONL.
-
-**Expect** (current buggy behavior — regression guard, to verify on next tmux pass):
-- Response contains patent metadata correctly (agent returns useful results via fallback)
-- `tool_counts` does NOT contain `patent_get` (dedicated tool not invoked)
-- `tool_counts` contains `exec_command` (≥1, agent shelled out)
-
-### Scenario B: when routing is fixed (predicate flip)
-
-- `tool_counts` contains `patent_get`
-- `tool_counts` does NOT contain `exec_command` (no fallback)
-- Args likely have `patent_id` (string, e.g. `"US12039033B2"`), possibly `fields[]`
-
-Same regression-guard pair structure as TR-067 — only one state is true at a time.
 
 ---
 
