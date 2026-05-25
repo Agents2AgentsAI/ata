@@ -105,7 +105,7 @@ cleanup_all() {
   fi
   # Delete any tier-a-created workspaces left over.
   "$ATA_BIN" workspace list 2>/dev/null | jq -r '.[].id' 2>/dev/null \
-    | grep -E '^(tr05[56789]|tr06[01])-' \
+    | grep -E '^(tr05[56789]|tr06[01]|bootstrap)-' \
     | while read -r wsid; do
         "$ATA_BIN" workspace delete "$wsid" --force >/dev/null 2>&1 || true
       done
@@ -395,6 +395,14 @@ main() {
 
   log "Tier A runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
   log ""
+
+  # Bootstrap: on a totally fresh ~/.ata the list is empty. Several
+  # TR-055 scenarios assume at least one workspace exists.
+  if [ "$("$ATA_BIN" workspace list 2>/dev/null | jq 'length' 2>/dev/null)" = "0" ]; then
+    log "bootstrap: workspace list is empty, creating bootstrap workspace"
+    "$ATA_BIN" workspace init bootstrap >/dev/null
+    log ""
+  fi
 
   log "TR-055: workspace read-only inspection"
   tr055_a; tr055_b; tr055_c; tr055_d; tr055_e; tr055_f
