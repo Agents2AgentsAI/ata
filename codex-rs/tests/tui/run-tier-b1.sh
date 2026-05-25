@@ -302,6 +302,108 @@ tr019_a() {
   end_test
 }
 
+tr019_c() {
+  start_test "TR-019 C"
+  local sess=$SESSION-019c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "@core/src"
+  sleep 1.5
+  local out=$WORK/019c.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "@core/src" "typed subpath echoed"
+  assert_not_contains "$out" "no matches" "subpath should resolve"
+  assert_contains     "$out" "core/src"   "picker shows entries under core/src"
+  kill_ata "$sess"
+  end_test
+}
+
+tr006_a() {
+  start_test "TR-006 A"
+  local sess=$SESSION-006a
+  # Seed history.jsonl with a known entry BEFORE booting — ata reads
+  # history at startup and Up-arrow walks the in-memory copy.
+  local marker="SEEDED_HISTORY_TIER_B1_$$"
+  local hist_bak=""
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    hist_bak=$(mktemp)
+    cp "$HOME/.ata/history.jsonl" "$hist_bak"
+  fi
+  mkdir -p "$HOME/.ata"
+  printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":0,"text":"%s"}\n' "$marker" >> "$HOME/.ata/history.jsonl"
+
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
+  send_key "$sess" Up
+  sleep 1
+  local out=$WORK/006a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "$marker" "seeded history entry recalled via Up-arrow"
+
+  # Restore caller's history.
+  if [ -n "$hist_bak" ]; then
+    mv "$hist_bak" "$HOME/.ata/history.jsonl"
+  else
+    rm -f "$HOME/.ata/history.jsonl"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+tr023_a() {
+  start_test "TR-023 A"
+  local sess=$SESSION-023a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/scheduling"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/023a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Scheduling tasks in this session" "panel title"
+  assert_contains "$out" "Cron (0)"     "empty cron section"
+  assert_contains "$out" "Monitors (0)" "empty monitors section"
+  assert_contains "$out" "esc close"    "footer shows esc-close hint"
+  kill_ata "$sess"
+  end_test
+}
+
+tr014_a() {
+  start_test "TR-014 A"
+  local sess=$SESSION-014a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/research"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/014a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Research tools" "title shown"
+  for tool in "Paper Search" "Zotero" "Hacker News" "Patents" "Repo Analysis" "Knowledge Base"; do
+    assert_contains "$out" "$tool" "toggle listed: $tool"
+  done
+  assert_contains "$out" "Press space to select" "footer hint present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr043_a() {
+  start_test "TR-043 A"
+  local sess=$SESSION-043a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/plan"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/043a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Plan mode" "Plan mode indicator visible"
+  # PLAN.md TR-043 A: bare /plan does NOT toggle off — only Shift+Tab can.
+  send_text "$sess" "/plan"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out2=$WORK/043a-2.txt
+  capture "$sess" "$out2"
+  assert_contains "$out2" "Plan mode" "Plan mode stays on after second /plan"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -320,6 +422,10 @@ main() {
   log "Slash command parsing & overlays"
   tr020_a; tr020_b; tr016_a; tr018_a; tr018_d
   tr018_b; tr017_a; tr010_a; tr020_d; tr019_a
+
+  log ""
+  log "Pickers, history, plan mode"
+  tr019_c; tr006_a; tr023_a; tr014_a; tr043_a
 
   log ""
   log "----"
