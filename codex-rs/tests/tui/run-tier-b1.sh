@@ -635,6 +635,21 @@ tr041_a() {
   end_test
 }
 
+tr039_a() {
+  start_test "TR-039 A"
+  local sess=$SESSION-039a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/ps"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/039a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Background terminals" "panel title shown"
+  assert_contains "$out" "No background terminals running" "empty state line"
+  kill_ata "$sess"
+  end_test
+}
+
 tr046_a() {
   start_test "TR-046 A"
   local sess=$SESSION-046a
@@ -677,6 +692,7 @@ main() {
   tr019_a; tr019_b; tr019_c
   tr020_a; tr020_b; tr020_d
   tr023_a
+  tr039_a
   tr040_a; tr040_b; tr040_c
   tr041_a
   tr042_a

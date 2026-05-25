@@ -105,6 +105,30 @@ wait_for_idle() {
   return 1
 }
 
+# Find the most recently modified ata session JSONL (the one our test
+# just produced). Returns the path or empty string.
+recent_session_jsonl() {
+  find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -5 2>/dev/null \
+    | xargs ls -t 2>/dev/null | head -1
+}
+
+# Assert that a specific tool was called at least once in the session.
+# This is the deterministic anchor: even if the agent's response text
+# varies, the tool_counts in the session log are stable when the
+# prompt explicitly names the tool.
+assert_tool_called() {
+  local sess_jsonl=$1 tool=$2 desc=${3:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool}: session JSONL not found"
+    return
+  fi
+  if ! jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "$tool"; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "${desc:-expected tool '$tool' to be called}" "tool_counts: $counts"
+  fi
+}
+
 assert_contains() {
   local file=$1 needle=$2 desc=${3:-}
   if ! grep -qF -- "$needle" "$file"; then
@@ -253,6 +277,45 @@ tr054_a() {
   end_test
 }
 
+tr021_a() {
+  start_test "TR-021 A"
+  local sess=$SESSION-021a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # The dedicated hn_search tool exists but the agent's choice between
+  # it and a generic exec_command (curl HN) is non-deterministic. So
+  # this test only asserts HN content actually came back — a real
+  # regression guard against "HN access fully broken" without
+  # depending on which tool the agent picked.
+  send_text "$sess" "Use the hacker_news tool to fetch the top 3 stories"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/021a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "news.ycombinator.com" "HN URL in response"
+  kill_ata "$sess"
+  end_test
+}
+
+tr062_a() {
+  start_test "TR-062 A"
+  local sess=$SESSION-062a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "Use paper_search to find a recent paper on rust async runtime"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "paper_search" "agent called the dedicated paper_search tool"
+  kill_ata "$sess"
+  end_test
+}
+
 tr016_b() {
   start_test "TR-016 B"
   local sess=$SESSION-016b
@@ -295,10 +358,12 @@ main() {
   tr005_a
   tr008_a
   tr016_b
+  tr021_a
   tr022_a
   tr036_a
   tr036_b
   tr054_a
+  tr062_a
 
   log ""
   log "----"
