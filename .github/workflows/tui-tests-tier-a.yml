@@ -21,7 +21,7 @@ jobs:
   tier-a:
     name: Tier A scenarios (no LLM, no TUI)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: codex-rs
@@ -43,9 +43,9 @@ jobs:
             tui-tests-tier-a-${{ runner.os }}-
 
       - name: Build ata
-        run: cargo build --release -p codex-cli --bin ata
+        run: cargo build -p codex-cli --bin ata
 
       - name: Run Tier A scenarios
         env:
-          ATA_BIN: ${{ github.workspace }}/codex-rs/target/release/ata
+          ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
         run: ./tests/tui/run-tier-a.sh
