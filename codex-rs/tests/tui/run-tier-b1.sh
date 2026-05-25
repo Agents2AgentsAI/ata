@@ -69,6 +69,9 @@ boot_ata() {
     fi
     sleep 0.5
   done
+  # Boot failed — dump what ata actually showed so it's visible in CI logs.
+  red "    [boot] ata did not show the welcome banner in 30s. Pane dump:"
+  tmux capture-pane -t "$name" -p 2>/dev/null | sed 's/^/    | /' >&2 || true
   return 1
 }
 
