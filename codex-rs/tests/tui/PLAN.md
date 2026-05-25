@@ -345,12 +345,6 @@ the visible part).
 
 ## TR-010: /experimental menu
 
-> Updated 2026-05-21: ata's `/experimental` menu no longer contains
-> `Repository Understanding` (removed when ata diverged from upstream
-> codex) and the voice row is labeled `Voice mode` (lowercase `m`).
-> Predicates now assert two stable ata-specific rows: `Voice mode` and
-> `Scheduling`.
-
 **Setup**: TR-003 setup.
 
 ### Scenario A: baseline — open + dismiss
@@ -430,12 +424,7 @@ real regression worth noting in the report.
 
 ## TR-012: /voice enters voice mode
 
-> Updated 2026-05-21: the original test also asserted on `Recording` /
-> `Transcribing` states triggered by Hold-Space. That path is
-> unautomatable from tmux: `tmux send-keys Space` is press-and-release
-> (no real hold), and even a real hold needs microphone audio that tmux
-> can't supply. The Hold-Space-to-record flow stays a manual test;
-> automated coverage stops at "voice mode entered".
+Automated coverage stops at "voice mode entered". Hold-Space recording requires a real keyboard hold and microphone audio, neither of which tmux can supply — that path is manual only.
 
 **Setup**: TR-003 setup + precondition below.
 
@@ -462,15 +451,6 @@ entering voice mode, and the predicates below will not match.
 ---
 
 ## TR-013: Escape does NOT exit voice mode; /voice does
-
-> Updated 2026-05-21 (v3): two earlier "fixes" were themselves wrong.
-> (a) `contains "previous message"` fails on a fresh session because
-> Escape produces no visible hint at all when there's no prior chat
-> history — only when something was typed before. (b) `contains "Find
-> and fix a bug"` fails because ata's composer placeholder rotates
-> randomly per launch (`Summarize recent commits`, `Run /review on my
-> current changes`, etc.). Predicates now use the only stable
-> composer-state signal: presence or absence of the `🎤` emoji.
 
 Escape is bound to "edit previous message", not to leaving voice mode.
 Only the `/voice` slash toggles voice mode off. This test guards against
@@ -523,19 +503,9 @@ and the pane must still exist afterwards.
 
 ---
 
-## TR-015: /rollout prints the current session JSONL path
+## TR-015: superseded by TR-042
 
-**Setup**: TR-003 setup.
-
-**Action**:
-1. `tmux send-keys -t <new> "/rollout"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `out`.
-
-**Expect**:
-- `out` contains `Current rollout path:`
-- `out` contains `.ata/sessions/`
-- `out` contains `rollout-`
-- `out` contains `.jsonl`
+The original `/rollout` smoke test is replaced by TR-042, which covers both the public-release path (where `/rollout` is unrecognized) and the debug-build path (where it prints the live session JSONL with a cross-check against the actual file on disk). See TR-042 below.
 
 ---
 
@@ -891,13 +861,7 @@ research_hacker_news = false
 
 ## TR-022: Escape interrupts an in-flight turn cleanly
 
-> Updated 2026-05-21: the original setup polled for `esc to interrupt`
-> at the skill-default 6s cadence. gpt-5.5 often finishes the response
-> before the next poll fires, so the test sent Escape after the turn
-> had already completed and the interrupt banner never appeared
-> (manual repro confirms the interrupt path itself works). Action now
-> polls at a tight 0.2s cadence and uses a heavier prompt to widen the
-> interrupt window.
+The Action below polls at a tight 0.2s cadence and uses a heavy prompt because fast reasoning models can finish a response before a slower poll fires, racing past the interrupt window.
 
 The thinking indicator reads `esc to interrupt`, so Escape is the
 documented interrupt key. Pressing it while the agent is working stops
@@ -1708,41 +1672,6 @@ Protocol — append targeted the right section as a foldable Q&A:
 
 ---
 
-# Adding tests
-
-Append `## TR-<NNN>: <name>` sections following the same shape. Pick
-**Expect** predicates that fail when the bug regresses and pass otherwise —
-keep them narrow. A predicate like "contains 'Section'" is too loose; one
-like "row 1 starts with '╭'" is right because that's a specific
-property of the rendering.
-
-# Inspecting session logs
-
-Many TUI tests verify that the agent actually called the right tool, not
-just that the rendering looks right. Use the JSONL session logs at
-`~/.ata/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` for that:
-
-```bash
-# Find latest session (within 5 minutes)
-SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)
-
-# Tool names called
-jq -r '.payload.name // empty' $SESS | sort | uniq -c
-
-# Specific tool's arguments
-jq -r 'select(.payload.name=="present_reading_view") | .payload.arguments' $SESS
-jq -r 'select(.payload.name=="patch_document_section") | .payload.arguments' $SESS
-jq -r 'select(.payload.name=="code_intel") | .payload.arguments' $SESS
-```
-
-Cross-checking the session log against the rendered pane catches
-"agent rendered the right text but didn't call the right tool"
-regressions — for example a Tab-to-ask response that's rendered inline
-by the model but didn't go through `patch_document_section` is broken
-even if the chat looks correct.
-
----
-
 ## TR-038: /copy — full behavior matrix
 
 `/copy` is a TUI-only command. It grabs the last `•` agent line,
@@ -2283,16 +2212,16 @@ per pass.
 - `debug_out` not contains `Unrecognized command` — command IS recognized in debug
 - The printed path corresponds to an existing readable file: `ls -la <extracted_path>` succeeds and returns a non-zero size.
 
-### Scenario C: rollout path matches the actual session
+### Scenario C: rollout path matches the actual current session
 
 7. Extract the printed path from `debug_out` as `RPATH`.
-8. Cross-check: `find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1 > <newest_session>`.
+8. Cross-check: `ACTUAL=$(find ~/.ata/sessions -name "*.jsonl" -mmin -2 | xargs ls -t | head -1)`.
 
 **Expect**:
-- `RPATH` equals `<newest_session>` — `/rollout` returns the same JSONL that `find -mmin` returns (proves `/rollout` is sourcing from the live session state, not a stale handle)
+- `RPATH` equals `$ACTUAL` (printed path is the live session, not stale)
+- `[ -f "$RPATH" ]` (file exists on disk)
 
 **Notes**:
-- TR-015 (the original `/rollout` smoke) was failing against npm 0.7.0 — that is the expected Scenario A behavior, not a regression.
 - If a future change moves the handler out of `cfg!(debug_assertions)` (intentional public exposure), Scenario A predicates flip and we update the test to match.
 
 ---
@@ -2602,45 +2531,21 @@ history so the compaction has something to summarize.
 
 ---
 
-## TR-048: /goal is unrecognized on the public release (feature-gated, separately from /plan)
+## TR-048: /goal behaviour (blocked on Feature::Goals build)
 
-Source investigation indicated `/goal` is feature-gated on
-`Feature::Goals`. Empirically, on ata 0.7.0 the public release ships
-WITHOUT `/goal` registered, while `/plan` (allegedly sharing the same
-gate per source) IS registered. So `/goal` and `/plan` are gated
-separately, despite the source's comment.
+`/goal` is feature-gated on `Feature::Goals`. The public release does not enable it, and we don't currently have a build that does. This TR is a placeholder: when someone has a build with the Goals feature on, fill in the four states below with verified predicates.
 
-**Setup**: TR-003 setup.
+**Setup**: TR-003 setup AND a build where `Feature::Goals` is enabled (debug build with the flag forced, or a future release that exposes it).
 
-### Scenario A: /goal on public release = unrecognized
-
-1. `tmux send-keys -t <new> "/goal"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `out`.
-
-**Expect** (verified 2026-05-22 on ata 0.7.0 from npm):
-- `out` contains `Unrecognized command '/goal'.`
-- `out` contains `Type "/" for a list of supported commands.`
-
-### Scenario B: /plan on the same build IS recognized
-
-3. `tmux send-keys -t <new> "/plan"`; sleep 0.5; `Enter`; sleep 1.
-4. → capture `plan_works`.
-
-**Expect**:
-- `plan_works` contains `Plan mode (shift+tab to cycle)` — /plan IS recognized on the same build that rejected /goal
-- Proves the gates are independent, not shared.
-
-### Scenario C: /goal on a build with the Goals feature flag ON (TODO)
-
-When someone has a build with `Feature::Goals` actually enabled (debug
-build with the feature flag forced, or a future release that exposes
-it), expand this TR to cover the 4 documented states:
-- `/goal <text>` — set goal
-- `/goal clear` — clear goal
+**Action** (to be specified):
+- `/goal <text>` — set a goal
+- `/goal clear` — clear it
 - `/goal pause` — pause goal status
-- `/goal resume` — resume goal status
+- `/goal resume` — resume it
 
-Predicates for each state to be captured during that first validation run.
+**Expect**: predicates to be captured during the first run on a Goals-enabled build.
+
+Note: do not test `/goal` on builds without the feature flag. "Unrecognized command" is a distribution-channel fact, not feature behaviour, and the predicate would flip the day Goals ships.
 
 ---
 
@@ -3682,3 +3587,26 @@ use `patent_get`. Not validated in this pass.
 When the routing is fixed: predicates flip.
 
 ---
+
+# Adding tests
+
+Append `## TR-<NNN>: <name>` sections following the same shape. Pick **Expect** predicates that fail when the bug regresses and pass otherwise — keep them narrow. A predicate like "contains 'Section'" is too loose; one like "row 1 starts with '╭'" is right because that's a specific property of the rendering.
+
+# Inspecting session logs
+
+Many TUI tests verify that the agent actually called the right tool, not just that the rendering looks right. Use the JSONL session logs at `~/.ata/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` for that:
+
+```bash
+# Find latest session (within 5 minutes)
+SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1)
+
+# Tool names called
+jq -r '.payload.name // empty' $SESS | sort | uniq -c
+
+# Specific tool's arguments
+jq -r 'select(.payload.name=="present_reading_view") | .payload.arguments' $SESS
+jq -r 'select(.payload.name=="patch_document_section") | .payload.arguments' $SESS
+jq -r 'select(.payload.name=="code_intel") | .payload.arguments' $SESS
+```
+
+Cross-checking the session log against the rendered pane catches "agent rendered the right text but didn't call the right tool" regressions — for example a Tab-to-ask response that's rendered inline by the model but didn't go through `patch_document_section` is broken even if the chat looks correct.
