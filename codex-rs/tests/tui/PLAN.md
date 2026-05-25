@@ -1733,7 +1733,7 @@ trash user data: `ORIG=$(pbpaste)`; restore in cleanup.
 15. → capture `out_empty`; `pbpaste > <clipboard_empty>`.
 
 **Expect**:
-- `out_empty` contains `No agent response to copy` — exact error string (verified 2026-05-22 on ata 0.7.0)
+- `out_empty` contains `No agent response to copy` — exact error string
 - `out_empty` not contains `Copied last message to clipboard`
 - `clipboard_empty` not contains `No agent response to copy` — the error string itself was NOT pushed to the clipboard (would be a regression where ata writes its own UI error into the user's clipboard)
 
@@ -1745,8 +1745,7 @@ trash user data: `ORIG=$(pbpaste)`; restore in cleanup.
 to have at least one completed user→agent turn since the most recent
 `/clear` or session start. Hitting `/side` on a fresh or freshly-cleared
 session prints `'/side' is unavailable until the current conversation
-has started. Send a message first, then try /side again.` (verified
-2026-05-22). So Scenario D's `/clear` leaves us in the "conversation not
+has started. Send a message first, then try /side again.` So Scenario D's `/clear` leaves us in the "conversation not
 started" state — we must re-prime with a turn before /side.
 
 16. Re-prime the conversation: `tmux send-keys -t <new> "respond with just hello from side parent"`; sleep 1; `Enter`. Poll until pane matches `^• hello from side parent\b` (proves the turn completed).
@@ -1754,7 +1753,7 @@ started" state — we must re-prime with a turn before /side.
 18. `tmux send-keys -t <new> "/copy"`; sleep 0.5; `Enter`; sleep 1.
 19. → capture `out_side`; `pbpaste > <clipboard_side>`.
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `out_side` contains `Copied last message to clipboard` — /copy works inside /side
 - `out_side` contains `Side from main thread · Esc to return` — side context label confirms we ARE in a side conversation (not main thread)
 - `clipboard_side` contains `4` — the side-conversation answer, not the parent thread's most recent agent message
@@ -1787,7 +1786,7 @@ the error is recoverable by sending a message.
 23. → capture `out_inflight`.
 24. `tmux send-keys -t <new> Escape`; sleep 1 (cancel the long essay).
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `out_inflight` contains `Copied last message to clipboard` — /copy is allowed during an in-flight turn (no blocking)
 - `clipboard_inflight` contains the previous COMPLETED agent message body (e.g. `primed` if that was the last main-thread reply) — NOT the partial essay still streaming
 - `clipboard_inflight` not contains a substring from the in-flight essay (e.g. `espresso` if the essay had started writing but hadn't completed) — proves /copy grabs the last *completed* turn, not the in-flight one
@@ -1818,7 +1817,7 @@ system `ps`, and overlap-vs-divergence with `/scheduling`.
 
 ### Scenario B: persistent interactive shell populates /ps (the actual happy path)
 
-**What /ps tracks (verified 2026-05-22 via source + manual test)**:
+**What /ps tracks**:
 - `/ps` enumerates `unified_exec_processes` — long-lived interactive shells started by `exec_command` with `ExecCommandSource::UnifiedExecStartup`. These are persistent processes the agent can `write_stdin` to (Python REPL, interactive bash, node REPL, etc.).
 - `/ps` does NOT track: `monitor_start` rows (those go to `/scheduling` Monitors), `exec_command(background:true)` async commands (also Monitors), `cron_create*` (Cron section), or one-shot `exec_command` calls (no persistent process).
 - Naming caveat: the heading reads "Background terminals" but in practice it's "Persistent interactive shells".
@@ -1827,7 +1826,7 @@ system `ps`, and overlap-vs-divergence with `/scheduling`.
 4. `tmux send-keys -t <new> "/ps"`; sleep 0.5; `Enter`; sleep 1.
 5. → capture `populated`.
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `populated` contains `Background terminals` — heading
 - `populated` not contains `No background terminals running.` — empty-state copy is gone
 - `populated` matches `^\s*•\s+python` — at least one bullet row for the python process
@@ -1838,7 +1837,7 @@ system `ps`, and overlap-vs-divergence with `/scheduling`.
 
 ### Scenario B2: monitor-spawned process DOES NOT show in /ps (negative)
 
-Verified 2026-05-22: starting a monitor with `start a monitor named tr039-bg that runs: sleep 90` puts the row in `/scheduling` under `Monitors (1) [Running]`, but `/ps` continues to report `No background terminals running.` Same for `exec_command(background:true)` — they appear in `/scheduling` as `Monitors` rows, `pgrep -fl` returns a live PID, and yet `/ps` shows empty. This is by design: `/ps` is scoped to `unified_exec` startup processes only.
+starting a monitor with `start a monitor named tr039-bg that runs: sleep 90` puts the row in `/scheduling` under `Monitors (1) [Running]`, but `/ps` continues to report `No background terminals running.` Same for `exec_command(background:true)` — they appear in `/scheduling` as `Monitors` rows, `pgrep -fl` returns a live PID, and yet `/ps` shows empty. This is by design: `/ps` is scoped to `unified_exec` startup processes only.
 
 6. Send: `start a monitor named tr039-bg that runs: sleep 90`. Wait until pane contains `Started monitor tr039-bg`.
 7. `tmux send-keys -t <new> "/ps"`; sleep 0.5; `Enter`; sleep 1.
@@ -1879,7 +1878,7 @@ When /ps shows ≥1 row, the footer hint promises `/stop to close`. This scenari
 17. → capture `ps_after_stop`.
 18. From outside ata: `pgrep -fl "python3" | grep -v Adobe | grep -v JetBrains > <pgrep_after>` (filter common false positives).
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `stop_out` contains `Stopping all background terminals.` — exact confirmation copy
 - `ps_after_stop` contains `No background terminals running.` — empty state restored
 - `ps_after_stop` not contains `python` — the REPL row is gone
@@ -1887,7 +1886,7 @@ When /ps shows ≥1 row, the footer hint promises `/stop to close`. This scenari
 
 ### Scenario E: single-shell `/ps` output shape
 
-Verified 2026-05-25 on ata 0.7.0: when one `exec_command` (unified persistent) session is open, `/ps` renders exactly:
+when one `exec_command` (unified persistent) session is open, `/ps` renders exactly:
 
 ```
 Background terminals
@@ -1975,7 +1974,7 @@ Workspace creation is CLI-only — ata's TUI has no command to create a new work
 8. `tmux send-keys -t <new> "/workspace list"`; sleep 0.5; `Enter`; sleep 1.
 9. → capture `list_two`.
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `<init_out>` matches `^tr040-second-[0-9a-f]{8}\s*$` — the CLI prints ONLY the new workspace's id (name + 8-char hex suffix), nothing else. No "created" / "initialized" prose copy.
 - `list_two` contains `Workspaces (2)` — count incremented
 - `list_two` contains `global` AND `tr040-second` — both names present (`tr040-second-<suffix>` for the id column, `tr040-second` for the name column)
@@ -1989,7 +1988,7 @@ Workspace creation is CLI-only — ata's TUI has no command to create a new work
 12. `tmux send-keys -t <new> "/workspace current"`; sleep 0.5; `Enter`; sleep 1.
 13. → capture `current_after`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `switch` contains `Selected workspace: tr040-second-` AND `(tr040-second, 0 repos)` — confirmation includes id + name + repo count
 - `switch` contains `Workspace selection saved.` — separate confirmation line
 - `switch` contains `Restart the TUI for the new workspace's sandbox roots and cwd to take effect.` — **important nuance**: the selection persists immediately, but the live session keeps the old workspace's sandbox roots and cwd. Sandbox/cwd switch requires restart.
@@ -2003,7 +2002,7 @@ Workspace creation is CLI-only — ata's TUI has no command to create a new work
 16. `tmux send-keys -t <new> "/workspace current"`; sleep 0.5; `Enter`; sleep 1.
 17. → capture `current_still`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `invalid` contains `workspace selector 'does-not-exist-zzz' not found` — exact error string (note lowercase `workspace`, single-quoted selector)
 - `invalid` not contains `Selected workspace:` — no confirmation copy (the switch did not happen)
 - `invalid` not contains `Workspace selection saved.`
@@ -2017,7 +2016,7 @@ Workspace creation is CLI-only — ata's TUI has no command to create a new work
 21. `tmux send-keys -t <new> Escape`; sleep 1 (cancel essay).
 22. → capture `after_cancel`.
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `during_turn` contains `Current workspace:` AND the active workspace name — `/workspace current` is ALLOWED during an in-flight turn (no blocking)
 - `during_turn` not contains `unavailable` OR `wait` — no block error
 - After `/workspace current` is issued during the turn: the essay keeps generating, `esc to interrupt` is still visible until explicit Escape (same non-cancelling behavior as `/copy` in TR-038 F)
@@ -2097,7 +2096,7 @@ behavior during in-flight turn, and the picker focus state on reopen.
 
 ### Scenario E: ↑/↓ keyboard navigation moves the focus marker (verified)
 
-Standard arrow-key nav. Focus glyph is `›` (verified 2026-05-22).
+Standard arrow-key nav. Focus glyph is `›`.
 
 15. `tmux send-keys -t <new> Down`; sleep 0.5. → capture `nav_down`.
 16. `tmux send-keys -t <new> Up`; sleep 0.5. → capture `nav_up`.
@@ -2109,7 +2108,7 @@ Standard arrow-key nav. Focus glyph is `›` (verified 2026-05-22).
 
 ### Scenario F: ⌥+←/→ inside picker — no visible effect (verified)
 
-Verified 2026-05-22: pressing `⌥+→` / `⌥+←` inside an already-open picker does nothing visible — the focus marker stays where the arrow keys put it. The hint text `⌥ + ← previous, ⌥ + → next` appears aspirational or applies to a state other than "picker open" (likely the "view a different agent's thread" shortcut from chat view — when the picker is NOT open, ⌥+arrow cycles which agent's chat history is currently displayed).
+pressing `⌥+→` / `⌥+←` inside an already-open picker does nothing visible — the focus marker stays where the arrow keys put it. The hint text `⌥ + ← previous, ⌥ + → next` appears aspirational or applies to a state other than "picker open" (likely the "view a different agent's thread" shortcut from chat view — when the picker is NOT open, ⌥+arrow cycles which agent's chat history is currently displayed).
 
 17. With focus on row 1, `tmux send-keys -t <new> M-Right`; sleep 0.5. → capture `opt_right_picker`.
 18. `tmux send-keys -t <new> M-Left`; sleep 0.5. → capture `opt_left_picker`.
@@ -2127,14 +2126,14 @@ When the picker is NOT open, the same `⌥+←/→` shortcut switches the curren
 19. Close picker if open: `Escape`. Confirm in main chat view (footer shows `Main [default]`).
 20. `tmux send-keys -t <new> M-Left`; sleep 0.5. → capture `opt_left_chat`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `opt_left_chat` displays a different agent's chat history (e.g. Boole's `Understood. I'll stand by for documentation questions` greeting from spawn time)
 - `opt_left_chat` matches the agent's footer (e.g. `Boole [default]` instead of `Main [default]` in the bottom-right)
 - The view switch is silent — no banner like "switched to Boole" is printed
 
 ### Scenario G: select Boole via Enter → next message routes to Boole (verified)
 
-Verified 2026-05-22: selecting a row via Enter switches the active agent. Subsequent prompts route to that agent's thread, NOT to Main. JSONL cross-check confirms.
+selecting a row via Enter switches the active agent. Subsequent prompts route to that agent's thread, NOT to Main. JSONL cross-check confirms.
 
 21. Reopen `/agent`. Navigate to row 2 (Boole) via `Down`. Press `Enter`; sleep 2. → capture `selected_helper`.
 22. `tmux send-keys -t <new> "respond with just BBB"`; sleep 1; `Enter`. Poll until `^• BBB\b`. → capture `chat_to_helper`.
@@ -2160,7 +2159,7 @@ Verified 2026-05-22: selecting a row via Enter switches the active agent. Subseq
 
 ### Scenario I: /agent during in-flight turn — picker opens immediately, overlay-style (verified)
 
-Verified 2026-05-22 (re-verification correction): `/agent` invoked during an active turn opens the picker IMMEDIATELY, overlaying the running turn. The turn keeps running underneath the picker — `esc to interrupt` is hidden by the picker chrome but the turn continues. Pressing `Esc` to dismiss the picker also cancels the running turn (Esc's "interrupt-turn" handler takes precedence on dismissal).
+`/agent` invoked during an active turn opens the picker IMMEDIATELY, overlaying the running turn. The turn keeps running underneath the picker — `esc to interrupt` is hidden by the picker chrome but the turn continues. Pressing `Esc` to dismiss the picker also cancels the running turn (Esc's "interrupt-turn" handler takes precedence on dismissal).
 
 This corrects an earlier observation that suggested `/agent` was queued/deferred — that was a timing artifact (the original turn had already completed in the gap between polling and sending `/agent`).
 
@@ -2177,7 +2176,7 @@ This corrects an earlier observation that suggested `/agent` was queued/deferred
 
 ### Scenario J: picker focus state on reopen — resets to current agent (verified)
 
-Verified 2026-05-22: when the picker is reopened, the focus marker `›` always lands on the `(current)` agent — last-focused position is NOT preserved across open/dismiss cycles.
+when the picker is reopened, the focus marker `›` always lands on the `(current)` agent — last-focused position is NOT preserved across open/dismiss cycles.
 
 31. `/agent` → `Down` to row 2 (Boole) → `Escape` (no selection). → capture `escaped_at_row2`.
 32. `/agent` again. → capture `reopen_focus`.
@@ -2189,7 +2188,7 @@ Verified 2026-05-22: when the picker is reopened, the focus marker `›` always 
 
 ### Additional finding worth a separate predicate
 
-Verified 2026-05-22: the picker enumerates ALL recent agent threads in this session, not just ones the user explicitly named via `/agent` or spawn-prompts. Threads created implicitly by tool calls (e.g. `spawn_agent` during multi-source synthesis) appear as `• Agent` rows (no codename label) with their thread id. So the picker can show MORE rows than the user expects.
+the picker enumerates ALL recent agent threads in this session, not just ones the user explicitly named via `/agent` or spawn-prompts. Threads created implicitly by tool calls (e.g. `spawn_agent` during multi-source synthesis) appear as `• Agent` rows (no codename label) with their thread id. So the picker can show MORE rows than the user expects.
 
 Predicate to add to Scenario D (multi-row picker): record the exact number of rows after spawn, expect at least one explicit-name row AND possibly extra `• Agent` rows from prior tool-spawned subagents.
 
@@ -2265,7 +2264,7 @@ on by default on ata 0.7.0 public release.
 
 ### Scenario A: bare /plan turns ON (it does NOT toggle off — Shift+Tab does that)
 
-Verified 2026-05-22 (second pass): bare `/plan` only activates Plan mode. A second `/plan` does NOT turn it off — the footer still shows `Plan mode (shift+tab to cycle)`. The only way to turn off Plan mode is `Shift+Tab` (the binary toggle covered in Scenario C). Earlier-pass observations that suggested `/plan` was a toggle were measuring activation, not deactivation.
+bare `/plan` only activates Plan mode. A second `/plan` does NOT turn it off — the footer still shows `Plan mode (shift+tab to cycle)`. The only way to turn off Plan mode is `Shift+Tab` (the binary toggle covered in Scenario C). Earlier-pass observations that suggested `/plan` was a toggle were measuring activation, not deactivation.
 
 1. `tmux send-keys -t <new> "/plan"`; sleep 0.5; `Enter`; sleep 1.
 2. → capture `on1`.
@@ -2296,7 +2295,7 @@ Verified 2026-05-22 (second pass): bare `/plan` only activates Plan mode. A seco
 8. `tmux send-keys -t <new> BTab`; sleep 0.5. → capture `bt2`.
 9. `tmux send-keys -t <new> BTab`; sleep 0.5. → capture `bt3`.
 
-**Expect** (verified 2026-05-22 — only two states despite "to cycle" hint):
+**Expect**:
 - `bt1` not contains `Plan mode (shift+tab to cycle)` — first Shift+Tab toggles OFF
 - `bt2` contains `Plan mode (shift+tab to cycle)` — second toggles ON
 - `bt3` not contains `Plan mode (shift+tab to cycle)` — third toggles OFF again
@@ -2307,7 +2306,7 @@ Verified 2026-05-22 (second pass): bare `/plan` only activates Plan mode. A seco
 10. With Plan mode ON: `tmux send-keys -t <new> "/side what is 2+2?"`; sleep 0.5; `Enter`. Wait for `• 4` in the side context. → capture `in_side`.
 11. `tmux send-keys -t <new> Escape`; sleep 1. → capture `back_main`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `back_main` contains `Main [default]` AND `Plan mode (shift+tab to cycle)` — Plan mode survived the /side detour
 
 **Cleanup**: toggle Plan mode off with Shift+Tab or another `/plan`.
@@ -2333,7 +2332,7 @@ cleared session (see also TR-038 Scenario E2 for the negative case).
 2. `tmux send-keys -t <new> "/side"`; sleep 0.5; `Enter`; sleep 2.
 3. → capture `side_open`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `side_open` contains `Side from main thread · Esc to return` — context label in the footer
 - `side_open` footer agent label is `Agent` (NOT `Main [default]`) — side is its own thread with a separate agent context
 - `side_open` does NOT auto-submit any message (composer is empty / on a default placeholder)
@@ -2354,7 +2353,7 @@ cleared session (see also TR-038 Scenario E2 for the negative case).
 7. Still inside the side from Scenario B: `tmux send-keys -t <new> "/side"`; sleep 0.5; `Enter`; sleep 1.
 8. → capture `recursion`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `recursion` contains `'/side' is unavailable in side conversations. Press Esc to return to the main thread first.` — exact error (lowercase `/side`, mentions Esc as the way back)
 
 ### Scenario D: most slash commands blocked inside /side (command restriction)
@@ -2362,7 +2361,7 @@ cleared session (see also TR-038 Scenario E2 for the negative case).
 9. Still inside side: `tmux send-keys -t <new> "/scheduling"`; sleep 0.5; `Enter`; sleep 1.
 10. → capture `block_scheduling`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `block_scheduling` contains `'/scheduling' is unavailable in side conversations. Press Esc to return to the main thread first.` — same error pattern, name interpolated
 - The error format is `'/X' is unavailable in side conversations. Press Esc to return to the main thread first.` — covered by source as a single blocked-command template
 
@@ -2379,7 +2378,7 @@ cleared session (see also TR-038 Scenario E2 for the negative case).
 13. `tmux send-keys -t <new> Escape`; sleep 1.
 14. → capture `back_main`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `back_main` contains `Main [default]` — agent label is back to Main
 - `back_main` not contains `Side from main thread · Esc to return` — side label gone
 - The main thread's chat history is intact (still has the AAA/CCC/etc messages from before the /side detour — /side does NOT pollute main thread's transcript)
@@ -2410,7 +2409,7 @@ remember).
 1. With existing chat history present: `tmux send-keys -t <new> "/fork"`; sleep 0.5; `Enter`; sleep 2.
 2. → capture `forked`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `forked` contains `Token usage:` — token-usage summary line
 - `forked` contains `To continue this session, run ata resume` — resume hint
 - `forked` matches `ata resume [0-9a-f-]{36}` — parent session id is a UUID
@@ -2422,7 +2421,7 @@ remember).
 3. In the forked session: `tmux send-keys -t <new> "what did we discuss earlier?"`; sleep 1; `Enter`. Poll up to 90s until agent answers.
 4. → capture `recall`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `recall` contains references to actual prior history items — the fork inherited the parent's conversation context, NOT a clean slate
 - For our test session, `recall` contained references to `AAA`, `BBB`, `CCC`, `espresso`, `tr041-helper` etc. — exact terms vary by parent history, so the predicate is "matches at least 2 distinct topic terms from the parent's history" (test must record those terms during setup)
 
@@ -2452,7 +2451,7 @@ session id or saved chat name and errors otherwise.
 1. `tmux send-keys -t <new> "/resume"`; sleep 0.5; `Enter`; sleep 1.
 2. → capture `picker`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `picker` contains `Resume a previous session` — heading
 - `picker` contains `Type to search` — search input placeholder
 - `picker` matches `Filter: \[Cwd\] All` — filter field present (`[Cwd]` is the focused token; `All` is the value)
@@ -2475,13 +2474,12 @@ session id or saved chat name and errors otherwise.
 5. `tmux send-keys -t <new> "/resume primed"`; sleep 0.5; `Enter`; sleep 1.  (`primed` is a substring of a prior message but not a session name/id)
 6. → capture `no_match`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `no_match` contains `No saved chat found matching 'primed'.` — exact error string (note single-quoted token)
 - The picker did NOT open — inline-args mode skips the picker entirely
 
 ### Scenario D: inline /resume by session id loads that session
 
-Verified 2026-05-22:
 - Resuming the CURRENT session (the uuid currently in use) prints `Already viewing /Users/tim/.ata/sessions/<YYYY/MM/DD>/rollout-<timestamp>-<uuid>.jsonl.` — explicit no-op feedback.
 - Resuming a DIFFERENT recent session swaps the view to that session's chat history; the prior session's messages become visible.
 
@@ -2498,14 +2496,14 @@ Verified 2026-05-22:
 
 ### Scenario E: /resume is BLOCKED during an in-flight task (verified)
 
-Verified 2026-05-22: unlike `/copy` (allowed) and `/agent` (opens immediate overlay), `/resume` is hard-blocked while a tool call or turn is in progress.
+unlike `/copy` (allowed) and `/agent` (opens immediate overlay), `/resume` is hard-blocked while a tool call or turn is in progress.
 
 10. Trigger a long-running turn (e.g. ask for a 5000-word essay) so `esc to interrupt` is visible.
 11. Within that window: `tmux send-keys -t <new> "/resume"`; sleep 0.5; `Enter`; sleep 1.5.
 12. → capture `blocked`.
 13. `tmux send-keys -t <new> Escape`; sleep 2 (cancel essay so future tests work).
 
-**Expect** (verified 2026-05-22 — exact error string):
+**Expect**:
 - `blocked` contains `'/resume' is disabled while a task is in progress.` — exact block error
 - `blocked` not contains `Resume a previous session` — picker did NOT open
 - The in-flight turn keeps running until the explicit Escape cancels it
@@ -2531,7 +2529,7 @@ history so the compaction has something to summarize.
 1. `tmux send-keys -t <new> "/compact"`; sleep 0.5; `Enter`; sleep 3.
 2. → capture `compacted`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `compacted` contains `Context compacted` — confirmation line
 - `compacted` composer shows a default placeholder (e.g. `Implement {feature}`) — visible chat is reset
 - `compacted` does NOT contain the prior user messages (`respond with just AAA`, `respond with just BBB`, etc.) — visible scrollback is wiped
@@ -2542,7 +2540,7 @@ history so the compaction has something to summarize.
 3. `tmux send-keys -t <new> "what did we discuss earlier?"`; sleep 1; `Enter`. Poll up to 90s.
 4. → capture `recall_after_compact`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `recall_after_compact` contains references to actual prior topics (e.g. `AAA`, `espresso`, `python REPL`, `tr041-helper`) — the agent still knows what happened, just in summarized form, not as a verbatim transcript
 - The recall content is broadly correct (the agent may hallucinate minor details — record any such cases as observations, not failures)
 
@@ -2588,7 +2586,7 @@ overlay documents:
 - `w / b` — word forward / backward
 - `h / l` — cursor left / right
 
-Verified 2026-05-22: `j` scrolls 1 line, `k` scrolls 1 line up, `gg`
+`j` scrolls 1 line, `k` scrolls 1 line up, `gg`
 jumps to top. **`G` documented as "Jump to end of section" but observed
 only scrolling 3 lines — possible bug or limited by visible scroll
 position. Worth a finding.**
@@ -2603,7 +2601,7 @@ sufficient).
 2. `tmux send-keys -t <new> "j"`; sleep 0.3. → capture `j1`.
 3. `tmux send-keys -t <new> "k"`; sleep 0.3. → capture `k1`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `j1` text region differs from initial by exactly one line shift (scroll position moved down 1)
 - `k1` text region matches the initial position again
 
@@ -2621,7 +2619,7 @@ sufficient).
 7. `tmux send-keys -t <new> "G"`; sleep 0.3. → capture `g2`.
 8. `tmux send-keys -t <new> "G"`; sleep 0.3. → capture `g3`.
 
-**Expect** (verified 2026-05-22 — discrepancy with documented behavior):
+**Expect**:
 - `g1` scrolled DOWN, but NOT all the way to the end — only a few lines (observed ~3 lines per press)
 - `g2` and `g3` either continue scrolling or stop if at end
 - The documented behavior ("Jump to end of section") is NOT what 0.7.0 does
@@ -2639,7 +2637,7 @@ sufficient).
 
 ### Scenario E: implicit section-as-read marker (✓) when scrolling
 
-Verified 2026-05-22: simply scrolling past content within a section can result in the section being marked `✓` in the inline TOC, even without using `n`/`p`. Same likely applies to neighboring sections if the cursor crosses a section boundary via Ctrl+f or G.
+simply scrolling past content within a section can result in the section being marked `✓` in the inline TOC, even without using `n`/`p`. Same likely applies to neighboring sections if the cursor crosses a section boundary via Ctrl+f or G.
 
 12. Initial state: only section 1 has `✓` in the inline TOC.
 13. After heavy scrolling within slide 1 (j j j ... or C-d a few times) → capture `tocstate`.
@@ -2663,7 +2661,7 @@ reader (TR-049 setup) so there are multiple search hits across sections.
 1. With reader open: `tmux send-keys -t <new> "/"`; sleep 0.3.
 2. → capture `search_open`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `search_open` contains `Enter: search | Esc: cancel` — search-mode footer
 - `search_open` contains `/` on its own row — search input cursor visible
 
@@ -2673,7 +2671,7 @@ reader (TR-049 setup) so there are multiple search hits across sections.
 4. `tmux send-keys -t <new> Enter`; sleep 1.
 5. → capture `search_committed`.
 
-**Expect** (verified 2026-05-22 — match count varies by content):
+**Expect**:
 - `search_committed` contains `/brewing` — query echoed in the search bar
 - `search_committed` matches `\[[0-9]+/[0-9]+\]` — match counter present (e.g. `[1/3]` or `[1/4]`)
 - `search_committed` highlights the word `brewing` (pink underline ANSI — capture with `tmux capture-pane -p -e` to see the escape codes)
@@ -2685,7 +2683,7 @@ reader (TR-049 setup) so there are multiple search hits across sections.
 7. `tmux send-keys -t <new> "n"`; sleep 0.5. → capture `next2`.
 8. Continue until you've seen all matches.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - Counter increments (`[2/N]`, `[3/N]`, ...) — each `n` advances to the next match
 - The view scrolls to a different section when needed — matches in slide 2, 3, etc. all reachable by repeated `n`
 - After reaching the last match, the NEXT `n` either wraps to `[1/N]` OR shows a "no more matches" state (to verify which behavior on first run)
@@ -2695,7 +2693,7 @@ reader (TR-049 setup) so there are multiple search hits across sections.
 9. `tmux send-keys -t <new> "N"`; sleep 0.5. → capture `prev1`.
 10. `tmux send-keys -t <new> "N"`; sleep 0.5. → capture `prev2`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `N` from match 1 wraps to the last match — counter goes `[1/N]` → `[N/N]` (e.g. `[1/4]` → `[4/4]`)
 - Subsequent `N` continues backward — `[N/N]` → `[N-1/N]` → ...
 
@@ -2729,7 +2727,7 @@ least one foldable region** by either:
 1. Open a plain coffee-slides reader (no fold markers).
 2. `tmux send-keys -t <new> "f"`; sleep 0.3. → capture `no_fold`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `no_fold` is identical (modulo footer timer) to the pre-`f` capture — nothing happens, no error printed
 
 ### Scenario B: f toggles a fold at cursor on a document with foldable regions
@@ -2760,7 +2758,7 @@ least one foldable region** by either:
 
 ### Scenario E: fold keys are bound and don't crash even when no fold is at cursor
 
-Verified 2026-05-25: pressing `f`, `zM`, `zR`, `[`, `]` from a reader with no foldable region at the cursor is a no-op (no crash, no visible state change, footer stays the same). The keys are always bound; they just have nothing to act on.
+pressing `f`, `zM`, `zR`, `[`, `]` from a reader with no foldable region at the cursor is a no-op (no crash, no visible state change, footer stays the same). The keys are always bound; they just have nothing to act on.
 
 ### Status
 
@@ -2791,7 +2789,7 @@ audio and (probably) highlights words as they're spoken.
 2. With reader open: `tmux send-keys -t <new> "r"`; sleep 1.
 3. → capture `r_no_key`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `r_no_key` footer EXPANDS to show audio controls: `r: read | s: pause | +/-: speed | t: toc | f: fold | v: select | Tab: ask | q: close` — proves the audio-active state was entered before failing
 - `r_no_key` momentarily shows `▶️T  Speaking...` (the active TTS row) — narration started
 - `r_no_key` then shows `TTS error: Invalid API key` — exact error string
@@ -2818,7 +2816,7 @@ This guards against: a) audio-control keys panicking when no narration exists, b
 
 ### Scenario C: r key not in /? help even though it's in the footer (doc gap)
 
-Verified 2026-05-22: the `?` help overlay covers Navigation, Selection,
+the `?` help overlay covers Navigation, Selection,
 Questions, Search, Folds, and Other — but TTS / audio keys (`r`, `s`,
 `+/-`, `R`) are NOT documented in any section. The bottom footer DOES
 show `r: read`, so the binding is discoverable but the help is incomplete.
@@ -2847,7 +2845,7 @@ and `Esc` cancels the selection.
 1. `tmux send-keys -t <new> "v"`; sleep 0.3.
 2. → capture `vselect_on`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `vselect_on` footer is `hjkl: select | Enter: explain | Tab: ask about | Esc: cancel` — completely replaces the standard footer
 - A cursor / selection start marker is visible somewhere in the content area (exact glyph to verify on first run — likely reverse-video block or `▎`)
 
@@ -2909,7 +2907,7 @@ TR-052 C).
 1. `tmux send-keys -t <new> "?"`; sleep 0.5.
 2. → capture `help`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `help` contains `Reading View Help` — top heading
 - `help` contains `Getting around` AND `Use ↑↓ or j/k to scroll within a section` AND `Press n/p to go to the next or previous section` — Getting Around section
 - `help` contains `Ask about anything` AND `Select text with v, then press Enter to explain it` AND `Or press Tab to type your own question` — Ask section
@@ -2960,7 +2958,7 @@ The help DOES NOT document:
 When the help is updated to include these, this scenario's negative
 predicates flip and become positive.
 
-**Expect** (the documentation gap, verified 2026-05-22):
+**Expect** (the documentation gap):
 - `help` does NOT contain `r   Start narration` OR similar
 - `help` does NOT contain `s   Pause narration`
 - `help` does NOT contain `+ / -   Adjust narration speed`
@@ -2983,7 +2981,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 1. Shell command: `ata workspace list > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` is valid JSON (parseable with `jq .`).
 - `<out>` matches `\[\s*\{` — array of objects.
 - Each entry has keys `id`, `name`, `updatedAt`, `repoCount`.
@@ -2994,7 +2992,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 2. Shell command: `ata workspace read > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` is valid JSON.
 - `<out>` contains top-level keys: `schemaVersion`, `id`, `name`, `createdAt`, `updatedAt`, `manifestVersion`, `repos`, `runs`, `papers`, `datasets`, `artifacts`, `links`, `snapshots`, `indexes`, `policies`, `knowledgeBase`, `labels`.
 - `<out>` contains `"schemaVersion": 2`, `"manifestVersion": 1`.
@@ -3006,7 +3004,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 3. Shell command: `ata workspace validate > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` is valid JSON.
 - `<out>` contains keys `workspaceId`, `ok`, `missingRepos`, `missingRuns`, `orphanRepoDirs`, `orphanRunDirs`.
 - On a clean workspace: `"ok": true` and all four list fields are empty arrays.
@@ -3016,7 +3014,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 4. Shell command: `ata workspace recipe list > <out>`.
 
-**Expect** (verified 2026-05-22 — list will grow over time):
+**Expect**:
 - `<out>` first line is `Available recipes:`.
 - `<out>` contains each of: `export`, `export_spec`, `import`, `index_build`, `link_add`, `materialize`, `repo_pin`, `repo_remove`, `repo_unpin`, `repo_update`, `resource_add`, `run_delete`, `run_exec`, `run_gc`, `snapshot_create`, `snapshot_restore`.
 - Format is two-space-indented names, one per line.
@@ -3025,7 +3023,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 5. Shell command: `ata workspace recipe repo_pin > <out>`.
 
-**Expect** (verified 2026-05-22 — exact body lines for repo_pin):
+**Expect**:
 - `<out>` starts with a `# ...` comment header (e.g. `# Pin repository to a specific commit`).
 - `<out>` contains env-var assignments like `ALIAS="<repo_alias>"`, `SHA="<commit_sha>"`.
 - `<out>` contains `ata workspace repo-pin --alias "$ALIAS" --sha "$SHA" --workspace "$WID"` — the CLI invocation for the operation.
@@ -3036,7 +3034,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 6. Shell command: `ata workspace mirror-path https://github.com/openai/codex > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` matches `^/.+/\.ata/caches/repo-mirrors/[0-9a-f]{16}\s*$` — absolute path under `.ata/caches/repo-mirrors/` ending in a 16-char hex hash of the URL.
 - The same URL always returns the same path (deterministic hash).
 - A different URL returns a different hash.
@@ -3045,7 +3043,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 7. Shell command: `ata workspace check-host https://github.com/openai/codex > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` matches `^https://github\.com/openai/codex\s*$` — URL echoed back, no other text.
 - Exit code is 0 (the host passed the allowlist check).
 - Policy default (absent/null `repoHostsAllowlist`) allows ALL hosts — `check-host` always returns 0 unless an allowlist is explicitly configured on the workspace.
@@ -3061,7 +3059,7 @@ exists. No prior repos/runs/audit entries (clean state).
    ata workspace delete "$WSID" --force
    ```
 
-**Expect** (verified 2026-05-25):
+**Expect**:
 - `<out>` contains `error: host 'github.com' not in allowlist: ["gitlab.com"]` (literal, includes the allowlist contents formatted as a JSON array)
 - Exit code is 1
 - An EMPTY allowlist `[]` produces: `error: host 'github.com' not in allowlist: []` (blocks ALL hosts — different from null which allows ALL)
@@ -3070,7 +3068,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 8. Shell command: `ata workspace audit-query --workspace global > <out>`.
 
-**Expect** (verified 2026-05-22 on a clean workspace):
+**Expect**:
 - `<out>` is exactly `[]` (empty JSON array).
 - After running any mutating operation (e.g. `repo-clone`), `audit-query` returns at least one entry — verify by performing a tiny audit operation and re-querying.
 
@@ -3078,7 +3076,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 9. Shell command: `ata workspace export-spec > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` is valid JSON.
 - `<out>` top-level keys: `schemaVersion`, `name`, `repos`, `labels`.
 - `<out>` contains `"schemaVersion": 1` (spec version 1).
@@ -3089,7 +3087,7 @@ exists. No prior repos/runs/audit entries (clean state).
 
 10. Shell command: `ata workspace search-commands repo > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` starts with `Matches:` heading.
 - `<out>` contains a numbered list `1.`, `2.`, `3.` ... with format `<command-name> — <one-line description>`.
 - For query `repo`: matches include `repo-clone`, `repo-pin`, `repo-remove`.
@@ -3112,7 +3110,7 @@ the TUI side). Delete removes the directory tree and requires
 
 1. Shell command: `ata workspace init tr056-test > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` matches `^tr056-test-[0-9a-f]{8}\s*$` — id is `<name>-<8-char-hex>`.
 - No additional text (no "created" / "initialized" prose).
 - Exit code 0.
@@ -3132,7 +3130,7 @@ the TUI side). Delete removes the directory tree and requires
 4. Shell command: `ata workspace select global` (switch back to global before deleting).
 5. Shell command: `ata workspace delete tr056-test-<suffix> --force > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` matches `^deleted: tr056-test-[0-9a-f]{8}\s*$` — confirmation line.
 - `ata workspace list` returns only `global`.
 - The workspace directory is gone from disk.
@@ -3315,7 +3313,7 @@ a new workspace.
 
 1. Shell command: `ata workspace export-spec --workspace <WSID> > /tmp/tr060-spec.json`.
 
-**Expect** (verified 2026-05-25 — both empty and populated workspaces):
+**Expect**:
 - File is valid JSON.
 - Keys (exhaustive — no others): `schemaVersion`, `name`, `repos`, `labels`.
 - `schemaVersion: 1`.
@@ -3330,7 +3328,7 @@ a new workspace.
    ```
 3. Shell command: `ata workspace diff-spec /tmp/tr060-modified.json --workspace <WSID> > <out>`.
 
-**Expect** (verified 2026-05-25):
+**Expect**:
 - `<out>` first line: `Add (N):` (count of repos to add)
 - `<out>` subsequent indented lines: `  + <alias>` per repo
 - `<out>` final line: `Summary: N add, N pin, N ref, N skip`
@@ -3341,7 +3339,7 @@ a new workspace.
 
 4. Shell command: `ata workspace materialize /tmp/tr060-modified.json --workspace <WSID> --dry-run > <out>`.
 
-**Expect** (verified 2026-05-25):
+**Expect**:
 - `<out>` is valid JSON with shape `{ "dryRun": true, "actions": [...] }`
 - Each `actions[]` entry has `{ "alias": "<a>", "action": "<add|pin|ref|skip>" }`
 - For the test spec above: `actions: [{alias: "hello", action: "add"}]`
@@ -3384,7 +3382,7 @@ Once those four steps pass, Scenarios D–R below can run against real data.
 
 1. Shell command: `ata zotero status > <out>`.
 
-**Expect** (verified 2026-05-22 with no API key):
+**Expect**:
 - `<out>` contains `Effective mode: local` — local mode is the default fallback
 - `<out>` contains `Base URL: http://localhost:23119/api` — Zotero desktop's local API endpoint
 - `<out>` contains `API key configured: no` — no key in this shell
@@ -3420,7 +3418,7 @@ This verifies the config plumbing + status reporting. Actual cloud API behavior 
 
 2. Shell command: `ata zotero --help > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` lists each of: `search-commands`, `status`, `resolve-paper`, `add-paper`, `find-repos`, `search`, `tags`, `recent`, `advanced-search`, `grep-text`, `search-notes`, `item`, `collections`, `collection`, `groups`, `items`, `attachment`, `help`.
 - `<out>` starts with `Manage Zotero libraries, collections, items, and attachments`.
 
@@ -3428,7 +3426,7 @@ This verifies the config plumbing + status reporting. Actual cloud API behavior 
 
 3. Shell command: `ata zotero search-commands paper > <out>`.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `<out>` first line is `Matches:`.
 - `<out>` numbered list includes top-level subcommands AND nested ones (verified: `item citation` appears as a nested-subcommand match alongside top-level `add-paper` and `resolve-paper`).
 - `<out>` includes `Best match manual:` block with clap-style help for the top hit.
@@ -3436,7 +3434,7 @@ This verifies the config plumbing + status reporting. Actual cloud API behavior 
 
 ### Scenarios D–L: subcommands requiring a live Zotero
 
-**Prerequisite**: complete the Zotero workspace setup above. All scenarios below verified 2026-05-25 against a real local Zotero library with 15 collections and 1 group ("agents2agents"). Replace concrete keys (`A46QKYJI`, `DNAJYNGP`) with ones from your library.
+**Prerequisite**: complete the Zotero workspace setup above. Replace concrete keys (`A46QKYJI`, `DNAJYNGP`) with ones from your library.
 
 #### Scenario D: `collections` lists all accessible collections
 - Command: `ata zotero collections`
@@ -3520,7 +3518,7 @@ intent.
 4. `SESS=$(find ~/.ata/sessions -name "*.jsonl" -mmin -5 | xargs ls -t | head -1); jq -r '.payload.name // empty' "$SESS" | sort | uniq -c > <tool_counts>`.
 5. `jq -r 'select(.payload.name=="paper_search") | .payload.arguments' "$SESS" > <search_args>`.
 
-**Expect** (verified 2026-05-22 on ata 0.7.0):
+**Expect**:
 - `resp` contains a paper title and/or `arxiv.org`, `dblp.org`, or `dagstuhl.de` link — proves an actual paper landed
 - `resp` not contains `I couldn't find` OR `no results` — agent didn't bail
 - `tool_counts` matches `[0-9]+ paper_search` with the leading count ≥ 1 — paper_search WAS called
@@ -3533,7 +3531,7 @@ intent.
 
 6. Inspect `<search_args>` (one JSON object per line, one per call).
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - Each call's args contain `query` (string) — the search term
 - Each call's args contain `source` with one of: `semantic_scholar`, `arxiv`, `openalex`
 - The 6+ calls collectively cover ALL THREE sources (the orchestration is breadth-first across sources, not depth-first into one)
@@ -3556,7 +3554,7 @@ intent.
 
 ### Scenario D: bad query / no results path
 
-Verified 2026-05-22 with a deliberately absurd prompt: `find me a paper about quantum entangled toaster pancakes from 2071`.
+`find me a paper about quantum entangled toaster pancakes from 2071`.
 
 **Action**:
 1. In ata: `find me a paper about quantum entangled toaster pancakes from 2071`; sleep 1; Enter.
@@ -3589,7 +3587,7 @@ explicitly names it.
 1. In ata: `look up arxiv 2505.21323`. Sleep 1; Enter. Poll for the response.
 2. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - Response contains paper title (`Asynchronous Rust`), authors, DOI — correct content
 - `tool_counts` contains `exec_command` (≥1 — used to curl arxiv.org/abs/2505.21323)
 - `tool_counts` does NOT contain `paper_get` — natural prompt didn't route to the dedicated tool
@@ -3599,7 +3597,7 @@ explicitly names it.
 3. In ata: `use the paper_get tool to fetch the paper with arxiv id 2505.21323 and tell me the abstract`. Sleep 1; Enter. Poll.
 4. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `tool_counts` contains `paper_get` (count = 1)
 - `paper_get` args match `{"paper_id":"arXiv:2505.21323"}` — id format is `arXiv:<number>` (capital X, colon-prefixed). The arg field name is `paper_id`.
 - Response contains the paper's abstract
@@ -3617,7 +3615,7 @@ paper's id.
 1. In ata: `use paper_citations to find recent papers that cite arxiv 2505.21323`. Sleep 1; Enter. Poll.
 2. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `tool_counts` contains `paper_citations` (count = 1)
 - Args:
   - `paper_id: "arXiv:2505.21323"` — same id-format as paper_get
@@ -3637,7 +3635,7 @@ The reverse of paper_citations — what does paper X cite.
 1. In ata: `use paper_references to list the references cited inside arxiv 2505.21323`. Sleep 1; Enter. Poll.
 2. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `tool_counts` contains `paper_references` (count = 1)
 - Args:
   - `paper_id: "arXiv:2505.21323"`
@@ -3657,7 +3655,7 @@ recommends similar work.
 1. In ata: `use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors`. Sleep 1; Enter. Poll.
 2. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - `tool_counts` contains `paper_recommendations` (count = 1)
 - Args:
   - `positive_paper_ids: ["arXiv:2505.21323"]` — ARRAY of ids (note plural and array structure, distinct from `paper_id` in paper_get/citations/references)
@@ -3682,7 +3680,7 @@ Worth filing as a finding for whoever owns the research-tools registration.
 1. In ata: `use patent_search to find patents about rust compiler intermediate representation`. Sleep 1; Enter. Poll up to 3 min.
 2. Inspect JSONL.
 
-**Expect** (verified 2026-05-22):
+**Expect**:
 - Response contains real patent numbers (e.g. `US12039033B2`, `CN120704658A`) and descriptions — the agent DOES return patent results
 - `tool_counts` does NOT contain `patent_search` — dedicated tool was NOT invoked
 - `tool_counts` contains `exec_command` (≥1) — agent shelled out instead
