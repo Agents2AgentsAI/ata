@@ -195,8 +195,10 @@ main() {
   log "WARNING: this batch sends real prompts and costs real LLM tokens."
   log ""
 
-  log "In-flight + interrupt + round-trip"
-  tr005_a; tr022_a; tr016_b
+  log "Numbered TRs (in order)"
+  tr005_a
+  tr016_b
+  tr022_a
 
   log ""
   log "----"

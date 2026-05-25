@@ -667,22 +667,31 @@ main() {
   log "Tier B1 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
   log ""
 
-  log "Slash command parsing & overlays"
-  tr020_a; tr020_b; tr016_a; tr018_a; tr018_d
-  tr018_b; tr017_a; tr010_a; tr020_d; tr019_a
+  log "Numbered TRs (in order)"
+  tr006_a
+  tr010_a
+  tr014_a
+  tr016_a
+  tr017_a
+  tr018_a; tr018_b; tr018_d
+  tr019_a; tr019_b; tr019_c
+  tr020_a; tr020_b; tr020_d
+  tr023_a
+  tr040_a; tr040_b; tr040_c
+  tr041_a
+  tr042_a
+  tr043_a
+  tr046_a
 
   log ""
-  log "Pickers, history, plan mode"
-  tr019_c; tr006_a; tr023_a; tr014_a; tr043_a
-
-  log ""
-  log "Regression guards + toggles"
-  tr019_b; tr042_a; tr_keymap_a; tr_vim_a; tr_fast_a
-
-  log ""
-  log "Personalization, workspace, agent, resume"
-  tr_personality_a; tr_statusline_a; tr_ide_a; tr_transcript_a
-  tr040_a; tr040_b; tr040_c; tr041_a; tr046_a
+  log "Ad-hoc slash commands (not in PLAN.md)"
+  tr_fast_a
+  tr_ide_a
+  tr_keymap_a
+  tr_personality_a
+  tr_statusline_a
+  tr_transcript_a
+  tr_vim_a
 
   log ""
   log "----"
