@@ -21,6 +21,7 @@ trap 'cleanup_all' EXIT
 
 PASS=0
 FAIL=0
+SKIP=0
 FAILED_NAMES=()
 CURRENT_NAME=""
 CURRENT_FAILED=0
@@ -28,8 +29,14 @@ CURRENT_FAILED=0
 # --- helpers ---------------------------------------------------------------
 
 log()   { printf '%s\n' "$*"; }
-red()   { printf '\033[31m%s\033[0m\n' "$*"; }
-green() { printf '\033[32m%s\033[0m\n' "$*"; }
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+
+skip_test() {
+  yellow "SKIP — $1"
+  SKIP=$((SKIP + 1))
+}
 
 start_test() {
   CURRENT_NAME="$1"
@@ -404,6 +411,104 @@ tr043_a() {
   end_test
 }
 
+tr019_b() {
+  start_test "TR-019 B"
+  local sess=$SESSION-019b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Regression guard for the documented bug: Tab on a no-match @-picker
+  # query leaves the picker in a 'loading...' state that never resolves.
+  send_text "$sess" "@xyznosuchprefix"
+  sleep 1
+  send_key  "$sess" Tab
+  sleep 2
+  local out=$WORK/019b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "@xyznosuchprefix" "typed text preserved"
+  assert_contains "$out" "loading..." "picker stuck in loading state (known bug)"
+  kill_ata "$sess"
+  end_test
+}
+
+tr042_a() {
+  start_test "TR-042 A"
+  # /rollout is gated by cfg!(debug_assertions); only the debug build
+  # registers the command. CI uses a cargo-built debug binary; the
+  # public npm-installed ata is release, so skip there.
+  case "$ATA_BIN" in
+    *target/debug/ata*) ;;
+    *) skip_test "needs debug build (ATA_BIN=$ATA_BIN)"; return;;
+  esac
+  local sess=$SESSION-042a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/rollout"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/042a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Current rollout path:" "rollout path printed"
+  assert_contains "$out" "sessions/" "path points into the sessions directory"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_keymap_a() {
+  start_test "/keymap"
+  local sess=$SESSION-keymap
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/keymap"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/keymap.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Keymap" "title shown"
+  assert_contains "$out" "All configurable shortcuts" "subtitle present"
+  assert_contains "$out" "Open Transcript" "lists a known shortcut"
+  assert_contains "$out" "esc close" "footer shows esc hint"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_vim_a() {
+  start_test "/vim"
+  local sess=$SESSION-vim
+  # Two toggles net to zero — keeps the caller's config unchanged.
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/vim"
+  send_key  "$sess" Enter
+  sleep 1.5
+  send_text "$sess" "/vim"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/vim.txt
+  capture "$sess" "$out"
+  # Each toggle prints a status line; both should be visible.
+  assert_contains "$out" "Vim mode enabled" "first toggle confirms ON"
+  assert_contains "$out" "Vim mode disabled" "second toggle confirms OFF"
+  kill_ata "$sess"
+  end_test
+}
+
+tr_fast_a() {
+  start_test "/fast"
+  local sess=$SESSION-fast
+  # Two toggles net to zero — caller's Fast-mode setting is restored.
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/fast"
+  send_key  "$sess" Enter
+  sleep 1.5
+  send_text "$sess" "/fast"
+  send_key  "$sess" Enter
+  sleep 1.5
+  local out=$WORK/fast.txt
+  capture "$sess" "$out"
+  # /fast prints "Fast mode set to on" / "Fast mode set to off". After
+  # two toggles both lines appear in the transcript regardless of which
+  # state we started in.
+  assert_contains "$out" "Fast mode set to" "fast toggle was acknowledged"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -428,8 +533,12 @@ main() {
   tr019_c; tr006_a; tr023_a; tr014_a; tr043_a
 
   log ""
+  log "Regression guards + toggles"
+  tr019_b; tr042_a; tr_keymap_a; tr_vim_a; tr_fast_a
+
+  log ""
   log "----"
-  log "PASS: $PASS  FAIL: $FAIL"
+  log "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
   if [ "$FAIL" -gt 0 ]; then
     log "Failed: ${FAILED_NAMES[*]}"
     exit 1

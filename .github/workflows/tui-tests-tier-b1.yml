@@ -62,6 +62,9 @@ jobs:
 
           [projects."${{ github.workspace }}/codex-rs"]
           trust_level = "trusted"
+
+          [features]
+          scheduling = true
           EOF
 
       - name: Run Tier B1 scenarios
