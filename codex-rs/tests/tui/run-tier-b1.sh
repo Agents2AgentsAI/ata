@@ -97,13 +97,13 @@ kill_ata() {
 send_text() {
   local name=$1 text=$2
   tmux send-keys -t "$name" "$text"
-  sleep 0.3
+  sleep 0.6
 }
 
 send_key() {
   local name=$1 key=$2
   tmux send-keys -t "$name" "$key"
-  sleep 0.3
+  sleep 0.4
 }
 
 capture() {

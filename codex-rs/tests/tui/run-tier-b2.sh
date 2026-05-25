@@ -86,8 +86,8 @@ boot_ata() {
 
 kill_ata() { tmux kill-session -t "$1" 2>/dev/null || true; }
 
-send_text() { tmux send-keys -t "$1" "$2"; sleep 0.3; }
-send_key()  { tmux send-keys -t "$1" "$2"; sleep 0.3; }
+send_text() { tmux send-keys -t "$1" "$2"; sleep 0.6; }
+send_key()  { tmux send-keys -t "$1" "$2"; sleep 0.4; }
 capture()   { tmux capture-pane -t "$1" -p > "$2"; }
 
 # Wait for the turn to complete by watching the "esc to interrupt"
