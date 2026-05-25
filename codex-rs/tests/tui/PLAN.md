@@ -207,13 +207,42 @@ prompt, wait for `Sections (n/p`).
 
 **Setup**: TR-005 (submit at least one message first).
 
-**Action**:
+### Scenario A: baseline — Up recalls last submission
 1. `tmux send-keys -t <new> C-u`; sleep 0.3.
 2. `tmux send-keys -t <new> Up`; sleep 0.5.
 3. → capture `up`.
 
 **Expect**:
 - `up` contains `respond with just hi` in the composer (`›` line)
+
+### Scenario B: history persists across /clear
+1. From TR-005 state with the prior submission visible.
+2. Send `/clear`; Enter; sleep 2.
+3. `tmux send-keys -t <new> Up`; sleep 0.5. → capture `up_after_clear`.
+
+**Expect**:
+- `up_after_clear` contains `respond with just hi` in the composer
+- (Proves `/clear` does NOT wipe `~/.ata/history.jsonl` — Up still recalls)
+
+### Scenario C: Up/Down navigates bidirectionally
+1. From C-u (empty composer), press Up four times: → composer cycles through entries 1..4 oldest-first as we move further back.
+2. Then press Down once: → composer moves forward to entry 3.
+
+**Expect**:
+- Each Up changes the composer to an older entry
+- Down moves forward (toward more recent)
+- No "end of history" indicator at oldest entry — silently stops moving
+- History file path: `~/.ata/history.jsonl`
+
+### Scenario D: in-session Up-arrow buffer is broader than persistent history.jsonl
+1. In one ata session: run `/model`; Esc out. Run `/permissions`; Esc out. Send chat `hi`.
+2. Now `tmux send-keys C-u; Up; Up; Up` and observe what the composer recalls.
+3. Inspect `tail -3 ~/.ata/history.jsonl | jq -r .text` and compare.
+
+**Expect**:
+- Up-arrow recalls `/model`, `/permissions`, `hi` (slash commands included)
+- `history.jsonl` only contains `hi` (recognized slash commands EXCLUDED from persistent history)
+- This divergence means slash commands are recallable in the same session but not across restarts.
 
 ---
 
@@ -224,18 +253,50 @@ the reader, chat would render jumbled escape sequences.
 
 **Setup**: TR-007 + reader open with `Sections (n/p` visible.
 
-**Action**:
-1. `tmux send-keys -t <new> Escape`; sleep 0.5; `q`; sleep 2.
-2. → capture `post_close`.
-3. `tmux send-keys -t <new> "reply with just OK"`; sleep 1; `Enter`.
-4. Poll until `tmux capture-pane -t <new> -p | grep -E "^• OK\b"`.
-5. → capture `post_chat`.
+### Scenario A: baseline — q closes reader, chat resumes cleanly
+1. `tmux send-keys -t <new> Escape`; sleep 0.5; `q`; sleep 2. → `post_close`.
+2. `tmux send-keys -t <new> "reply with just OK"`; sleep 1; `Enter`.
+3. Poll until `^• OK\b`. → `post_chat`.
 
 **Expect**:
-- `post_close` contains `Agent showed document:`
-- `post_close` not contains `Sections (n/p` (reader closed)
-- `post_chat` contains `• OK`
-- `post_chat` not contains any of `╭`, `╮`, `╯`, `╰` from a leftover reader frame
+- `post_close` contains `Agent showed document:` and NOT `Sections (n/p`
+- `post_chat` contains `• OK` and NOT any of `╭ ╮ ╯ ╰` from a leftover reader frame
+
+### Scenario B: Esc does NOT close the reader
+1. From the reader in normal mode (no visual selection, no help overlay).
+2. `tmux send-keys -t <new> Escape`; sleep 1. → `out`.
+
+**Expect**:
+- `out` STILL shows the reader frame and section header
+- Esc has no effect on the reader in normal mode (it's reserved for cancelling sub-modes like visual select)
+
+### Scenario C: Ctrl+C also closes the reader
+1. From the reader in normal mode.
+2. `tmux send-keys -t <new> C-c`; sleep 2. → `out`.
+
+**Expect**:
+- `out` contains `Agent showed document:` (reader closed, same as `q`)
+- Ctrl+C is an equivalent close key — useful when keyboard focus is unclear
+
+### Scenario D: `q` from visual select mode closes reader directly (selection dropped)
+1. Open reader.
+2. `tmux send-keys -t <new> v`; sleep 0.5. (enter visual select)
+3. `tmux send-keys -t <new> j`; `j`; sleep 0.5. (extend selection)
+4. `tmux send-keys -t <new> q`; sleep 2. → `out`.
+
+**Expect**:
+- `out` contains `Agent showed document:` (reader closed)
+- The visual selection is silently dropped — `q` does NOT first dismiss visual mode and require a second `q`
+- No `[The user selected...]` system message in session JSONL — the selection never reached the agent
+
+### Scenario E: closing reader injects a system follow-up prompt to the agent
+1. Open reader, optionally scroll/read sections, then `q`.
+2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -3`.
+
+**Expect**:
+- JSONL contains `[The user closed the document reader for "<title>". They viewed N of M sections.] Check whether follow-up Q&A during this ...` as a user message
+- This prompt is NOT in Up-arrow history (covered by TR-009)
+- It triggers a silent follow-up agent turn that usually produces no visible output
 
 ---
 
@@ -247,7 +308,7 @@ the visible part).
 
 **Setup**: TR-007 + at least one Tab-to-ask submission from the reader.
 
-**Action**:
+### Scenario A: baseline — reader/voice wrappers excluded from Up
 1. Close reader, return to chat.
 2. `tmux send-keys -t <new> C-u`; sleep 0.3.
 3. For i in 1..8: `tmux send-keys -t <new> Up`; sleep 0.2.
@@ -258,6 +319,27 @@ the visible part).
 - `history` not contains `<voice>`
 - `history` not contains `<!-- READER_TOOL_INSTRUCTIONS`
 - `history` not contains `[The user closed the document reader`
+
+### Scenario B: in-session Up-arrow INCLUDES slash commands
+1. In a fresh session, run `/model`; Esc out (no model change).
+2. Run `/permissions`; Esc out.
+3. Send chat `hi`; wait for reply.
+4. `tmux send-keys -t <new> C-u; Up; Up; Up`; capture composer after each.
+
+**Expect**:
+- After Up #1: composer shows `hi`
+- After Up #2: composer shows `/permissions`
+- After Up #3: composer shows `/model`
+- Slash commands ARE recallable in the same session via Up-arrow.
+
+### Scenario C: persistent ~/.ata/history.jsonl EXCLUDES recognized slash commands
+1. After Scenario B's session: `tail -3 ~/.ata/history.jsonl | jq -r .text`.
+
+**Expect**:
+- Only `hi` appears
+- `/model` and `/permissions` are NOT in the persistent file
+- An unrecognized slash like `/clear extra junk args` (which falls back to chat per TR-020 D) DOES appear in persistent history (it's a regular user message)
+- This divergence is intentional: session-level buffer is broader; persistent buffer is restricted to chat input.
 
 ---
 
@@ -271,17 +353,48 @@ the visible part).
 
 **Setup**: TR-003 setup.
 
-**Action**:
-1. `tmux send-keys -t <new> "/experimental"`; sleep 0.5; `Enter`; sleep 2.
-2. → capture `menu`.
-3. `tmux send-keys -t <new> Escape`; sleep 1.
-4. → capture `post`.
+### Scenario A: baseline — open + dismiss
+1. `tmux send-keys -t <new> "/experimental"`; sleep 0.5; `Enter`; sleep 2. → `menu`.
+2. `tmux send-keys -t <new> Escape`; sleep 1. → `post`.
 
 **Expect**:
-- `menu` contains `Experimental features`
-- `menu` contains `Voice mode` — flagship feature row present
-- `menu` contains `Scheduling` — flagship feature row present
-- `post` not contains `Experimental features` (menu dismissed)
+- `menu` contains `Voice mode` and `Scheduling` (ata-specific feature rows)
+- `menu` contains `Press space to select or enter to save for next conversation` (footer hint)
+- `post` not contains `Voice mode` (menu dismissed)
+- Esc does NOT save — only Enter saves
+
+### Scenario B: row inventory (8 toggles on 0.7.0)
+1. From the open menu, capture full pane.
+
+**Expect** the following rows are visible (order may vary):
+- `Terminal resize reflow`
+- `Shell snapshot`
+- `Memories`
+- `External migration`
+- `Goals`
+- `Prevent sleep while running`
+- `Voice mode`
+- `Scheduling`
+
+(Already-enabled rows show `[x]`; disabled show `[ ]`.)
+
+### Scenario C: saved changes apply to NEXT conversation, not current
+1. Open `/experimental`; toggle a feature with Space; press Enter to save.
+2. Verify the running session does NOT immediately reflect the change (e.g. enabling Scheduling does not retroactively add scheduling commands to the running session if they weren't there).
+3. `/clear` + start fresh thread — change should now be active.
+
+**Expect**:
+- After Enter-save, returns to chat with no banner update mid-session
+- Restart-equivalent (fresh thread) needed to see effect
+- Footer text `for next conversation` is honest, not aspirational
+
+### Scenario D: /experimental is hard-blocked during in-flight
+1. Submit a slow prompt (`respond with just hi`); Enter; sleep 1.
+2. `/experimental`; Enter; sleep 2. → `out`.
+
+**Expect**:
+- `out` contains `'/experimental' is disabled while a task is in progress.`
+- Menu does NOT open
 
 ---
 
@@ -434,17 +547,47 @@ session id so the user can pick the conversation back up.
 
 **Setup**: TR-003 setup.
 
-**Action**:
+### Scenario A: baseline — /clear after activity
 1. `tmux send-keys -t <new> "clear-test-marker-xyz"`; sleep 1; `Enter`.
-2. Poll up to 60s until `tmux capture-pane -t <new> -p` contains `clear-test-marker-xyz`
-   on a `›` line (proves submission landed).
+2. Poll up to 60s until `tmux capture-pane -t <new> -p` contains `clear-test-marker-xyz` on a `›` line.
 3. `tmux send-keys -t <new> "/clear"`; sleep 0.5; `Enter`; sleep 2.
 4. → capture `cleared`.
 
 **Expect**:
-- `cleared` contains `Agents2Agents ata (v` — welcome banner re-rendered
-- `cleared` contains `To continue this session, run ata resume` — resume hint shown
-- `cleared` not contains `clear-test-marker-xyz` — prior user message wiped from view
+- `cleared` contains `Agents2Agents ata (v` (welcome banner re-rendered)
+- `cleared` contains `To continue this session, run ata resume`
+- `cleared` contains `Token usage:` (token usage summary printed)
+- `cleared` not contains `clear-test-marker-xyz` (prior user message wiped)
+
+### Scenario B: /clear on an empty session is SILENT
+1. Right after TR-003 launch, with NO prior activity, send `/clear`.
+2. → capture `cleared`.
+
+**Expect**:
+- `cleared` contains `Agents2Agents ata (v` (banner re-rendered)
+- `cleared` NOT contains `Token usage:` (nothing to summarize)
+- `cleared` NOT contains `To continue this session, run ata resume`
+- Distinct from Scenario A: ata suppresses the bookkeeping output when there's nothing meaningful to bookkeep.
+
+### Scenario C: /clear is hard-blocked during an in-flight turn
+1. Submit a heavy prompt: `write a 3000 word essay on coffee culture`; Enter.
+2. Wait ~1.5s for the turn to be running (poll for `Working` or just sleep).
+3. `tmux send-keys -t <new> "/clear"`; sleep 0.3; `Enter`; sleep 1.
+4. → capture `out`.
+
+**Expect**:
+- `out` contains `'/clear' is disabled while a task is in progress.` (literal error)
+- `out` still contains the heavy prompt's submitted line (`› write a 3000 word essay...`) — turn is untouched
+- Chat history NOT cleared
+
+### Scenario D: back-to-back /clear may reject the second
+1. From a calm idle state, send `/clear`; Enter immediately followed by `/clear`; Enter (both within 1s).
+2. → capture `out`.
+
+**Expect**:
+- First /clear succeeds (`To continue this session, run ata resume` visible OR silent if empty per Scenario B).
+- Second /clear may show `'/clear' is disabled while a task is in progress.` (race against async processing of the first).
+- This is a known soft edge — not always reproducible.
 
 ---
 
@@ -457,20 +600,55 @@ Escape silently saves would degrade or escalate access.
 
 **Setup**: TR-003 setup (launched with `--yolo`, so Full Access is active).
 
-**Action**:
-1. `tmux send-keys -t <new> "/permissions"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `menu`.
-3. `tmux send-keys -t <new> Escape`; sleep 1.
-4. → capture `dismissed`.
+### Scenario A: baseline — open, current marked, Esc dismisses without change
+1. `tmux send-keys -t <new> "/permissions"`; sleep 0.5; `Enter`; sleep 1. → `menu`.
+2. `tmux send-keys -t <new> Escape`; sleep 1. → `dismissed`.
 
 **Expect**:
 - `menu` contains `Update Model Permissions`
-- `menu` contains `Default`
-- `menu` contains `Auto-review`
-- `menu` contains `Full Access`
-- `menu` contains `Full Access (current)` — `--yolo` maps to Full Access
-- `dismissed` not contains `Update Model Permissions` — menu gone
-- `dismissed` contains `permissions: YOLO mode` — banner unchanged
+- `menu` contains `Default`, `Auto-review`, `Full Access`
+- `menu` contains `Full Access (current)` (--yolo maps to Full Access)
+- `dismissed` not contains `Update Model Permissions` (menu gone)
+- `dismissed` contains `permissions: YOLO mode` (banner unchanged)
+
+### Scenario B: elevating to Full Access triggers a confirmation dialog
+1. Pre-state: launch ata WITHOUT `--yolo` so current is Default. Open `/permissions`.
+2. Navigate to `Full Access` (Down twice) and press Enter. → `confirm`.
+
+**Expect**:
+- `confirm` contains `Enable full access?` header
+- `confirm` contains three options:
+  - `Yes, continue anyway` (this session)
+  - `Yes, and don't ask again` (persist to config)
+  - `Cancel` (go back)
+- Cancel returns to the picker without changing permissions
+- Even re-selecting the current Full Access (from a `--yolo` start) re-shows the confirmation — the elevation gate is unconditional.
+
+### Scenario C: downgrading to Default or Auto-review is immediate (no confirmation)
+1. From a Full Access state, open `/permissions`, navigate to `Default` (option 1) and press Enter.
+
+**Expect**:
+- TUI prints `Permissions updated to Default` immediately
+- NO `Enable ... access?` confirmation step
+- The picker closes; chat resumes
+
+### Scenario D: welcome banner shows LAUNCH-TIME permissions, not current
+1. Launch with `--yolo` (banner shows `permissions: YOLO mode`).
+2. Use `/permissions` to switch to Default. Confirm via `Permissions updated to Default`.
+3. Re-open `/permissions`. The picker correctly shows `Default (current)`.
+
+**Expect**:
+- Despite Default now being active, the WELCOME BANNER at the top of the chat still shows `permissions: YOLO mode`
+- Banner reflects launch-time flag, not runtime mutations
+- The picker is the source of truth for current state; banner is stale by design (or by oversight).
+
+### Scenario E: /permissions hard-blocked during in-flight
+1. Submit a slow prompt (`respond with just hi`); Enter; sleep 1.
+2. `/permissions`; Enter; sleep 2.
+
+**Expect**:
+- TUI prints `'/permissions' is disabled while a task is in progress.`
+- Menu does NOT open
 
 ---
 
@@ -483,27 +661,54 @@ must reflect the same value.
 
 **Setup**: TR-003 setup.
 
-**Action**:
-1. `tmux send-keys -t <new> "/model"`; sleep 0.5; `Enter`; sleep 1.
-2. → capture `model_menu`.
-3. `tmux send-keys -t <new> Enter`; sleep 1.  (confirm current model)
-4. → capture `effort_menu`.
-5. `tmux send-keys -t <new> Enter`; sleep 1.  (confirm current effort)
-6. → capture `applied`.
+### Scenario A: baseline — two-step Enter/Enter applies a no-op change
+1. `tmux send-keys -t <new> "/model"`; sleep 0.5; `Enter`; sleep 1. → `model_menu`.
+2. `tmux send-keys -t <new> Enter`; sleep 1. (confirm current model) → `effort_menu`.
+3. `tmux send-keys -t <new> Enter`; sleep 1. (confirm current effort) → `applied`.
 
-**Expect** (model-name-agnostic — guards the flow, not the user's chosen model):
-- `model_menu` contains `Select Model and Effort`
-- `model_menu` contains `(current)` — some model is marked active
-- `model_menu` contains `gpt-` — at least one gpt-* row rendered
-- `effort_menu` contains `Select Reasoning Level for gpt-`
-- `effort_menu` contains `Low`
-- `effort_menu` contains `Medium`
-- `effort_menu` contains `High`
-- `effort_menu` contains `(current)` — some effort is marked active
-- `applied` contains `Model changed to gpt-` — confirmation printed
-- `applied` contains `model:       gpt-` — banner shows a model
-- `applied` not contains `Select Model and Effort` — menus dismissed
-- `applied` not contains `Select Reasoning Level` — menus dismissed
+**Expect** (model-name-agnostic):
+- `model_menu` contains `Select Model and Effort`, `(current)`, `gpt-`
+- `effort_menu` contains `Select Reasoning Level for gpt-`, `Low`, `Medium`, `High`, `(current)`
+- `applied` contains `Model changed to gpt-`, `model:       gpt-`
+- `applied` not contains `Select Model and Effort` AND not contains `Select Reasoning Level`
+
+### Scenario B: Esc on step 2 returns to step 1 (back-navigation, not full close)
+1. Open `/model`; Enter on a model. → step 2 (effort picker).
+2. `tmux send-keys -t <new> Escape`; sleep 1. → `out`.
+
+**Expect**:
+- `out` contains `Select Model and Effort` (back at step 1, NOT chat)
+- `out` not contains `Select Reasoning Level` (step 2 dismissed)
+- A second Escape fully closes; one Escape is a back-step
+
+### Scenario C: picking a different model shows reasoning level WITHOUT (current)
+1. From `/model`, navigate Down to a non-current model (e.g. gpt-5.3-codex). Enter.
+2. → `effort_menu`.
+
+**Expect**:
+- `effort_menu` contains `Select Reasoning Level for gpt-5.3-codex` (the chosen model's name in the header)
+- `effort_menu` contains `Medium (default)` but NOT `(default) (current)` — `(current)` only marks the currently-active model's reasoning level, not a different model's default
+- Distinct from Scenario A's `Medium (default) (current)` annotation when staying on the current model
+
+### Scenario D: /model is hard-blocked during in-flight
+1. Submit a slow prompt (`respond with just hi`); Enter; sleep 1.
+2. `/model`; Enter; sleep 2.
+
+**Expect**:
+- TUI prints `'/model' is disabled while a task is in progress.`
+- Menu does NOT open
+
+### Scenario E: model inventory (5 entries on 0.7.0)
+1. From the open picker, capture full pane.
+
+**Expect** rows (order matches dropdown):
+1. `gpt-5.5 (current)`
+2. `gpt-5.4`
+3. `gpt-5.4-mini`
+4. `gpt-5.3-codex`
+5. `gpt-5.2`
+
+Note: the picker also says `Access legacy models by running codex -m <model_name> or in your config` — so the visible 5 are the curated set, not exhaustive.
 
 ---
 
@@ -517,22 +722,67 @@ nothing to suggest yet).
 **Setup**: TR-003 setup. Run from a repo with multiple `Cargo.toml` files
 (`$ATA_REPO/codex-rs` is the canonical case).
 
-**Action**:
-1. `tmux send-keys -t <new> "@"`; sleep 0.5.
-2. → capture `empty`.
-3. `tmux send-keys -t <new> "Cargo"`; sleep 0.5.
-4. → capture `prefix`.
-5. `tmux send-keys -t <new> Tab`; sleep 0.5.
-6. → capture `accepted`.
-7. Cleanup: `tmux send-keys -t <new> C-u`.
+### Scenario A: baseline — Cargo prefix + Tab
+1. `tmux send-keys -t <new> "@"`; sleep 0.5. → capture `empty`.
+2. `tmux send-keys -t <new> "Cargo"`; sleep 0.5. → capture `prefix`.
+3. `tmux send-keys -t <new> Tab`; sleep 0.5. → capture `accepted`.
+4. Cleanup: `tmux send-keys -t <new> C-u`.
 
 **Expect**:
-- `empty` contains `no matches` — picker is open but empty
-- `prefix` contains `Cargo.toml` — top match rendered
-- `prefix` contains `Cargo.lock` — second match rendered (proves multi-result)
-- `accepted` contains `› Cargo.toml` — top match inserted into composer
-- `accepted` not contains `no matches` — picker dismissed
-- `accepted` not contains `@Cargo` — raw `@`-syntax replaced
+- `empty` contains `no matches`
+- `prefix` contains `Cargo.toml` AND `Cargo.lock` (multi-result rendered)
+- `accepted` contains `› Cargo.toml` (top match inserted)
+- `accepted` not contains `no matches` AND not contains `@Cargo`
+
+### Scenario B: no-match prefix shows "no matches" (picker stays open)
+1. `tmux send-keys -t <new> "@xyznosuchprefix"`; sleep 1.
+2. → capture `out`.
+3. Cleanup: backspace until composer empty.
+
+**Expect**:
+- `out` contains `no matches`
+- Picker remains open (still under composer)
+
+### Scenario B2 (BUG): Tab on a no-match query gets stuck on `loading...`
+1. After Scenario B's `@xyznosuchprefix` is typed (no matches visible):
+2. `tmux send-keys -t <new> Tab`; sleep 3.
+3. → capture `out`.
+
+**Expect (current buggy behavior)**:
+- `out` contains `loading...` (replaces `no matches`)
+- `out` does NOT resolve back to `no matches` after wait
+- Escape does NOT dismiss — only backspacing through the `@` clears the state
+- **TODO**: filed as bug; predicate should later become `out contains no matches`
+
+### Scenario C: subdirectory path traversal in @-picker
+1. `tmux send-keys -t <new> "@core/src"`; sleep 1.
+2. → capture `out`.
+3. Cleanup: backspace clear.
+
+**Expect**:
+- `out` contains `core/src` (top entry)
+- `out` contains multiple `core/src/<subdir>` entries (proves subdir traversal)
+- Picker accepts both files AND directories
+
+### Scenario D: Tab accepts top match; second Tab does NOT cycle
+1. `tmux send-keys -t <new> "@Cargo"`; sleep 0.5.
+2. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab1`.
+3. `tmux send-keys -t <new> Tab`; sleep 0.3. → capture `tab2`.
+
+**Expect**:
+- `tab1` contains `› Cargo.toml` (top match accepted into composer, picker dismissed)
+- `tab2` does NOT show the second-match entry (`tui/Cargo.toml`) in composer — Tab does not cycle through matches; it either submits or triggers focus action depending on context
+- After tab2: composer either submits `Cargo.toml` or the agent indicator appears (`• Working`)
+
+### Scenario E: Escape does NOT dismiss the @-picker
+1. `tmux send-keys -t <new> "@xyz"`; sleep 0.5.
+2. `tmux send-keys -t <new> Escape`; sleep 0.5.
+3. → capture `out`.
+
+**Expect**:
+- `out` still shows the @-picker (no matches view or matches view)
+- Escape is consumed by the composer, NOT by the picker
+- Only backspacing through the `@` (or accepting via Tab) closes the picker
 
 ---
 
@@ -544,13 +794,49 @@ rather than silently forwarding the text to the agent or crashing.
 
 **Setup**: TR-003 setup.
 
-**Action**:
+### Scenario A: baseline — unknown slash
 1. `tmux send-keys -t <new> "/help"`; sleep 0.5; `Enter`; sleep 1.
 2. → capture `out`.
 
 **Expect**:
 - `out` contains `Unrecognized command '/help'`
 - `out` contains `Type "/" for a list of supported commands`
+
+### Scenario B: typo of a real command (no fuzzy hint, composer retains text)
+1. `tmux send-keys -t <new> "/clera"`; sleep 0.5; `Enter`; sleep 1.
+2. → capture `out`.
+
+**Expect**:
+- `out` contains `Unrecognized command '/clera'`
+- `out` not contains `did you mean` (ata does NOT suggest near-matches)
+- Composer keeps the typed text (`/clera`) so the user can edit and resend without re-typing
+
+### Scenario C: slash commands are case-insensitive
+1. Plant a marker: `tmux send-keys "marker-xyz"; Enter; sleep 8` (let agent reply).
+2. `tmux send-keys -t <new> "/CLEAR"`; sleep 0.3; `Enter`; sleep 2.
+3. → capture `out`.
+
+**Expect**:
+- `out` not contains `marker-xyz` (uppercase `/CLEAR` actually cleared the chat — proves case-insensitive parser)
+- `out` contains `To continue this session, run ata resume`
+- `out` not contains `Unrecognized command`
+
+### Scenario D: recognized command with extra args falls through to chat
+1. `tmux send-keys -t <new> "/clear extra junk args"`; sleep 0.3; `Enter`; sleep 8.
+2. Inspect session JSONL: `jq -r 'select(.payload.type=="user_message") | .payload.content[0].text' $SESS | tail -1`.
+
+**Expect**:
+- JSONL contains `/clear extra junk args` as a user message (sent to agent, not parsed as slash command)
+- TUI output shows the agent's reply, NOT the system `Cleared.` ack
+- Slash parser is strict for arg-less commands: trailing text disables slash routing
+
+### Scenario E: bare `/` opens slash picker
+1. `tmux send-keys -t <new> "/"`; sleep 1.
+2. → capture `out`.
+
+**Expect**:
+- `out` contains `/model` and `/permissions` and `/scheduling` (picker list visible)
+- `out` not contains `Unrecognized command`
 
 ---
 
