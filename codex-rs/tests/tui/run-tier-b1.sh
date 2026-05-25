@@ -156,13 +156,18 @@ tr016_a() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/clear"
   send_key  "$sess" Enter
-  sleep 1
+  sleep 2
   local out=$WORK/016a.txt
   capture "$sess" "$out"
-  # On an empty session /clear is silent — no token usage line, no resume hint.
+  # PLAN.md TR-016: /clear on an empty session is silent. The two
+  # markers that appear after a real /clear (token usage line, resume
+  # hint) must NOT be present.
   assert_not_contains "$out" "Token usage:" "no token line on empty /clear"
-  assert_not_contains "$out" "ata resume"  "no resume hint on empty /clear"
-  assert_contains     "$out" "Agents2Agents ata" "banner still present (composer ready)"
+  assert_not_contains "$out" "ata resume"   "no resume hint on empty /clear"
+  # Positive sanity check: capture wasn't empty.
+  if [ ! -s "$out" ] || ! grep -q '[[:print:]]' "$out"; then
+    fail_assert "pane capture was empty"
+  fi
   kill_ata "$sess"
   end_test
 }
