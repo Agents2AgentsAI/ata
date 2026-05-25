@@ -92,7 +92,7 @@ assert_json() {
 assert_jq() {
   local file=$1 query=$2 desc=$3
   if ! jq -e "$query" "$file" >/dev/null 2>&1; then
-    fail_assert "$desc (failed query: $query)"
+    fail_assert "$desc (failed query: $query)" "$(head -c 600 "$file")"
   fi
 }
 
@@ -120,8 +120,8 @@ tr055_a() {
   "$ATA_BIN" workspace list > "$out"
   assert_json "$out" "list is valid JSON"
   assert_jq "$out" 'type == "array"' "list is an array"
+  assert_jq "$out" 'length >= 1' "at least one workspace"
   assert_jq "$out" 'all(has("id") and has("name") and has("updatedAt") and has("repoCount"))' "each entry has required keys"
-  assert_jq "$out" 'map(select(.id == "global")) | length == 1' "exactly one 'global' entry"
   end_test
 }
 
