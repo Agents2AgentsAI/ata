@@ -136,6 +136,13 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local file=$1 needle=$2 desc=${3:-}
+  if grep -qF -- "$needle" "$file"; then
+    fail_assert "${desc:-must NOT contain: $needle}" "$(tail -c 800 "$file")"
+  fi
+}
+
 cleanup_all() {
   local rc=$?
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -629,6 +636,44 @@ tr021_a() {
   end_test
 }
 
+tr009_a() {
+  start_test "TR-009 A"
+  local sess=$SESSION-009a
+  # PLAN.md TR-009 A: after a Tab-to-ask submission from inside a
+  # reader, the system-injected wrapper text (e.g. "[The user is reading
+  # ...]") must NOT appear in up-arrow history. Only the visible question
+  # the user typed should be recallable.
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # Submit a Tab-to-ask question from inside the reader.
+  send_key  "$sess" Tab
+  sleep 1
+  send_text "$sess" "what color are coffee beans"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 120; then
+    fail_assert "Tab-to-ask agent did not finish within 120s"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Close the reader and return to chat.
+  send_key "$sess" "q"
+  sleep 2
+  # Walk up-arrow history.
+  send_key "$sess" C-u
+  sleep 0.5
+  for _ in 1 2 3 4 5 6 7 8; do
+    send_key "$sess" Up
+    sleep 0.2
+  done
+  local out=$WORK/009a.txt
+  capture "$sess" "$out"
+  # None of the system-injected wrapper sentinels should appear:
+  assert_not_contains "$out" "[The user is reading"           "reader-prefix wrapper excluded"
+  assert_not_contains "$out" "<voice>"                        "voice wrapper excluded"
+  assert_not_contains "$out" "<!-- READER_TOOL_INSTRUCTIONS"  "reader tool-instructions wrapper excluded"
+  assert_not_contains "$out" "[The user closed the document"  "reader-close wrapper excluded"
+  kill_ata "$sess"
+  end_test
+}
+
 tr011_a() {
   start_test "TR-011 A"
   local sess=$SESSION-011a
@@ -681,6 +726,41 @@ tr062_a() {
   end_test
 }
 
+tr063_a() {
+  start_test "TR-063 A"
+  local sess=$SESSION-063a
+  # PLAN.md TR-063 A: natural prompt for an arxiv paper. PLAN.md
+  # documents that this routes to exec_command (curl scrape), NOT to
+  # paper_get. We assert the content (paper title) and accept either
+  # routing, since the "fallback to exec_command" is the documented
+  # behavior of this scenario.
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "look up arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then
+    fail_assert "agent did not finish within 240s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/063a.txt
+  capture "$sess" "$out"
+  # Hard predicate: response cites the paper's actual title (case-
+  # insensitive — the agent often paraphrases as "asynchronous Rust"
+  # in its prose even when the literal title is "Asynchronous Rust").
+  if ! grep -qiF "asynchronous rust" "$out"; then
+    fail_assert "response cites arxiv 2505.21323 title" "$(tail -c 800 "$out")"
+  fi
+  # Soft check: report which path the agent took (paper_get vs exec_command).
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -n "$sess_jsonl" ]; then
+    if jq -r '.payload.name // empty' "$sess_jsonl" 2>/dev/null | grep -qFx "paper_get"; then
+      yellow "    [TR-063 A] note: agent used paper_get (PLAN.md expected exec_command fallback)"
+    fi
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
 tr016_b() {
   start_test "TR-016 B"
   local sess=$SESSION-016b
@@ -723,6 +803,7 @@ main() {
   tr002_a
   tr005_a
   tr008_a
+  tr009_a
   tr011_a
   tr016_b
   tr021_a
@@ -743,6 +824,7 @@ main() {
   tr053_a
   tr054_a
   tr062_a
+  tr063_a
 
   log ""
   log "----"
