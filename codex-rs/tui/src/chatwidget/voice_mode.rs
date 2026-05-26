@@ -4735,15 +4735,33 @@ async fn say_worker_loop(
                         *g = None;
                     }
                 }
+                // macOS uses the builtin `say`; Linux uses `espeak-ng`
+                // (install with `apt install espeak-ng`). Both take a
+                // rate flag in words-per-minute and accept the text as
+                // a positional argument.
+                #[cfg(target_os = "macos")]
+                let mut cmd = {
+                    let mut c = Command::new("say");
+                    c.arg("-r").arg(wpm.to_string()).arg("--").arg(&text);
+                    c
+                };
+                #[cfg(target_os = "linux")]
+                let mut cmd = {
+                    let mut c = Command::new("espeak-ng");
+                    c.arg("-s").arg(wpm.to_string()).arg("--").arg(&text);
+                    c
+                };
+                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                let mut cmd = {
+                    // No supported backend on this platform; spawn will
+                    // fail and the error path below reports it.
+                    Command::new("say")
+                };
                 tracing::info!(
-                    "[TTS-TIMING] say_worker_loop: spawning say for {} chars",
+                    "[TTS-TIMING] say_worker_loop: spawning local TTS for {} chars",
                     text.len()
                 );
-                let child = Command::new("say")
-                    .arg("-r")
-                    .arg(wpm.to_string())
-                    .arg("--")
-                    .arg(&text)
+                let child = cmd
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -4756,9 +4774,13 @@ async fn say_worker_loop(
                         current = Some(c);
                     }
                     Err(err) => {
-                        tracing::error!("`say` spawn failed: {err}");
+                        #[cfg(target_os = "linux")]
+                        let backend = "espeak-ng";
+                        #[cfg(not(target_os = "linux"))]
+                        let backend = "say";
+                        tracing::error!("`{backend}` spawn failed: {err}");
                         event_tx.send(AppEvent::VoiceModeTtsError {
-                            error: format!("`say` failed: {err}"),
+                            error: format!("`{backend}` failed: {err}"),
                         });
                         break;
                     }
@@ -4779,9 +4801,10 @@ async fn say_worker_loop(
 
     // If we exited due to generation change, kill any in-flight speech so the
     // user hears the barge-in cleanly. If the child was paused via SIGSTOP,
-    // start_kill won't be delivered until we resume it.
+    // start_kill won't be delivered until we resume it. SIGCONT is POSIX
+    // so this works the same on macOS and Linux.
     if let Some(mut child) = current.take() {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         if let Some(pid) = child.id() {
             // SAFETY: kill(2) is a well-defined POSIX syscall.
             unsafe {
@@ -4802,20 +4825,25 @@ async fn say_worker_loop(
     }
 }
 
-/// True iff macOS `say` is available on PATH and we should use it.
+/// True iff a local TTS backend (`say` on macOS, `espeak-ng` on Linux)
+/// is available on PATH and we should use it.
 #[allow(dead_code)]
 fn say_backend_available() -> bool {
     #[cfg(target_os = "macos")]
+    let probe = "say";
+    #[cfg(target_os = "linux")]
+    let probe = "espeak-ng";
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        return false;
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         std::process::Command::new("which")
-            .arg("say")
+            .arg(probe)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
     }
 }
 

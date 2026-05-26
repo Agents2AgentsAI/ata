@@ -73,7 +73,8 @@ pub enum TtsBackend {
     /// ElevenLabs cloud TTS via WebSocket — high quality, requires API key.
     #[default]
     Elevenlabs,
-    /// macOS built-in `say` command — no network, no API key, no karaoke.
+    /// Local offline TTS backend — `say` on macOS, `espeak-ng` on Linux.
+    /// No network, no API key, no karaoke (word-level highlighting).
     Say,
 }
 

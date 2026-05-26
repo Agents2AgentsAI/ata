@@ -475,16 +475,25 @@ tr052_a() {
   start_test "TR-052 A"
   local sess=$SESSION-052a
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
-  # the credential error but still enters the audio-active state, so
-  # the footer expands with playback controls.
+  # 'r' starts TTS narration. With the local backend configured
+  # (tts_backend = "say"), audio plays cleanly without an API key.
+  # The audio control footer must appear and no credential error
+  # should surface. CI config sets tts_backend = "say" so this path
+  # runs on espeak-ng (Linux) or say (macOS); locally it depends on
+  # what's in ~/.ata/config.toml.
   send_text "$sess" "r"
   sleep 1.5
   local out=$WORK/052a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
   assert_contains "$out" "s: pause"   "audio footer 'pause' control"
   assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
+  # Strict invariant only applies when the local backend is configured
+  # (CI sets tts_backend = "say"; user's local config might still use
+  # elevenlabs). Detect via the active config so the test passes both
+  # ways.
+  if grep -qE 'tts_backend[[:space:]]*=[[:space:]]*"say"' "$HOME/.ata/config.toml" 2>/dev/null; then
+    assert_not_contains "$out" "Invalid API key" "local TTS backend should not surface credential error"
+  fi
   kill_ata "$sess"
   end_test
 }
