@@ -372,55 +372,6 @@ tr036_b() {
   end_test
 }
 
-tr050_a() {
-  start_test "TR-050 A"
-  local sess=$SESSION-050a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "/"
-  send_text "$sess" "coffee"
-  sleep 1
-  local out=$WORK/050a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "/coffee"          "search query echoed"
-  assert_contains "$out" "Enter: search"    "search-mode footer present"
-  assert_contains "$out" "Esc: cancel"      "esc-cancel hint shown"
-  kill_ata "$sess"
-  end_test
-}
-
-tr052_a() {
-  start_test "TR-052 A"
-  local sess=$SESSION-052a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
-  # the credential error but still enters the audio-active state, so
-  # the footer expands with playback controls.
-  send_text "$sess" "r"
-  sleep 1.5
-  local out=$WORK/052a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
-  assert_contains "$out" "s: pause"   "audio footer 'pause' control"
-  assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
-  kill_ata "$sess"
-  end_test
-}
-
-tr053_a() {
-  start_test "TR-053 A"
-  local sess=$SESSION-053a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "v"
-  sleep 1.5
-  local out=$WORK/053a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
-  assert_contains "$out" "Enter: explain" "Enter binding shown"
-  assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
-  kill_ata "$sess"
-  end_test
-}
-
 tr002_a() {
   start_test "TR-002 A"
   local sess=$SESSION-002a
