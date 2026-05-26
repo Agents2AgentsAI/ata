@@ -632,6 +632,53 @@ tr038_a() {
   end_test
 }
 
+# TR-038 B: /copy on a multi-line numbered list. Clipboard should keep
+# markdown line structure (1. / 2. / ... / 5.), strip TUI framing, and
+# not be truncated.
+tr038_b() {
+  start_test "TR-038 B"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "respond with a 5-item numbered list of fruits, no preamble, no postscript"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not respond within 90s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038b.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038b.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  # Predicates against the multi-line clipboard payload.
+  if ! grep -qE '^[[:space:]]*1\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard should start with '1.'" "first 200B: $(head -c 200 "$clip_file")"
+  fi
+  if ! grep -qE '^[[:space:]]*2\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard missing line '2.' (markdown line break not preserved)" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  if ! grep -qE '^[[:space:]]*5\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard missing line '5.' (list truncated)" "last 400B: $(tail -c 400 "$clip_file")"
+  fi
+  # Framing chars must NOT make it into the clipboard.
+  if grep -qE '^›' "$clip_file"; then
+    fail_assert "clipboard contains user-prompt marker '›'" "$(head -c 200 "$clip_file")"
+  fi
+  if grep -qE '^• ' "$clip_file"; then
+    fail_assert "clipboard contains TUI bullet prefix '• '" "$(head -c 200 "$clip_file")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
 # TR-038 C: /copy on a fenced code block. Clipboard should preserve
 # the code fence and code body, not the TUI's left-margin glyphs.
 tr038_c() {
@@ -662,6 +709,153 @@ tr038_c() {
   fi
   if printf '%s' "$clip" | grep -qE '└'; then
     fail_assert "clipboard contains TUI margin glyph" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 E: /copy from inside a /side conversation. The side answer
+# (not the parent thread's reply) must end up on the clipboard, and the
+# side-context label has to be visible in the pane.
+tr038_e() {
+  start_test "TR-038 E"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  # Prime the conversation — /side requires a completed turn first.
+  send_text "$sess" "respond with just hello from side parent"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Enter side with an arithmetic question.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "side conversation did not finish within 90s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Copy from inside side.
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038e.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038e.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  assert_contains "$out" "Side from main thread"            "side-context label visible"
+  if ! grep -qF '4' "$clip_file"; then
+    fail_assert "clipboard missing side answer '4'" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  # Parent thread's last message must NOT be in the clipboard — side
+  # scope is respected for /copy.
+  if grep -qF "hello from side parent" "$clip_file"; then
+    fail_assert "clipboard leaked parent-thread message" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 E2: /side is blocked before the conversation has started, and
+# becomes available after the first turn lands. Two assertions: error
+# string on the blocked attempt, then recovery after priming.
+tr038_e_2() {
+  start_test "TR-038 E2"
+  local sess=$SESSION-038e2
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Fresh chat — /clear puts us back to "not started" even if anything
+  # accidentally leaked from boot.
+  send_text "$sess" "/clear"; send_key "$sess" Enter; sleep 2
+  # First /side attempt should be blocked.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter; sleep 2
+  local blocked=$WORK/038e2-blocked.txt
+  capture "$sess" "$blocked"
+  assert_contains "$blocked" "'/side' is unavailable until the current conversation has started." "blocked error line 1"
+  assert_contains "$blocked" "Send a message first, then try /side again." "blocked error line 2"
+  # Prime the conversation.
+  send_text "$sess" "respond with just primed"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Second /side attempt should now work.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "side did not complete after priming"
+    kill_ata "$sess"; end_test; return
+  fi
+  local recovered=$WORK/038e2-recovered.txt
+  capture "$sess" "$recovered"
+  # Either label OR the arithmetic answer proves /side is no longer blocked.
+  if ! grep -qE 'Side from main thread|[^0-9]4[^0-9]' "$recovered"; then
+    fail_assert "side did not recover after priming" "$(tail -c 600 "$recovered")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 F: /copy during an in-flight turn. /copy should be non-blocking
+# AND grab the previous COMPLETED turn — not anything from the still-
+# streaming response. Real signal: clipboard contains the priming reply
+# ("primed") and not the in-flight subject ("espresso").
+tr038_f() {
+  start_test "TR-038 F"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038f
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  # Prime with a unique sentinel so we can tell if the clipboard grabbed
+  # the previous COMPLETED reply or leaked from the in-flight one.
+  send_text "$sess" "respond with just primed"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Fire a long-running turn.
+  send_text "$sess" "write me a 1000-word essay on espresso"
+  send_key  "$sess" Enter
+  # Tight poll up to 10s for the in-flight sentinel.
+  local in_flight=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    local poll=$WORK/038f-poll.txt
+    capture "$sess" "$poll"
+    if grep -qF "esc to interrupt" "$poll"; then
+      in_flight=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$in_flight" -eq 0 ]; then
+    fail_assert "did not observe 'esc to interrupt' within 10s — agent may have finished or never started"
+    send_key  "$sess" Escape; sleep 1
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Mid-flight /copy.
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038f.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038f.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  # Cancel the in-flight essay before restoring state.
+  send_key  "$sess" Escape; sleep 1
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "/copy is allowed mid-flight"
+  # The clipboard must reflect the PREVIOUS completed turn.
+  if ! grep -qF "primed" "$clip_file"; then
+    fail_assert "clipboard should contain previous completed reply ('primed')" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  # And must NOT contain anything from the still-streaming essay.
+  if grep -qiF "espresso" "$clip_file"; then
+    fail_assert "clipboard leaked in-flight content ('espresso')" "first 400B: $(head -c 400 "$clip_file")"
   fi
   kill_ata "$sess"
   end_test
@@ -1646,7 +1840,7 @@ main() {
   tr036_a
   tr036_b
   tr037_a
-  tr038_a; tr038_c
+  tr038_a; tr038_b; tr038_c; tr038_e; tr038_e_2; tr038_f
   tr044_a; tr044_b; tr044_c; tr044_d; tr044_f
   tr045_a; tr045_b
   tr047_a; tr047_b; tr047_c
