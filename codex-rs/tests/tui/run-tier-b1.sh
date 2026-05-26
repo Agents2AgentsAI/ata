@@ -184,18 +184,21 @@ tr020_a() {
   end_test
 }
 
-tr020_b() {
-  start_test "TR-020 B"
-  local sess=$SESSION-020b
+tr020_c() {
+  # PLAN.md TR-020 C is "slash commands are case-insensitive". The full
+  # PLAN.md version plants a marker via LLM round-trip and verifies
+  # /CLEAR wipes it — we drop the marker step (no LLM in B1) and just
+  # assert /CLEAR doesn't trigger the "Unrecognized command" error, which
+  # is the half of the test that's deterministic without an agent reply.
+  start_test "TR-020 C"
+  local sess=$SESSION-020c
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/CLEAR"
   send_key  "$sess" Enter
   sleep 1
-  local out=$WORK/020b.txt
+  local out=$WORK/020c.txt
   capture "$sess" "$out"
-  # If case-insensitive parsing works, /CLEAR is treated as /clear and
-  # does NOT show the "Unrecognized command" error.
-  assert_not_contains "$out" "Unrecognized command" "uppercase should be accepted"
+  assert_not_contains "$out" "Unrecognized command" "uppercase /CLEAR should be accepted"
   kill_ata "$sess"
   end_test
 }
@@ -789,6 +792,303 @@ tr046_a() {
   end_test
 }
 
+# --- batch-1 deepening: extra scenarios for already-covered TRs -----------
+
+# TR-006 B: /clear does NOT wipe ~/.ata/history.jsonl — Up still recalls
+# the seeded entry after /clear.
+tr006_b() {
+  start_test "TR-006 B"
+  local sess=$SESSION-006b
+  local marker="SEEDED_TR006B_$$"
+  local hist_bak=""
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    hist_bak=$(mktemp)
+    cp "$HOME/.ata/history.jsonl" "$hist_bak"
+  fi
+  mkdir -p "$HOME/.ata"
+  printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":0,"text":"%s"}\n' "$marker" >> "$HOME/.ata/history.jsonl"
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
+  send_text "$sess" "/clear"; send_key "$sess" Enter
+  # Wait for the post-clear banner to redraw (same trick as TR-016 A).
+  local out=$WORK/006b.txt
+  local deadline=$(( $(date +%s) + 20 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    capture "$sess" "$out"
+    if [ -s "$out" ] && grep -qF "Agents2Agents ata" "$out"; then break; fi
+    sleep 0.5
+  done
+  send_key "$sess" Up; sleep 1
+  capture "$sess" "$out"
+  assert_contains "$out" "$marker" "seeded entry still recallable after /clear"
+  if [ -n "$hist_bak" ]; then mv "$hist_bak" "$HOME/.ata/history.jsonl"; else rm -f "$HOME/.ata/history.jsonl"; fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-006 C: Up/Down navigates bidirectionally through history. Seed
+# three entries, walk Up three times, then Down once and verify the
+# composer moves forward to the second-most-recent.
+tr006_c() {
+  start_test "TR-006 C"
+  local sess=$SESSION-006c
+  local m1="TR006C_ENTRY_ONE_$$"
+  local m2="TR006C_ENTRY_TWO_$$"
+  local m3="TR006C_ENTRY_THREE_$$"
+  local hist_bak=""
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    hist_bak=$(mktemp)
+    cp "$HOME/.ata/history.jsonl" "$hist_bak"
+  fi
+  mkdir -p "$HOME/.ata"
+  # Write entries oldest-first; Up walks back from newest.
+  {
+    printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":1,"text":"%s"}\n' "$m1"
+    printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":2,"text":"%s"}\n' "$m2"
+    printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":3,"text":"%s"}\n' "$m3"
+  } >> "$HOME/.ata/history.jsonl"
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
+  send_key "$sess" Up; sleep 0.4
+  local u1=$WORK/006c-up1.txt; capture "$sess" "$u1"
+  assert_contains "$u1" "$m3" "Up #1 shows newest entry"
+  send_key "$sess" Up; sleep 0.4
+  local u2=$WORK/006c-up2.txt; capture "$sess" "$u2"
+  assert_contains "$u2" "$m2" "Up #2 shows middle entry"
+  send_key "$sess" Up; sleep 0.4
+  local u3=$WORK/006c-up3.txt; capture "$sess" "$u3"
+  assert_contains "$u3" "$m1" "Up #3 shows oldest entry"
+  send_key "$sess" Down; sleep 0.4
+  local d1=$WORK/006c-down1.txt; capture "$sess" "$d1"
+  assert_contains "$d1" "$m2" "Down moves forward to middle entry"
+  if [ -n "$hist_bak" ]; then mv "$hist_bak" "$HOME/.ata/history.jsonl"; else rm -f "$HOME/.ata/history.jsonl"; fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-010 B: /experimental opens with 8 known toggles on 0.7.0.
+tr010_b() {
+  start_test "TR-010 B"
+  local sess=$SESSION-010b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/experimental"; send_key "$sess" Enter
+  sleep 1.5
+  local out=$WORK/010b.txt
+  capture "$sess" "$out"
+  for row in "Terminal resize reflow" "Shell snapshot" "Memories" "External migration" "Goals" "Prevent sleep while running" "Voice mode" "Scheduling"; do
+    assert_contains "$out" "$row" "toggle row: $row"
+  done
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-017 B: elevating to Full Access from a non-yolo start triggers a
+# confirmation dialog. Needs ata launched WITHOUT --yolo so current is
+# Default; cannot use boot_ata which always passes --yolo.
+tr017_b() {
+  start_test "TR-017 B"
+  local sess=$SESSION-017b
+  tmux kill-session -t "$sess" 2>/dev/null || true
+  tmux new-session -d -s "$sess" -x 132 -y 40 "$ATA_BIN"
+  local deadline=$(( $(date +%s) + 60 ))
+  local ready=0
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    local pane
+    pane=$(tmux capture-pane -t "$sess" -p 2>/dev/null || true)
+    if printf '%s' "$pane" | grep -qF "Agents2Agents ata" \
+       && ! printf '%s' "$pane" | grep -qF "esc to interrupt"; then
+      ready=1; sleep 0.5; break
+    fi
+    sleep 0.5
+  done
+  if [ "$ready" -ne 1 ]; then
+    fail_assert "ata (non-yolo) never reached the composer"
+    end_test; kill_ata "$sess"; return
+  fi
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  # Down twice to Full Access (Default → Auto-review → Full Access).
+  send_key "$sess" Down; sleep 0.3
+  send_key "$sess" Down; sleep 0.3
+  send_key "$sess" Enter; sleep 1
+  local out=$WORK/017b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Enable full access?"        "elevation confirmation header"
+  assert_contains "$out" "Yes, continue anyway"       "session-only option"
+  assert_contains "$out" "Yes, and don't ask again"   "persist-to-config option"
+  assert_contains "$out" "Cancel"                     "cancel option"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-017 C: downgrading from Full Access to Default is immediate — no
+# confirmation dialog, just "Permissions updated to Default" line.
+tr017_c() {
+  start_test "TR-017 C"
+  local sess=$SESSION-017c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  # Currently on Full Access (--yolo). Up twice to reach Default (top).
+  send_key "$sess" Up; sleep 0.3
+  send_key "$sess" Up; sleep 0.3
+  send_key "$sess" Enter; sleep 1
+  local out=$WORK/017c.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Permissions updated to Default" "immediate downgrade confirmation"
+  assert_not_contains "$out" "Enable"                          "no Enable confirmation dialog on downgrade"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-017 D: welcome banner reflects launch-time permissions, not
+# runtime mutations. Launch with --yolo, switch to Default mid-session,
+# verify banner still says "YOLO mode" while picker reports the change.
+tr017_d() {
+  start_test "TR-017 D"
+  local sess=$SESSION-017d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Switch to Default.
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  send_key "$sess" Up; sleep 0.3
+  send_key "$sess" Up; sleep 0.3
+  send_key "$sess" Enter; sleep 1.5
+  # Re-open picker and check the new (current) marker; banner should
+  # still say YOLO mode (it's frozen at launch time).
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/017d.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "permissions: YOLO mode" "banner still shows launch-time YOLO"
+  assert_contains "$out" "Default (current)"     "picker reports new current = Default"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-018 C: picking a NON-current model shows "Medium (default)" but
+# WITHOUT "(current)" — the (current) marker only annotates the active
+# model's reasoning level.
+tr018_c() {
+  start_test "TR-018 C"
+  local sess=$SESSION-018c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
+  # Down three times to reach gpt-5.3-codex (row 4 per PLAN.md TR-018 E).
+  send_key "$sess" Down; sleep 0.2
+  send_key "$sess" Down; sleep 0.2
+  send_key "$sess" Down; sleep 0.2
+  send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/018c.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Select Reasoning Level for gpt-5.3-codex" "header names the chosen non-current model"
+  assert_contains     "$out" "Medium (default)" "Medium marked default"
+  # Critical invariant: "(current)" must NOT appear next to a default
+  # of a non-active model.
+  assert_not_contains "$out" "(default) (current)" "no (current) on non-active model's default"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-018 E: model picker shows 5 entries on 0.7.0. Order matches PLAN.md.
+tr018_e() {
+  start_test "TR-018 E"
+  local sess=$SESSION-018e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/018e.txt
+  capture "$sess" "$out"
+  for row in "gpt-5.5" "gpt-5.4" "gpt-5.4-mini" "gpt-5.3-codex" "gpt-5.2"; do
+    assert_contains "$out" "$row" "model row: $row"
+  done
+  assert_contains "$out" "gpt-5.5 (current)" "current marker on gpt-5.5"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-019 B2 (BUG regression guard): Tab on a no-match @ query gets
+# stuck on "loading...". PLAN.md documents the current buggy state; if
+# the bug is fixed, this test will start failing and the predicates
+# need flipping (see PLAN.md note).
+tr019_b2() {
+  start_test "TR-019 B2"
+  local sess=$SESSION-019b2
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "@xyznosuchprefix"; sleep 1.5
+  send_key "$sess" Tab; sleep 3
+  local out=$WORK/019b2.txt
+  capture "$sess" "$out"
+  # Bug regression guard: stuck on "loading..." rather than resolving
+  # back to "no matches".
+  assert_contains "$out" "loading..." "BUG: Tab on no-match shows stuck loading state"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-019 D: Tab accepts top match; a second Tab does NOT cycle to the
+# next match in the picker.
+tr019_d() {
+  start_test "TR-019 D"
+  local sess=$SESSION-019d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "@Cargo"; sleep 1
+  send_key "$sess" Tab; sleep 0.5
+  local out1=$WORK/019d-tab1.txt
+  capture "$sess" "$out1"
+  assert_match "$out1" "Cargo\.(toml|lock)" "first Tab accepted top match into composer"
+  send_key "$sess" Tab; sleep 0.5
+  local out2=$WORK/019d-tab2.txt
+  capture "$sess" "$out2"
+  # Second Tab must NOT have surfaced the secondary match
+  # (tui/Cargo.toml). If it did, the picker would be cycling.
+  assert_not_contains "$out2" "tui/Cargo.toml" "second Tab did not cycle to next match"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-019 E: Escape does NOT dismiss the @-picker.
+tr019_e() {
+  start_test "TR-019 E"
+  local sess=$SESSION-019e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "@xyz"; sleep 0.7
+  send_key "$sess" Escape; sleep 0.7
+  local out=$WORK/019e.txt
+  capture "$sess" "$out"
+  # @-picker state is still alive after Escape (loading or no matches);
+  # the @xyz text is still in the composer (Escape didn't clear it).
+  assert_contains "$out" "@xyz" "@-prefix retained after Escape"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-020 B: typo of a real slash command — no fuzzy "did you mean"
+# hint, and the composer retains the typed text so the user can edit.
+tr020_b() {
+  start_test "TR-020 B"
+  local sess=$SESSION-020b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/clera"; send_key "$sess" Enter; sleep 1.2
+  local out=$WORK/020b.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Unrecognized command '/clera'" "unrecognized message printed"
+  assert_not_contains "$out" "did you mean"                  "no fuzzy suggestion offered"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-020 E: bare "/" opens the slash picker including /scheduling.
+# Distinct from TR-004 A in the specific sentinel set (includes
+# /scheduling per PLAN.md TR-020 E).
+tr020_e() {
+  start_test "TR-020 E"
+  local sess=$SESSION-020e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 1.2
+  local out=$WORK/020e.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "/model"       "picker lists /model"
+  assert_contains     "$out" "/permissions" "picker lists /permissions"
+  assert_contains     "$out" "/scheduling"  "picker lists /scheduling"
+  assert_not_contains "$out" "Unrecognized" "no error printed for bare /"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -807,16 +1107,16 @@ main() {
   log "Numbered TRs (in order)"
   tr003_a
   tr004_a
-  tr006_a
-  tr010_a
+  tr006_a; tr006_b; tr006_c
+  tr010_a; tr010_b
   tr012_a
   tr013_a
   tr014_a
   tr016_a
-  tr017_a
-  tr018_a; tr018_b; tr018_d
-  tr019_a; tr019_b; tr019_c
-  tr020_a; tr020_b; tr020_d
+  tr017_a; tr017_b; tr017_c; tr017_d
+  tr018_a; tr018_b; tr018_c; tr018_d; tr018_e
+  tr019_a; tr019_b; tr019_b2; tr019_c; tr019_d; tr019_e
+  tr020_a; tr020_b; tr020_c; tr020_d; tr020_e
   tr023_a
   tr034_a
   tr039_a
