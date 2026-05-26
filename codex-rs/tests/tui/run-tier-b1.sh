@@ -1018,8 +1018,11 @@ tr019_b2() {
   local out=$WORK/019b2.txt
   capture "$sess" "$out"
   # Bug regression guard: stuck on "loading..." rather than resolving
-  # back to "no matches".
-  assert_contains "$out" "loading..." "BUG: Tab on no-match shows stuck loading state"
+  # back to "no matches". PLAN.md TR-019 B2 specifies BOTH the positive
+  # (loading visible) and negative (didn't resolve to "no matches"
+  # despite the wait) — check both.
+  assert_contains     "$out" "loading..." "BUG: Tab on no-match shows stuck loading state"
+  assert_not_contains "$out" "no matches" "BUG: did NOT resolve back to 'no matches' after wait"
   kill_ata "$sess"
   end_test
 }
@@ -1054,8 +1057,11 @@ tr019_e() {
   send_key "$sess" Escape; sleep 0.7
   local out=$WORK/019e.txt
   capture "$sess" "$out"
-  # @-picker state is still alive after Escape (loading or no matches);
-  # the @xyz text is still in the composer (Escape didn't clear it).
+  # PLAN.md says the @-picker stays open after Escape, but in current
+  # ata the picker contents are gone — only the @xyz text in the
+  # composer is retained. We verify the part of PLAN.md's invariant
+  # that still holds: the composer text isn't cleared by Escape.
+  # (PLAN.md vs ata divergence noted.)
   assert_contains "$out" "@xyz" "@-prefix retained after Escape"
   kill_ata "$sess"
   end_test
@@ -1096,9 +1102,12 @@ tr020_e() {
 
 # --- batch-2 deepening: composer/boot/plan-mode extra scenarios -----------
 
-# TR-040 E: /workspace use switches the active workspace. Without
-# additional workspaces this may resolve to a "not found" — assert the
-# command is RECOGNIZED and the response shape is consistent.
+# TR-040 E: /workspace use switches the active workspace. PLAN.md's
+# scenario E exercises a multi-workspace setup (needs the second
+# workspace created in scenario D, which we don't have). This test
+# verifies the single-workspace happy path: "/workspace use global"
+# is recognized and confirms with a "Selected workspace:" line.
+# Marked as a B1-feasible subset of PLAN.md's full scenario E.
 tr040_e() {
   start_test "TR-040 E"
   local sess=$SESSION-040e
