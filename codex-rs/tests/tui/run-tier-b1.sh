@@ -355,6 +355,46 @@ tr006_a() {
   end_test
 }
 
+tr012_a() {
+  start_test "TR-012 A"
+  local sess=$SESSION-012a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/voice"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/012a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Voice mode on"      "announcement printed"
+  assert_contains "$out" "Hold Space to speak" "PTT prompt visible"
+  assert_contains "$out" "🎤"                  "mic glyph in composer"
+  # Toggle off to leave the session in a clean state.
+  send_text "$sess" "/voice"; send_key "$sess" Enter; sleep 1
+  kill_ata "$sess"
+  end_test
+}
+
+tr013_a() {
+  start_test "TR-013 A"
+  local sess=$SESSION-013a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Enter voice mode first.
+  send_text "$sess" "/voice"; send_key "$sess" Enter; sleep 2
+  # Esc must NOT exit voice mode (the regression this test guards).
+  send_key "$sess" Escape
+  sleep 1
+  local out1=$WORK/013a-esc.txt
+  capture "$sess" "$out1"
+  assert_contains "$out1" "🎤" "voice composer survived Esc"
+  # /voice toggles it off cleanly.
+  send_text "$sess" "/voice"; send_key "$sess" Enter; sleep 2
+  local out2=$WORK/013a-off.txt
+  capture "$sess" "$out2"
+  assert_contains     "$out2" "Voice mode off" "exit confirmation"
+  assert_not_contains "$out2" "🎤"             "mic glyph is gone"
+  kill_ata "$sess"
+  end_test
+}
+
 tr023_a() {
   start_test "TR-023 A"
   local sess=$SESSION-023a
@@ -685,6 +725,8 @@ main() {
   log "Numbered TRs (in order)"
   tr006_a
   tr010_a
+  tr012_a
+  tr013_a
   tr014_a
   tr016_a
   tr017_a
