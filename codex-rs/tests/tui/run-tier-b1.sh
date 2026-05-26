@@ -171,17 +171,27 @@ tr016_a() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/clear"
   send_key  "$sess" Enter
-  sleep 2
+  # /clear wipes the terminal then restarts the session asynchronously
+  # (event_dispatch.rs:27 ClearUi). Capturing on a fixed sleep races the
+  # redraw — poll for the banner to come back instead.
   local out=$WORK/016a.txt
-  capture "$sess" "$out"
+  local deadline=$(( $(date +%s) + 20 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    capture "$sess" "$out"
+    if [ -s "$out" ] && grep -qF "Agents2Agents ata" "$out"; then
+      break
+    fi
+    sleep 0.5
+  done
   # PLAN.md TR-016: /clear on an empty session is silent. The two
   # markers that appear after a real /clear (token usage line, resume
   # hint) must NOT be present.
   assert_not_contains "$out" "Token usage:" "no token line on empty /clear"
   assert_not_contains "$out" "ata resume"   "no resume hint on empty /clear"
-  # Positive sanity check: capture wasn't empty.
-  if [ ! -s "$out" ] || ! grep -q '[[:print:]]' "$out"; then
-    fail_assert "pane capture was empty"
+  # Positive sanity check: banner redrew (proves we polled past the
+  # wiped-but-not-redrawn window, not just an empty pane).
+  if [ ! -s "$out" ] || ! grep -qF "Agents2Agents ata" "$out"; then
+    fail_assert "banner did not redraw after /clear"
   fi
   kill_ata "$sess"
   end_test
@@ -357,6 +367,11 @@ tr006_a() {
 
 tr012_a() {
   start_test "TR-012 A"
+  if [ "$(uname -s)" = "Linux" ]; then
+    skip_test "/voice is cfg-gated off on Linux (see tui/src/slash_command.rs)"
+    end_test
+    return
+  fi
   local sess=$SESSION-012a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/voice"
@@ -375,6 +390,11 @@ tr012_a() {
 
 tr013_a() {
   start_test "TR-013 A"
+  if [ "$(uname -s)" = "Linux" ]; then
+    skip_test "/voice is cfg-gated off on Linux (see tui/src/slash_command.rs)"
+    end_test
+    return
+  fi
   local sess=$SESSION-013a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   # Enter voice mode first.

@@ -65,7 +65,6 @@ jobs:
 
           [features]
           scheduling = true
-          voice_mode = true
           EOF
 
       - name: Run Tier B1 scenarios
