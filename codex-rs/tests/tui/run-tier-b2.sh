@@ -629,6 +629,41 @@ tr021_a() {
   end_test
 }
 
+tr011_a() {
+  start_test "TR-011 A"
+  local sess=$SESSION-011a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # PLAN.md TR-011: explicit-tool-naming prompt. Hard predicate is the
+  # content (parse_sections + .rs:NNN). The tool-call check is soft —
+  # PLAN.md's fallback clause: if code_intel didn't fire but the answer
+  # is correct (exec_command grep fallback), still pass with a warning.
+  send_text "$sess" "use code_intel to find where parse_sections is defined"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/011a.txt
+  capture "$sess" "$out"
+  # PLAN.md's exact predicate is the regex parse_sections.*\.rs:\d+, but
+  # the agent often splits the symbol mention and the file:line citation
+  # across lines ("parse_sections is defined in:" / "foo/bar.rs:121").
+  # Check both pieces present, line-independently.
+  assert_contains "$out" "parse_sections" "answer mentions the symbol"
+  if ! grep -qE '\.rs:[0-9]+' "$out"; then
+    fail_assert "no .rs:NNN file:line citation" "$(tail -c 800 "$out")"
+  fi
+  # Soft check: warn (don't fail) if the agent fell back to exec_command.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -n "$sess_jsonl" ] && ! jq -r '.payload.name // empty' "$sess_jsonl" 2>/dev/null \
+       | grep -qFx "code_intel"; then
+    yellow "    [TR-011 A] WARN: agent fell back from code_intel (PLAN.md tolerated path)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
 tr062_a() {
   start_test "TR-062 A"
   local sess=$SESSION-062a
@@ -688,6 +723,7 @@ main() {
   tr002_a
   tr005_a
   tr008_a
+  tr011_a
   tr016_b
   tr021_a
   tr022_a
