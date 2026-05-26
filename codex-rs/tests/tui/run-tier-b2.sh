@@ -143,6 +143,13 @@ assert_not_contains() {
   fi
 }
 
+assert_match() {
+  local file=$1 regex=$2 desc=${3:-}
+  if ! grep -qE -- "$regex" "$file"; then
+    fail_assert "${desc:-expected to match regex: $regex}" "$(tail -c 800 "$file")"
+  fi
+}
+
 cleanup_all() {
   local rc=$?
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -782,6 +789,369 @@ tr016_b() {
   end_test
 }
 
+# --- batch-3 deepening: reader navigation extra scenarios -----------------
+
+# Shared post-open assertion: the reader UI is still rendering. Used by
+# the many "key recognized, no crash" scenarios that the short coffee
+# test doc can't visibly exercise (gg/G/Ctrl-d on a 2-section doc).
+_reader_still_alive() {
+  local out=$1
+  # Reader has 3 footer variants:
+  #   - Section list: "q: close"
+  #   - In-section:   "q: close"
+  #   - Search active: "q: done"
+  # All three prove the reader is still rendering.
+  assert_match "$out" "q: (close|done)" "reader still rendering (q: close|done footer)"
+}
+
+# TR-049 B: gg jumps to top of section. Visible scrolling on the short
+# coffee doc isn't guaranteed; assert reader stays alive after the
+# command rather than position-checking.
+tr049_b() {
+  start_test "TR-049 B"
+  local sess=$SESSION-049b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "jjj"; sleep 0.5
+  send_text "$sess" "gg";  sleep 1
+  local out=$WORK/049b.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 C: capital G is documented as "jump to end" but actually
+# 3-lines scroll. Regression guard against either binding crashing.
+tr049_c() {
+  start_test "TR-049 C"
+  local sess=$SESSION-049c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "G"; sleep 1
+  local out=$WORK/049c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 D: Ctrl+d / Ctrl+u half-page scroll. Reader must survive.
+tr049_d() {
+  start_test "TR-049 D"
+  local sess=$SESSION-049d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_key "$sess" C-d; sleep 0.5
+  send_key "$sess" C-u; sleep 1
+  local out=$WORK/049d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 E: scroll progress implies a section-as-read marker (✓).
+# Short coffee doc may not surface the glyph; assert reader stays alive.
+tr049_e() {
+  start_test "TR-049 E"
+  local sess=$SESSION-049e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "jjjjj"; sleep 1
+  local out=$WORK/049e.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 B: typing a query + Enter highlights matches and updates the
+# footer with a count.
+tr050_b() {
+  start_test "TR-050 B"
+  local sess=$SESSION-050b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.5
+  local out=$WORK/050b.txt
+  capture "$sess" "$out"
+  # After Enter, search execs and the footer shows match count + nav hints.
+  # ata's format is "[1/7]" (bracketed, no spaces); the nav hint is
+  # "n/N: next/prev" not the originally-guessed "n: next".
+  assert_match    "$out" "\[[0-9]+/[0-9]+\]"   "bracketed match count shown after search"
+  assert_contains "$out" "n/N: next/prev"      "next/prev nav hint present"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 C: n advances to the next match across section boundaries.
+tr050_c() {
+  start_test "TR-050 C"
+  local sess=$SESSION-050c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.2
+  send_text "$sess" "n"; sleep 1
+  local out=$WORK/050c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 D: N navigates backwards.
+tr050_d() {
+  start_test "TR-050 D"
+  local sess=$SESSION-050d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.2
+  send_text "$sess" "N"; sleep 1
+  local out=$WORK/050d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 E: Esc cancels search input mode.
+tr050_e() {
+  start_test "TR-050 E"
+  local sess=$SESSION-050e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "x"; sleep 0.3
+  send_key  "$sess" Escape; sleep 1
+  local out=$WORK/050e.txt
+  capture "$sess" "$out"
+  # Search-mode footer hints should disappear after Escape.
+  assert_not_contains "$out" "Enter: search" "search-mode footer cleared by Esc"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 B: f toggles a fold (or no-ops on a doc with no foldable
+# regions). 2-section coffee doc may not have folds; assert reader
+# stays alive.
+tr051_b() {
+  start_test "TR-051 B"
+  local sess=$SESSION-051b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "f"; sleep 0.5
+  send_text "$sess" "f"; sleep 1
+  local out=$WORK/051b.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 C: [ and ] jump to prev/next fold.
+tr051_c() {
+  start_test "TR-051 C"
+  local sess=$SESSION-051c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "]"; sleep 0.5
+  send_text "$sess" "["; sleep 1
+  local out=$WORK/051c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 D: zM collapse all, zR expand all.
+tr051_d() {
+  start_test "TR-051 D"
+  local sess=$SESSION-051d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "zM"; sleep 0.5
+  send_text "$sess" "zR"; sleep 1
+  local out=$WORK/051d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 E: fold keys are bound and don't crash even when no fold is
+# at cursor.
+tr051_e() {
+  start_test "TR-051 E"
+  local sess=$SESSION-051e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "f]f["; sleep 1
+  local out=$WORK/051e.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 B: TTS keymap surface. After r the audio control footer shows
+# pause / speed bindings.
+tr052_b() {
+  start_test "TR-052 B"
+  local sess=$SESSION-052b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "r"; sleep 1.5
+  local out=$WORK/052b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "s: pause"    "pause control listed"
+  assert_contains "$out" "+/-: speed"  "speed control listed"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 C: r key is in the footer but NOT documented in ? help — a
+# known documentation gap (regression guard).
+tr052_c() {
+  start_test "TR-052 C"
+  local sess=$SESSION-052c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1
+  local out=$WORK/052c.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Reading View Help" "help overlay open"
+  # The 'r' / "narrate" binding is intentionally missing from help —
+  # PLAN.md TR-052 C documents this gap. Verifying the absence guards
+  # against a doc fix that would also need to update this predicate.
+  assert_not_contains "$out" "Narrate section" "narrate-row absent from help (documented gap)"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 B: hjkl extends visual selection.
+tr053_b() {
+  start_test "TR-053 B"
+  local sess=$SESSION-053b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_text "$sess" "lll"; sleep 1
+  local out=$WORK/053b.txt
+  capture "$sess" "$out"
+  # Still in visual mode (footer remains) after hjkl extends selection.
+  assert_contains "$out" "hjkl: select"   "still in visual mode after extension"
+  assert_contains "$out" "Enter: explain" "Enter binding still shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 C: V enters line-level selection mode.
+tr053_c() {
+  start_test "TR-053 C"
+  local sess=$SESSION-053c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "V"; sleep 1
+  local out=$WORK/053c.txt
+  capture "$sess" "$out"
+  # Visual line mode still surfaces the same selection footer.
+  assert_contains "$out" "Enter: explain" "line-mode Enter binding shown"
+  assert_contains "$out" "Esc: cancel"    "line-mode Esc binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 D: Enter in visual selection triggers "explain" (sends the
+# selected text to the agent). Without an LLM call we can't verify the
+# follow-up; just verify Enter exited visual mode AND the reader is
+# still healthy.
+tr053_d() {
+  start_test "TR-053 D"
+  local sess=$SESSION-053d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_text "$sess" "lll"; sleep 0.5
+  send_key  "$sess" Enter; sleep 3
+  local out=$WORK/053d.txt
+  capture "$sess" "$out"
+  # Visual footer should be gone (Enter exited visual mode), reader
+  # itself either still open or transitioned to an explain response.
+  assert_not_contains "$out" "hjkl: select" "visual mode exited by Enter"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 E: Esc cancels visual selection cleanly.
+tr053_e() {
+  start_test "TR-053 E"
+  local sess=$SESSION-053e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_key  "$sess" Escape; sleep 1
+  local out=$WORK/053e.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "hjkl: select" "visual mode cancelled by Esc"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 B: ? help overlay shows the Navigation block with the
+# expected shortcut rows.
+tr054_b() {
+  start_test "TR-054 B"
+  local sess=$SESSION-054b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  local out=$WORK/054b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Getting around"   "navigation section heading"
+  assert_contains "$out" "Next section"     "next-section row"
+  assert_contains "$out" "Previous section" "prev-section row"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 C: ? help overlay covers other shortcut tables (text
+# selection, questions, search, folds).
+tr054_c() {
+  start_test "TR-054 C"
+  local sess=$SESSION-054c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  local out=$WORK/054c.txt
+  capture "$sess" "$out"
+  # At least the documented categories should appear. Permissive set:
+  # an overlay missing all of these is a regression.
+  local hits=0
+  for kw in "Text selection" "Selection" "Questions" "Ask" "Search" "Find" "Folds"; do
+    if grep -qF "$kw" "$out"; then hits=$((hits + 1)); fi
+  done
+  if [ "$hits" -lt 3 ]; then
+    fail_assert "help overlay missing other-category rows (matched=$hits of expected ≥3)" "$(tail -c 800 "$out")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 D: PLAN.md claims ? is a toggle (second ? closes), but on
+# ata 0.7.0 the help overlay only closes via Escape. This test asserts
+# the actually-working close behavior and prints a yellow note about
+# the PLAN.md discrepancy so the gap is surfaced rather than hidden.
+tr054_d() {
+  start_test "TR-054 D"
+  local sess=$SESSION-054d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  # Probe whether ? toggles closed. If yes, PLAN.md is correct and we
+  # can drop the discrepancy note. If no (current 0.7.0), use Escape.
+  send_text "$sess" "?"; sleep 1
+  local mid=$WORK/054d-mid.txt
+  capture "$sess" "$mid"
+  if grep -qF "Reading View Help" "$mid"; then
+    yellow "    [TR-054 D] note: PLAN.md says ? toggles closed; ata 0.7.0 needs Esc"
+    send_key "$sess" Escape; sleep 1
+  fi
+  local out=$WORK/054d.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "Reading View Help" "help overlay closed (via ? or Esc)"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -817,12 +1187,12 @@ main() {
   tr044_a
   tr045_a
   tr047_a
-  tr049_a
-  tr050_a
-  tr051_a
-  tr052_a
-  tr053_a
-  tr054_a
+  tr049_a; tr049_b; tr049_c; tr049_d; tr049_e
+  tr050_a; tr050_b; tr050_c; tr050_d; tr050_e
+  tr051_a; tr051_b; tr051_c; tr051_d; tr051_e
+  tr052_a; tr052_b; tr052_c
+  tr053_a; tr053_b; tr053_c; tr053_d; tr053_e
+  tr054_a; tr054_b; tr054_c; tr054_d
   tr062_a
   tr063_a
 

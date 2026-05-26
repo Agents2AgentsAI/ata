@@ -932,7 +932,10 @@ tr017_c() {
   local out=$WORK/017c.txt
   capture "$sess" "$out"
   assert_contains     "$out" "Permissions updated to Default" "immediate downgrade confirmation"
-  assert_not_contains "$out" "Enable"                          "no Enable confirmation dialog on downgrade"
+  # Be specific: ata's CI tip line includes "Enable in /experimental!"
+  # which would false-positive a naive "Enable" check. The actual
+  # confirmation dialog header is "Enable full access?".
+  assert_not_contains "$out" "Enable full access?"             "no elevation dialog on downgrade"
   kill_ata "$sess"
   end_test
 }
@@ -1199,8 +1202,14 @@ tr042_c() {
     fail_assert "no rollout path matched in /rollout output" "$(tail -c 800 "$out")"
     kill_ata "$sess"; end_test; return
   fi
+  # The session JSONL is created lazily — the file may not yet exist
+  # right after /rollout prints. Poll up to 10s for the file to land.
+  local fdeadline=$(( $(date +%s) + 10 ))
+  while [ "$(date +%s)" -lt "$fdeadline" ] && [ ! -f "$rpath" ]; do
+    sleep 0.5
+  done
   if [ ! -f "$rpath" ]; then
-    fail_assert "printed rollout path does not exist on disk: $rpath"
+    fail_assert "printed rollout path does not exist on disk after 10s: $rpath"
     kill_ata "$sess"; end_test; return
   fi
   # And verify it's the most-recent jsonl (proves "live, not stale").
