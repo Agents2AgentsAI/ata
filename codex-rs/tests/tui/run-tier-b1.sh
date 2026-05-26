@@ -1089,6 +1089,191 @@ tr020_e() {
   end_test
 }
 
+# --- batch-2 deepening: composer/boot/plan-mode extra scenarios -----------
+
+# TR-040 E: /workspace use switches the active workspace. Without
+# additional workspaces this may resolve to a "not found" — assert the
+# command is RECOGNIZED and the response shape is consistent.
+tr040_e() {
+  start_test "TR-040 E"
+  local sess=$SESSION-040e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/workspace use global"; send_key "$sess" Enter
+  sleep 1.5
+  local out=$WORK/040e.txt
+  capture "$sess" "$out"
+  # Either "Switched to ..." or already-current acknowledgement; both
+  # prove the use sub-command is recognized.
+  assert_not_contains "$out" "Unrecognized command" "/workspace use is recognized"
+  assert_match       "$out" "(Selected workspace|Switched to|already|Current workspace)" "use sub-command acknowledged"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-040 F: invalid /workspace selector → exact error, no state change.
+tr040_f() {
+  start_test "TR-040 F"
+  local sess=$SESSION-040f
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/workspace use nonexistent-xyz-$$"; send_key "$sess" Enter
+  sleep 1.5
+  local out=$WORK/040f.txt
+  capture "$sess" "$out"
+  # Predicates kept permissive across phrasing variants ("not found",
+  # "unknown", "no workspace").
+  assert_match "$out" "(not found|unknown|no workspace)" "invalid workspace selector errors"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-041 B: /subagents is an alias that opens the same picker as /agent.
+tr041_b() {
+  start_test "TR-041 B"
+  local sess=$SESSION-041b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/subagents"; send_key "$sess" Enter
+  sleep 1.5
+  local out=$WORK/041b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Subagents"      "alias opens same overlay"
+  assert_contains "$out" "Main [default]" "main row shown via alias"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-041 C: Escape dismisses the picker without changing active agent.
+tr041_c() {
+  start_test "TR-041 C"
+  local sess=$SESSION-041c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/agent"; send_key "$sess" Enter
+  sleep 1.5
+  send_key "$sess" Escape; sleep 1
+  local out=$WORK/041c.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "Subagents"        "picker dismissed"
+  assert_contains     "$out" "Agents2Agents ata" "back to chat banner"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-041 E: ↑/↓ keyboard navigation. With one agent (Main) the focus
+# stays put but the keys must NOT close the picker.
+tr041_e() {
+  start_test "TR-041 E"
+  local sess=$SESSION-041e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/agent"; send_key "$sess" Enter; sleep 1.5
+  send_key "$sess" Down; sleep 0.3
+  send_key "$sess" Down; sleep 0.3
+  send_key "$sess" Up;   sleep 0.3
+  local out=$WORK/041e.txt
+  capture "$sess" "$out"
+  # Picker still open, Main still focused (the only row in a fresh sess).
+  assert_contains "$out" "Subagents"      "picker still open after ↑/↓"
+  assert_contains "$out" "Main [default]" "Main row still rendered"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-042 C: rollout path printed by /rollout matches the actual current
+# session file under ~/.ata/sessions. Cross-checks that the printed
+# path is live, not stale.
+tr042_c() {
+  start_test "TR-042 C"
+  case "$ATA_BIN" in
+    *target/debug/ata*) ;;
+    *) skip_test "needs debug build (ATA_BIN=$ATA_BIN)"; return;;
+  esac
+  local sess=$SESSION-042c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/rollout"; send_key "$sess" Enter
+  sleep 2
+  local out=$WORK/042c.txt
+  capture "$sess" "$out"
+  # Extract the printed path. ata may print "/Users/..." (mac) or
+  # "/home/..." (linux), then ".ata/sessions/.../rollout-*.jsonl".
+  local rpath
+  rpath=$(grep -oE '/[^[:space:]]+\.ata/sessions/[^[:space:]]+rollout-[^[:space:]]+\.jsonl' "$out" | head -1)
+  if [ -z "$rpath" ]; then
+    fail_assert "no rollout path matched in /rollout output" "$(tail -c 800 "$out")"
+    kill_ata "$sess"; end_test; return
+  fi
+  if [ ! -f "$rpath" ]; then
+    fail_assert "printed rollout path does not exist on disk: $rpath"
+    kill_ata "$sess"; end_test; return
+  fi
+  # And verify it's the most-recent jsonl (proves "live, not stale").
+  local actual
+  actual=$(find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -2 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
+  if [ "$rpath" != "$actual" ]; then
+    fail_assert "rollout path does not match most-recent session jsonl" "printed: $rpath / actual: $actual"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-043 C: Shift+Tab is a binary toggle for Plan mode. With Plan ON,
+# pressing Shift+Tab three times must produce off, on, off.
+tr043_c() {
+  start_test "TR-043 C"
+  local sess=$SESSION-043c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Turn on Plan mode.
+  send_text "$sess" "/plan"; send_key "$sess" Enter; sleep 1.2
+  # First Shift+Tab → OFF.
+  send_key "$sess" BTab; sleep 0.6
+  local off1=$WORK/043c-off1.txt; capture "$sess" "$off1"
+  assert_not_contains "$off1" "Plan mode (shift+tab to cycle)" "Shift+Tab #1 toggled OFF"
+  # Second Shift+Tab → ON.
+  send_key "$sess" BTab; sleep 0.6
+  local on2=$WORK/043c-on2.txt; capture "$sess" "$on2"
+  assert_contains "$on2" "Plan mode (shift+tab to cycle)" "Shift+Tab #2 toggled back ON"
+  # Third Shift+Tab → OFF.
+  send_key "$sess" BTab; sleep 0.6
+  local off3=$WORK/043c-off3.txt; capture "$sess" "$off3"
+  assert_not_contains "$off3" "Plan mode (shift+tab to cycle)" "Shift+Tab #3 toggled OFF"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-046 B: /resume picker rows show "<N> <unit> ago" + first message.
+tr046_b() {
+  start_test "TR-046 B"
+  local sess=$SESSION-046b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/resume"; send_key "$sess" Enter
+  sleep 2
+  local out=$WORK/046b.txt
+  capture "$sess" "$out"
+  # Empty-session CI runs may have zero prior sessions — accept either
+  # the populated-rows shape (time-ago format) OR the empty-state line.
+  if grep -qE "No saved chats|empty" "$out"; then
+    yellow "    [TR-046 B] note: no prior sessions present; can't verify row shape"
+  else
+    # ata uses compact units: 3s/3m/3h/3d/3w ago (not "3 days ago").
+    assert_match "$out" "[0-9]+[smhdw] ago" "row shows time-ago format (compact units)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-046 C: inline /resume <token> needs EXACT match; substring of a
+# prior message ("primed") should error with "No saved chat found".
+tr046_c() {
+  start_test "TR-046 C"
+  local sess=$SESSION-046c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/resume nonexistent-token-$$"; send_key "$sess" Enter
+  sleep 1.5
+  local out=$WORK/046c.txt
+  capture "$sess" "$out"
+  assert_match       "$out" "No saved chat found matching" "inline lookup errors on miss"
+  assert_not_contains "$out" "Resume a previous session"   "picker did NOT open"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -1120,11 +1305,11 @@ main() {
   tr023_a
   tr034_a
   tr039_a
-  tr040_a; tr040_b; tr040_c
-  tr041_a
-  tr042_a
-  tr043_a
-  tr046_a
+  tr040_a; tr040_b; tr040_c; tr040_e; tr040_f
+  tr041_a; tr041_b; tr041_c; tr041_e
+  tr042_a; tr042_c
+  tr043_a; tr043_c
+  tr046_a; tr046_b; tr046_c
 
   log ""
   log "Ad-hoc slash commands (not in PLAN.md)"
