@@ -132,6 +132,30 @@ assert_match() {
   fi
 }
 
+# Cross-platform clipboard helpers (macOS uses pbpaste/pbcopy; Linux uses
+# xclip with the X selection that ata's clipboard_copy.rs writes to).
+clipboard_available() {
+  case "$(uname -s)" in
+    Darwin) command -v pbpaste >/dev/null 2>&1 ;;
+    Linux)  command -v xclip   >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
+clipboard_read() {
+  case "$(uname -s)" in
+    Darwin) pbpaste ;;
+    Linux)  xclip -selection clipboard -o 2>/dev/null || true ;;
+  esac
+}
+
+clipboard_write() {
+  case "$(uname -s)" in
+    Darwin) printf '%s' "$1" | pbcopy ;;
+    Linux)  printf '%s' "$1" | xclip -selection clipboard ;;
+  esac
+}
+
 cleanup_all() {
   local rc=$?
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -762,6 +786,44 @@ tr041_a() {
   end_test
 }
 
+# TR-038 D: /copy on a fresh session (no prior agent reply) errors
+# gracefully with "No agent response to copy" and does NOT push that
+# error message to the clipboard. This is the only TR-038 scenario
+# that's fully deterministic without an LLM round-trip; the other
+# scenarios (A, B, C, E, E2, F) need real agent replies and live in B2.
+tr038_d() {
+  start_test "TR-038 D"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available (need pbpaste on macOS or xclip on Linux)"
+    end_test; return
+  fi
+  local sess=$SESSION-038d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Save the user's existing clipboard so the test doesn't trash it.
+  local orig
+  orig=$(clipboard_read || true)
+  # Seed clipboard with a distinct sentinel so we can verify ata didn't
+  # overwrite it with the error string.
+  local sentinel="TR038D_SENTINEL_$$"
+  clipboard_write "$sentinel"
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038d.txt
+  capture "$sess" "$out"
+  local clip
+  clip=$(clipboard_read || true)
+  # Restore the user's original clipboard before asserting.
+  clipboard_write "$orig"
+  assert_contains     "$out" "No agent response to copy"   "no-message error in pane"
+  assert_not_contains "$out" "Copied last message to clipboard" "no false-success message"
+  # The clipboard must still hold our sentinel — ata's UI error did
+  # NOT leak into the user's clipboard.
+  if [ "$clip" != "$sentinel" ]; then
+    fail_assert "ata's UI error leaked into clipboard (or sentinel was wiped)" "got: $(printf '%s' "$clip" | head -c 200)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
 tr039_a() {
   start_test "TR-039 A"
   local sess=$SESSION-039a
@@ -1340,6 +1402,7 @@ main() {
   tr020_a; tr020_b; tr020_c; tr020_d; tr020_e
   tr023_a
   tr034_a
+  tr038_d
   tr039_a
   tr040_a; tr040_b; tr040_c; tr040_e; tr040_f
   tr041_a; tr041_b; tr041_c; tr041_e; tr041_f

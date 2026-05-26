@@ -150,6 +150,30 @@ assert_match() {
   fi
 }
 
+# Cross-platform clipboard helpers (macOS uses pbpaste/pbcopy; Linux uses
+# xclip with the X selection that ata's clipboard_copy.rs writes to).
+clipboard_available() {
+  case "$(uname -s)" in
+    Darwin) command -v pbpaste >/dev/null 2>&1 ;;
+    Linux)  command -v xclip   >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
+clipboard_read() {
+  case "$(uname -s)" in
+    Darwin) pbpaste ;;
+    Linux)  xclip -selection clipboard -o 2>/dev/null || true ;;
+  esac
+}
+
+clipboard_write() {
+  case "$(uname -s)" in
+    Darwin) printf '%s' "$1" | pbcopy ;;
+    Linux)  printf '%s' "$1" | xclip -selection clipboard ;;
+  esac
+}
+
 cleanup_all() {
   local rc=$?
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -476,6 +500,77 @@ tr053_a() {
   assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
   assert_contains "$out" "Enter: explain" "Enter binding shown"
   assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 A: /copy on a simple single-line agent message. Clipboard
+# should hold the raw text ("hi") without ata's UI framing (no ›, no •).
+tr038_a() {
+  start_test "TR-038 A"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "respond with just hi"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "agent did not respond within 60s"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038a.txt
+  capture "$sess" "$out"
+  local clip
+  clip=$(clipboard_read || true)
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  # Clipboard should be the bare reply text. Accept some whitespace
+  # tolerance but no framing characters.
+  if ! printf '%s' "$clip" | grep -qiE '^[[:space:]]*hi[[:space:]]*$'; then
+    fail_assert "clipboard should be just 'hi'" "got: $(printf '%s' "$clip" | head -c 200)"
+  fi
+  if printf '%s' "$clip" | grep -qE '^›|^• '; then
+    fail_assert "clipboard contains TUI framing chars" "got: $(printf '%s' "$clip" | head -c 200)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 C: /copy on a fenced code block. Clipboard should preserve
+# the code fence and code body, not the TUI's left-margin glyphs.
+tr038_c() {
+  start_test "TR-038 C"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "show me the rust hello world program in a fenced code block, no preamble"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not respond within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local clip
+  clip=$(clipboard_read || true)
+  clipboard_write "$orig"
+  if ! printf '%s' "$clip" | grep -qE '```'; then
+    fail_assert "clipboard missing code fence" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  if ! printf '%s' "$clip" | grep -qF "fn main"; then
+    fail_assert "clipboard missing 'fn main'" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  if printf '%s' "$clip" | grep -qE '└'; then
+    fail_assert "clipboard contains TUI margin glyph" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -1461,6 +1556,7 @@ main() {
   tr036_a
   tr036_b
   tr037_a
+  tr038_a; tr038_c
   tr044_a; tr044_b; tr044_c; tr044_d; tr044_f
   tr045_a; tr045_b
   tr047_a; tr047_b; tr047_c

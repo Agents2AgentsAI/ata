@@ -43,8 +43,13 @@ jobs:
             tui-tests-tier-b1-${{ runner.os }}-
             tui-tests-tier-a-${{ runner.os }}-
 
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux + xclip + Xvfb
+        # xclip + Xvfb give us a working clipboard for TR-038 (/copy).
+        # Headless CI has no real X display, so we run xclip against a
+        # virtual one started before the tests run.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux xclip xvfb
 
       - name: Build ata
         run: cargo build -p codex-cli --bin ata
@@ -67,7 +72,15 @@ jobs:
           scheduling = true
           EOF
 
+      - name: Start virtual X display (for xclip)
+        # xclip needs an X server to talk to. Xvfb is a headless one.
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          # Wait a beat for Xvfb to come up before tests start hitting it.
+          sleep 1
+
       - name: Run Tier B1 scenarios
         env:
           ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
+          DISPLAY: ":99"
         run: ./tests/tui/run-tier-b1.sh
