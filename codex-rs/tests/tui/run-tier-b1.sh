@@ -134,6 +134,34 @@ cleanup_all() {
 
 # --- scenarios -------------------------------------------------------------
 
+tr003_a() {
+  start_test "TR-003 A"
+  local sess=$SESSION-003a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local out=$WORK/003a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Agents2Agents ata (v" "banner with version"
+  assert_contains "$out" "YOLO mode"             "permissions line shows YOLO"
+  assert_contains "$out" "directory:"            "directory line present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr004_a() {
+  start_test "TR-004 A"
+  local sess=$SESSION-004a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"
+  sleep 1
+  local out=$WORK/004a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "/model"       "popup lists /model"
+  assert_contains "$out" "/experimental" "popup lists /experimental"
+  assert_contains "$out" "/permissions" "popup lists /permissions"
+  kill_ata "$sess"
+  end_test
+}
+
 tr020_a() {
   start_test "TR-020 A"
   local sess=$SESSION-020a
@@ -428,6 +456,29 @@ tr023_a() {
   assert_contains "$out" "Cron (0)"     "empty cron section"
   assert_contains "$out" "Monitors (0)" "empty monitors section"
   assert_contains "$out" "esc close"    "footer shows esc-close hint"
+  kill_ata "$sess"
+  end_test
+}
+
+tr034_a() {
+  start_test "TR-034 A"
+  local sess=$SESSION-034a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Type @Cargo, accept top match with Tab. The accepted filename must
+  # land in the composer as plain text (path-injection). It must NOT be
+  # replaced by file content (no content-injection — PLAN.md TR-034).
+  send_text "$sess" "@Cargo"
+  sleep 1
+  send_key "$sess" Tab
+  sleep 1
+  local out=$WORK/034a.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Cargo.toml" "path injected into composer"
+  # File-content sentinels that would only appear if ata read the file
+  # and pasted its body. Cargo.toml content invariants:
+  assert_not_contains "$out" "[workspace]" "no [workspace] section content"
+  assert_not_contains "$out" "[package]"   "no [package] section content"
+  assert_not_contains "$out" "edition ="   "no edition= field content"
   kill_ata "$sess"
   end_test
 }
@@ -743,6 +794,8 @@ main() {
   log ""
 
   log "Numbered TRs (in order)"
+  tr003_a
+  tr004_a
   tr006_a
   tr010_a
   tr012_a
@@ -754,6 +807,7 @@ main() {
   tr019_a; tr019_b; tr019_c
   tr020_a; tr020_b; tr020_d
   tr023_a
+  tr034_a
   tr039_a
   tr040_a; tr040_b; tr040_c
   tr041_a
