@@ -129,6 +129,41 @@ assert_tool_called() {
   fi
 }
 
+# Inverse — fail if the tool was called at any point during the turn.
+# Used for "must not fall back to <X>" assertions (e.g. routing tests).
+assert_tool_not_called() {
+  local sess_jsonl=$1 tool=$2 desc=${3:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool}: session JSONL not found"
+    return
+  fi
+  if jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "$tool"; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "${desc:-tool '$tool' must NOT have been called}" "tool_counts: $counts"
+  fi
+}
+
+# Assert that any call to a specific tool had arguments containing a
+# substring. Useful for argument-fidelity checks (e.g. "section_index":0,
+# "foldable":true) where the exact JSON whitespace varies.
+assert_tool_args_contain() {
+  local sess_jsonl=$1 tool=$2 needle=$3 desc=${4:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool args}: session JSONL not found"
+    return
+  fi
+  local args
+  args=$(jq -r "select(.payload.name==\"$tool\") | .payload.arguments" "$sess_jsonl" 2>/dev/null)
+  if [ -z "$args" ]; then
+    fail_assert "${desc:-tool '$tool' args}: tool was not called at all"
+    return
+  fi
+  if ! printf '%s' "$args" | grep -qF -- "$needle"; then
+    fail_assert "${desc:-args must contain: $needle}" "got args: $(printf '%s' "$args" | head -c 600)"
+  fi
+}
+
 assert_contains() {
   local file=$1 needle=$2 desc=${3:-}
   if ! grep -qF -- "$needle" "$file"; then
@@ -274,21 +309,44 @@ tr031_a() {
   start_test "TR-031 A"
   local sess=$SESSION-031a
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # Visual-select Enter sends an "explain selection" request. We can't
-  # reliably assert WHICH tool the agent picks (flaky), but we can
-  # verify the inline-answer machinery wired up — 'You asked:' marker
-  # appears and the reader still renders.
-  send_text "$sess" "v"; sleep 1
-  send_text "$sess" "jj"; sleep 0.5
+  # PLAN.md TR-031: a Tab-to-ask "rewrite section 1" must produce a
+  # scoped-edit call (patch_document_section or update_document_section)
+  # targeting section_index 0. Falling back to apply_patch or shell would
+  # bypass the section model.
+  send_key  "$sess" Tab
+  sleep 1
+  send_text "$sess" "rewrite section 1 to be one short sentence about what coffee is"
   send_key  "$sess" Enter
-  if ! wait_for_idle "$sess" 90; then
-    fail_assert "agent did not finish within 90s"
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
     kill_ata "$sess"; end_test; return
   fi
   local out=$WORK/031a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "You asked:"     "inline question marker present"
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -z "$sess_jsonl" ]; then
+    fail_assert "session JSONL not found"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Either scoped-edit tool counts as a pass — the agent may interpret the
+  # rewrite either as a patch (find-and-replace) or an update (full
+  # replacement). The fail mode is shelling out / apply_patch.
+  local tools
+  tools=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort -u)
+  if ! printf '%s\n' "$tools" | grep -qE '^(patch_document_section|update_document_section)$'; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "expected patch_document_section OR update_document_section" "tool_counts: $counts"
+  fi
+  assert_tool_not_called "$sess_jsonl" "apply_patch"  "scoped edits must not fall back to apply_patch"
+  assert_tool_not_called "$sess_jsonl" "shell"        "scoped edits must not shell out"
+  # Scoping guard — section_index 0 (section 1, zero-indexed).
+  if jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "patch_document_section"; then
+    assert_tool_args_contain "$sess_jsonl" "patch_document_section" '"section_index"' "patch_document_section has section_index"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -307,15 +365,20 @@ tr032_a() {
   fi
   local out=$WORK/032a.txt
   capture "$sess" "$out"
-  # Expect a new section to exist. Doc started with 2, so the title
-  # bar should now show 1/3 or the TOC entry list should include
-  # something about brewing.
+  # Content guard — new section visible.
   if grep -qF "1/3" "$out" || grep -qF "2/3" "$out" || grep -qF "3/3" "$out" || grep -qiE "brewing|method" "$out"; then
     :
   else
     fail_assert "no sign of a new third section after add request" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard — must use add_document_section, not patch/update/append.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "add_document_section"    "agent must use the dedicated add-section tool"
+  assert_tool_not_called "$sess_jsonl" "patch_document_section"  "must not mutate via patch when adding"
+  assert_tool_not_called "$sess_jsonl" "update_document_section" "must not replace via update when adding"
+  assert_tool_not_called "$sess_jsonl" "append_to_section"       "must not append to existing when adding"
   kill_ata "$sess"
   end_test
 }
@@ -334,12 +397,19 @@ tr033_a() {
   fi
   local out=$WORK/033a.txt
   capture "$sess" "$out"
-  # Look for an espresso-related word anywhere in the rendered pane
-  # (the agent's addition to slide 2 should mention it).
   if ! grep -qiE "espresso|crema|pressure" "$out"; then
     fail_assert "no espresso content found in pane after append request" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard — append, NOT update / patch / add. This is THE
+  # "rendering looks fine, wrong tool got called" regression PLAN.md
+  # is specifically guarding against.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "append_to_section"        "agent must use append_to_section for 'append'"
+  assert_tool_not_called "$sess_jsonl" "update_document_section"  "must not replace section"
+  assert_tool_not_called "$sess_jsonl" "patch_document_section"   "must not use find-replace patcher"
+  assert_tool_not_called "$sess_jsonl" "add_document_section"     "must not add a new section"
   kill_ata "$sess"
   end_test
 }
@@ -363,6 +433,19 @@ tr037_a() {
     fail_assert "no bitterness-related content in inline answer" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "still in reader after answer"
+  # Routing guard — Tab-to-ask Q&A goes through append_to_section with
+  # foldable: true (distinguishing it from TR-033's foldable: false
+  # explicit content additions).
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "append_to_section" "Tab-ask Q&A must go through append_to_section"
+  # The argument-fidelity check: foldable must be true. Accept either
+  # JSON whitespace variant.
+  local args
+  args=$(jq -r 'select(.payload.name=="append_to_section") | .payload.arguments' "$sess_jsonl" 2>/dev/null)
+  if ! printf '%s' "$args" | grep -qE '"foldable"[[:space:]]*:[[:space:]]*true'; then
+    fail_assert "append_to_section must have foldable: true for Tab-ask" "got args: $(printf '%s' "$args" | head -c 600)"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -675,12 +758,9 @@ tr021_a() {
   start_test "TR-021 A"
   local sess=$SESSION-021a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  # The dedicated hn_search tool exists but the agent's choice between
-  # it and a generic exec_command (curl HN) is non-deterministic. So
-  # this test only asserts HN content actually came back — a real
-  # regression guard against "HN access fully broken" without
-  # depending on which tool the agent picked.
-  send_text "$sess" "Use the hacker_news tool to fetch the top 3 stories"
+  # Prompt deliberately does NOT name the tool — the test is whether the
+  # agent picks hn_search on its own when the question is about HN.
+  send_text "$sess" "find me a top story on Hacker News about Rust"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 180; then
     fail_assert "agent did not finish within 180s"
@@ -688,12 +768,19 @@ tr021_a() {
   fi
   local out=$WORK/021a.txt
   capture "$sess" "$out"
-  # HN result rows are formatted as "<n> points, <m> comments". That
-  # string is stable across both tool paths (hn_search and the
-  # exec_command fallback).
-  if ! grep -qE '[0-9]+ points, [0-9]+ comments' "$out"; then
-    fail_assert "no HN 'X points, Y comments' line in response" "$(tail -c 800 "$out")"
+  # Content guard — proves HN actually answered.
+  if ! grep -qF "news.ycombinator.com" "$out"; then
+    fail_assert "no HN URL cited in response" "$(tail -c 800 "$out")"
   fi
+  # Routing guard (Nima's call). hn_search must be called; the generic
+  # fallbacks must NOT be. If the agent shells out instead, that's the
+  # silent regression PLAN.md is trying to catch.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "hn_search"    "agent must invoke the dedicated hn_search tool"
+  assert_tool_not_called "$sess_jsonl" "web_search"   "agent must not fall back to generic web_search"
+  assert_tool_not_called "$sess_jsonl" "exec_command" "agent must not shell out via exec_command"
+  assert_tool_args_contain "$sess_jsonl" "hn_search" "query" "hn_search args have a query field"
   kill_ata "$sess"
   end_test
 }
@@ -740,10 +827,9 @@ tr011_a() {
   start_test "TR-011 A"
   local sess=$SESSION-011a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  # PLAN.md TR-011: explicit-tool-naming prompt. Hard predicate is the
-  # content (parse_sections + .rs:NNN). The tool-call check is soft —
-  # PLAN.md's fallback clause: if code_intel didn't fire but the answer
-  # is correct (exec_command grep fallback), still pass with a warning.
+  # The prompt explicitly names code_intel. The agent must call it at
+  # some point during the turn — not necessarily as the first tool, but
+  # somewhere. PLAN.md is the spec: tool_counts must contain code_intel.
   send_text "$sess" "use code_intel to find where parse_sections is defined"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 180; then
@@ -752,21 +838,16 @@ tr011_a() {
   fi
   local out=$WORK/011a.txt
   capture "$sess" "$out"
-  # PLAN.md's exact predicate is the regex parse_sections.*\.rs:\d+, but
-  # the agent often splits the symbol mention and the file:line citation
-  # across lines ("parse_sections is defined in:" / "foo/bar.rs:121").
-  # Check both pieces present, line-independently.
   assert_contains "$out" "parse_sections" "answer mentions the symbol"
   if ! grep -qE '\.rs:[0-9]+' "$out"; then
     fail_assert "no .rs:NNN file:line citation" "$(tail -c 800 "$out")"
   fi
-  # Soft check: warn (don't fail) if the agent fell back to exec_command.
+  # Hard tool-routing check (Nima's call). If this fails intermittently,
+  # that's a real signal — investigate the prompt / tool description, not
+  # mask it with a soft warning.
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
-  if [ -n "$sess_jsonl" ] && ! jq -r '.payload.name // empty' "$sess_jsonl" 2>/dev/null \
-       | grep -qFx "code_intel"; then
-    yellow "    [TR-011 A] WARN: agent fell back from code_intel (PLAN.md tolerated path)"
-  fi
+  assert_tool_called "$sess_jsonl" "code_intel" "agent must invoke code_intel when explicitly asked"
   kill_ata "$sess"
   end_test
 }

@@ -258,7 +258,7 @@ The runner backs up `~/.ata/config.toml` before writing the dummy-group `[resear
 | TR-012, TR-013 (voice mode) | `/voice` is compiled out on Linux (`#[cfg(not(target_os = "linux"))]`). Ubuntu CI doesn't have the command. Tests skip on Linux and run on macOS. |
 | TR-015 | PLAN.md marks it "superseded by TR-042". Nothing to test. |
 | TR-024 through TR-030 (scheduling lifecycle) | These cross the real cron daemon, the file system, and subprocess streams on wall-clock timers. A 70-second wait for a system cron to fire is too flaky on a shared CI runner. |
-| TR-028 (monitor_watch_for) | Verifies the model picks the right tool between `monitor_wait` and `monitor_watch_for`. Tool routing is non-deterministic. No honest workaround without statistical sampling (run N times, alert if win-rate drops). |
+| TR-028 (monitor_watch_for) | Verifies the model picks the right tool between `monitor_wait` and `monitor_watch_for`. Not implemented yet — needs a slow operation to watch on and a stable predicate for which tool was picked. |
 | TR-035 (multi-source synthesis) | Polls up to 10 minutes for the model to use both Hacker News and paper search. Slow and weak signal — the model often spawns sub-agents, so its tool calls live in different session files. |
 | TR-038 B, E, E2, F (`/copy` edge cases) | Scenarios A, C, and D are now covered (xclip + Xvfb installed in CI). B needs nuanced multi-line list assertions; E and E2 need `/side` priming flows; F needs the in-flight + completed-turn precondition. Open work for a follow-up. |
 | TR-042 A (release-build `/rollout`) | The command is hidden in release builds. CI always builds debug, so the negative case is untestable. |
@@ -295,7 +295,7 @@ When ATA changes to match `PLAN.md` (or vice versa), update both files in the sa
 
 **Why each test creates its own tmux session.** So tests don't share state. If one test sets a model and the next one assumes the default model, you've got a problem. Each session boots fresh.
 
-**Why we sometimes use a "soft" tool-call check.** Tool routing is non-deterministic. For TR-011 (code_intel) and TR-063 A (paper_get), the test passes if the *answer* is correct, and prints a yellow note if the *expected* tool wasn't called. This matches PLAN.md's own fallback clause.
+**Why the routing TRs assert hard on tool calls now.** If the user asks about Hacker News, the agent must call `hn_search` — not because we want a green CI badge, but because the tool exists, the user wanted it, and silently shelling out via `exec_command` would be a real regression. Intermittent failures mean the prompt or the tool description needs work, not that the test is too strict. TR-011 (code_intel), TR-021 (hn_search), TR-031 (patch_document_section), TR-032 (add_document_section), TR-033 (append_to_section), TR-037 (foldable Tab-ask append) all assert directly on the session JSONL — the rendered text alone can be plausible even when the wrong tool was called.
 
 
 ## Quick lookup table
