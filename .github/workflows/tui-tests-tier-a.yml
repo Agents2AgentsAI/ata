@@ -48,4 +48,8 @@ jobs:
       - name: Run Tier A scenarios
         env:
           ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
+          # TR-061 D-L hit api.zotero.org against a dedicated dummy group
+          # (id 6566036, "tim test"). When the secret is unset (e.g. PRs
+          # from forks), D-L self-skip and the rest of tier A still runs.
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
         run: ./tests/tui/run-tier-a.sh

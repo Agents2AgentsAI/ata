@@ -26,18 +26,27 @@ CURRENT_FAILED=0
 
 # --- helpers ---------------------------------------------------------------
 
-log()   { printf '%s\n' "$*"; }
-red()   { printf '\033[31m%s\033[0m\n' "$*"; }
-green() { printf '\033[32m%s\033[0m\n' "$*"; }
+log()    { printf '%s\n' "$*"; }
+red()    { printf '\033[31m%s\033[0m\n' "$*"; }
+green()  { printf '\033[32m%s\033[0m\n' "$*"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$*"; }
+
+SKIP=0
+SKIPPED_NAMES=()
+CURRENT_SKIPPED=0
 
 start_test() {
   CURRENT_NAME="$1"
   CURRENT_FAILED=0
+  CURRENT_SKIPPED=0
   printf '  %-14s ' "$CURRENT_NAME"
 }
 
 end_test() {
-  if [ "$CURRENT_FAILED" -eq 0 ]; then
+  if [ "$CURRENT_SKIPPED" -eq 1 ]; then
+    SKIP=$((SKIP + 1))
+    SKIPPED_NAMES+=("$CURRENT_NAME")
+  elif [ "$CURRENT_FAILED" -eq 0 ]; then
     green PASS
     PASS=$((PASS + 1))
   else
@@ -45,6 +54,11 @@ end_test() {
     FAIL=$((FAIL + 1))
     FAILED_NAMES+=("$CURRENT_NAME")
   fi
+}
+
+skip_test() {
+  CURRENT_SKIPPED=1
+  yellow "SKIP — $1"
 }
 
 fail_assert() {
@@ -102,6 +116,9 @@ cleanup_all() {
   rm -rf "$WORK" 2>/dev/null
   if [ -f "$HOME/.ata/config.toml.tier-a.bak" ]; then
     mv "$HOME/.ata/config.toml.tier-a.bak" "$HOME/.ata/config.toml"
+  fi
+  if [ -f "$HOME/.ata/config.toml.tr061.bak" ]; then
+    mv "$HOME/.ata/config.toml.tr061.bak" "$HOME/.ata/config.toml"
   fi
   # Delete any tier-a-created workspaces left over.
   "$ATA_BIN" workspace list 2>/dev/null | jq -r '.[].id' 2>/dev/null \
@@ -582,7 +599,9 @@ tr060_d() {
 tr061_a() {
   start_test "TR-061 A"
   local out=$WORK/061a.txt
-  "$ATA_BIN" zotero status > "$out"
+  # Strip env-supplied key so the "no credentials" baseline isn't broken
+  # when D-L's repo secret is exported into the runner shell.
+  env -u ZOTERO_API_KEY "$ATA_BIN" zotero status > "$out"
   assert_contains "$out" "Effective mode: local"
   assert_contains "$out" "Base URL: http://localhost:23119/api"
   assert_contains "$out" "API key configured: no"
@@ -605,7 +624,9 @@ tr061_a2() {
 zotero_api_key = "dummy-tier-a-key"
 EOF
   local out=$WORK/061a2.txt
-  "$ATA_BIN" zotero status > "$out"
+  # A2 specifically wants the config-file key (not env) to drive the
+  # remote-mode toggle, so strip the env var here too.
+  env -u ZOTERO_API_KEY "$ATA_BIN" zotero status > "$out"
   if [ -f "$HOME/.ata/config.toml.tier-a.bak" ]; then
     mv "$HOME/.ata/config.toml.tier-a.bak" "$HOME/.ata/config.toml"
   else
@@ -638,6 +659,224 @@ tr061_c() {
   assert_contains "$out" "resolve-paper"
   assert_contains "$out" "Best match manual:" "best match section"
   assert_contains "$out" "Usage: ata zotero" "Usage line"
+  end_test
+}
+
+# --- TR-061 D-L: zotero CLI via cloud API (opt-in) -------------------------
+#
+# These hit api.zotero.org against a dedicated dummy group seeded with three
+# test items + one collection. They run only when ZOTERO_API_KEY is set —
+# locally if you export the key, in CI when the repo secret is configured.
+#
+# The dummy group's fixtures are fixed:
+#   group_id    = 6566036  ("tim test")
+#   collection  = GFTA4BZR  ("ml-papers", contains 5A3TV3EK + U7KNNFCQ)
+#   items       = 5A3TV3EK  (LeCun, "Deep learning", 2015)
+#                 U7KNNFCQ  (Vaswani, "Attention is all you need", 2017)
+#                 WTRT95A5  (Devlin, "BERT", 2019)
+#   tags        = bert, deep-learning, neural-networks, transformers
+#
+# Predicates are pinned to that specific seed data. If someone reseeds the
+# group, the predicates here need to be updated to match.
+#
+# Library scope is pinned to this group (not the user library) so adding or
+# removing items from the user's personal Zotero never affects these tests.
+
+TR061_DUMMY_GROUP_ID="6566036"
+TR061_USER_ID="20491103"
+TR061_ITEM_LECUN="5A3TV3EK"
+TR061_COLLECTION="GFTA4BZR"
+
+# Install a [research] block that points ata at the dummy group. Backs up
+# any existing config first; cleanup_all restores it.
+tr061_setup_remote() {
+  if [ -f "$HOME/.ata/config.toml" ]; then
+    cp "$HOME/.ata/config.toml" "$HOME/.ata/config.toml.tr061.bak"
+  fi
+  mkdir -p "$HOME/.ata"
+  cat >> "$HOME/.ata/config.toml" <<EOF
+
+[research]
+zotero_api_key = "${ZOTERO_API_KEY}"
+zotero_library_type = "group"
+zotero_group_id = "${TR061_DUMMY_GROUP_ID}"
+zotero_user_id = "${TR061_USER_ID}"
+EOF
+}
+
+# Restore the pre-tr061 config. Called between the last D-L test and
+# whatever comes next. (Also covered by cleanup_all on early exit.)
+tr061_teardown_remote() {
+  if [ -f "$HOME/.ata/config.toml.tr061.bak" ]; then
+    mv "$HOME/.ata/config.toml.tr061.bak" "$HOME/.ata/config.toml"
+  else
+    rm -f "$HOME/.ata/config.toml"
+  fi
+}
+
+# Shared guard. Every D-L test calls this. If the key is missing, mark the
+# test SKIP (not fail) so contributors without the secret get a clean run.
+tr061_remote_guard() {
+  if [ -z "${ZOTERO_API_KEY:-}" ]; then
+    skip_test "ZOTERO_API_KEY not set"
+    end_test
+    return 1
+  fi
+  return 0
+}
+
+tr061_d() {
+  start_test "TR-061 D"
+  tr061_remote_guard || return
+  local out=$WORK/061d.json
+  "$ATA_BIN" zotero collections > "$out"
+  assert_json "$out" "collections is valid JSON"
+  assert_jq "$out" '.collections | type == "array"' "collections is an array"
+  assert_jq "$out" ".collections | map(select(.key == \"$TR061_COLLECTION\")) | length == 1" "seeded collection present"
+  assert_jq "$out" '.collections[0] | has("key") and has("name")' "entries have key + name"
+  assert_jq "$out" 'has("total_available") and has("has_more")' "pagination fields present"
+  end_test
+}
+
+tr061_e() {
+  start_test "TR-061 E"
+  tr061_remote_guard || return
+  local out=$WORK/061e.json
+  "$ATA_BIN" zotero groups list > "$out"
+  assert_json "$out" "groups list is valid JSON"
+  assert_jq "$out" '.groups | type == "array"' "groups is an array"
+  assert_jq "$out" ".groups | map(select(.id == \"$TR061_DUMMY_GROUP_ID\")) | length == 1" "dummy group visible"
+  assert_jq "$out" '.groups[0] | (.id | type == "string") and (.name | type == "string")' "id is string, name is string"
+  assert_jq "$out" 'has("total_available") and has("has_more")' "pagination fields present"
+  end_test
+}
+
+tr061_e_2() {
+  start_test "TR-061 E2"
+  tr061_remote_guard || return
+  # Bare `groups` (no list) should print subcommand help, not data.
+  local out=$WORK/061e2.txt
+  "$ATA_BIN" zotero groups > "$out" 2>&1 || true
+  assert_contains "$out" "Usage:" "bare groups prints help"
+  assert_contains "$out" "list" "help mentions 'list' subcommand"
+  end_test
+}
+
+tr061_f() {
+  start_test "TR-061 F"
+  tr061_remote_guard || return
+  local out=$WORK/061f.json
+  "$ATA_BIN" zotero recent --limit 3 > "$out"
+  assert_json "$out" "recent is valid JSON"
+  assert_jq "$out" '.items | type == "array"' "items is array"
+  assert_jq "$out" '.items | length >= 1' "at least one recent item (group has 3 seeded)"
+  # First item has the expected per-item shape.
+  assert_jq "$out" '.items[0] | has("key") and has("title") and has("authors") and has("year") and has("item_type") and has("doi") and has("abstract_snippet") and has("tags") and has("linked_items")' "item shape complete"
+  assert_jq "$out" 'has("total_available") and has("has_more")' "pagination present"
+  end_test
+}
+
+tr061_g() {
+  start_test "TR-061 G"
+  tr061_remote_guard || return
+  # "bert" is the most specific query — matches exactly the BERT item.
+  local out=$WORK/061g.json
+  "$ATA_BIN" zotero search --query bert --limit 5 > "$out"
+  assert_json "$out" "search is valid JSON"
+  assert_jq "$out" '.items | length >= 1' "search bert returns ≥1"
+  assert_jq "$out" '.items | map(select(.title | test("BERT"; "i"))) | length >= 1' "result contains BERT"
+  # Authors is the comma-string form (search payload), not the array form (item get).
+  assert_jq "$out" '.items[0].authors | type == "string"' "authors is comma-string in search"
+  end_test
+}
+
+tr061_g_neg() {
+  start_test "TR-061 G-neg"
+  tr061_remote_guard || return
+  # Bare positional arg (no --query flag) is an error.
+  local out=$WORK/061g-neg.txt
+  "$ATA_BIN" zotero search neural --limit 2 > "$out" 2>&1 || true
+  assert_contains "$out" "unexpected argument" "rejects bare positional"
+  end_test
+}
+
+tr061_h() {
+  start_test "TR-061 H"
+  tr061_remote_guard || return
+  local out=$WORK/061h.json
+  "$ATA_BIN" zotero tags > "$out"
+  assert_json "$out" "tags is valid JSON"
+  assert_jq "$out" '.tags | type == "array"' "tags is an array"
+  # Seed data has tags: bert, deep-learning, neural-networks, transformers.
+  for tag in bert deep-learning neural-networks transformers; do
+    assert_jq "$out" ".tags | map(select(. == \"$tag\")) | length == 1" "seeded tag '$tag' present"
+  done
+  assert_jq "$out" 'has("total_available") and has("has_more")' "pagination present"
+  end_test
+}
+
+tr061_i() {
+  start_test "TR-061 I"
+  tr061_remote_guard || return
+  local out=$WORK/061i.json
+  "$ATA_BIN" zotero item get --item-key "$TR061_ITEM_LECUN" > "$out"
+  assert_json "$out" "item get is valid JSON"
+  assert_jq "$out" ".key == \"$TR061_ITEM_LECUN\"" "key matches"
+  assert_jq "$out" '.title == "Deep learning"' "title matches seed"
+  # authors is ARRAY of strings in item-get (different shape from search!)
+  assert_jq "$out" '.authors | type == "array"' "authors is array"
+  assert_jq "$out" '.authors | length == 3' "three authors"
+  assert_jq "$out" '.authors[0] == "Yann LeCun"' "first author"
+  assert_jq "$out" '.item_type == "journalArticle"' "item_type"
+  assert_jq "$out" 'has("abstract_text") and has("date") and has("doi") and has("tags") and has("linked_items")' "full shape"
+  end_test
+}
+
+tr061_i_neg() {
+  start_test "TR-061 I-neg"
+  tr061_remote_guard || return
+  # --key (instead of --item-key) and positional are both rejected.
+  local out=$WORK/061i-neg.txt
+  "$ATA_BIN" zotero item get --key "$TR061_ITEM_LECUN" > "$out" 2>&1 || true
+  assert_contains "$out" "unexpected argument" "rejects --key alias"
+  end_test
+}
+
+tr061_j() {
+  start_test "TR-061 J"
+  tr061_remote_guard || return
+  local out=$WORK/061j.json
+  "$ATA_BIN" zotero item citation --item-key "$TR061_ITEM_LECUN" > "$out"
+  assert_json "$out" "citation is valid JSON"
+  assert_jq "$out" ".item_key == \"$TR061_ITEM_LECUN\"" "item_key in payload"
+  assert_jq "$out" '.format == "bibtex"' "format is bibtex (default)"
+  assert_jq "$out" '.citation | test("@article") and test("Deep learning")' "bibtex contains @article + title"
+  assert_jq "$out" 'has("citation_key") and has("generator")' "extra fields present"
+  end_test
+}
+
+tr061_k() {
+  start_test "TR-061 K"
+  tr061_remote_guard || return
+  local out=$WORK/061k.json
+  "$ATA_BIN" zotero collection items --collection-key "$TR061_COLLECTION" --limit 2 > "$out"
+  assert_json "$out" "collection items is valid JSON"
+  assert_jq "$out" '.items | type == "array"' "items is array"
+  assert_jq "$out" '.items | length == 2' "collection seeded with 2 items"
+  # Both items should be the ones we assigned: 5A3TV3EK + U7KNNFCQ.
+  assert_jq "$out" ".items | map(.key) | sort == [\"$TR061_ITEM_LECUN\", \"U7KNNFCQ\"]" "collection contents match seed"
+  end_test
+}
+
+tr061_l() {
+  start_test "TR-061 L"
+  tr061_remote_guard || return
+  # Missing `operation` field — should print a parse error.
+  local out=$WORK/061l.txt
+  "$ATA_BIN" zotero advanced-search --json '{"conditions":[{"field":"title","operator":"contains","value":"deep"}],"limit":2}' > "$out" 2>&1 || true
+  assert_contains "$out" "parse JSON payload" "parse-error wrapper line"
+  assert_contains "$out" "missing field" "underlying serde error"
+  assert_contains "$out" "operation" "names the missing field"
   end_test
 }
 
@@ -693,8 +932,24 @@ main() {
   tr061_a; tr061_a2; tr061_b; tr061_c
 
   log ""
+  if [ -n "${ZOTERO_API_KEY:-}" ]; then
+    log "TR-061 D-L: zotero CLI via cloud API (ZOTERO_API_KEY set)"
+    tr061_setup_remote
+    tr061_d; tr061_e; tr061_e_2; tr061_f
+    tr061_g; tr061_g_neg
+    tr061_h; tr061_i; tr061_i_neg
+    tr061_j; tr061_k; tr061_l
+    tr061_teardown_remote
+  else
+    log "TR-061 D-L: skipped (set ZOTERO_API_KEY to enable cloud-API tests)"
+  fi
+
+  log ""
   log "----"
-  log "PASS: $PASS  FAIL: $FAIL"
+  log "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
+  if [ "$SKIP" -gt 0 ]; then
+    log "Skipped: ${SKIPPED_NAMES[*]}"
+  fi
   if [ "$FAIL" -gt 0 ]; then
     log "Failed: ${FAILED_NAMES[*]}"
     exit 1

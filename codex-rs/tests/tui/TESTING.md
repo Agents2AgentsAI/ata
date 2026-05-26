@@ -231,6 +231,26 @@ To trigger a B2 run manually:
 It costs money. Each scenario sends real prompts.
 
 
+## Zotero cloud-API tests (TR-061 D through L)
+
+These tests hit `api.zotero.org` against a dedicated dummy group library — they don't need a Zotero desktop install. Setup details:
+
+- **Group**: id `6566036`, name `"tim test"`. Private, owner-only. Created on Tim's account for these tests; not the real `agents2agents` group.
+- **Seed data**: 3 items (LeCun "Deep learning" 2015, Vaswani "Attention is all you need" 2017, Devlin "BERT" 2019) plus a 1 collection ("ml-papers") containing two of them. Tags: `bert`, `deep-learning`, `neural-networks`, `transformers`.
+- **Predicates**: pinned to those exact item keys, tags, and counts. If anyone adds or removes items from the group, the predicates need to be updated to match.
+- **Auth**: a Zotero API key with read/write on the group. Stored as the repo secret `ZOTERO_API_KEY`.
+- **Skipping**: when the secret isn't set (PRs from forks, local dev without the env var), each D–L test prints `SKIP — ZOTERO_API_KEY not set` instead of failing. The rest of Tier A still runs.
+
+To run locally:
+
+```bash
+export ZOTERO_API_KEY=<your-key>
+ATA_BIN=./target/debug/ata ./tests/tui/run-tier-a.sh
+```
+
+The runner backs up `~/.ata/config.toml` before writing the dummy-group `[research]` block and restores it on exit (success or failure).
+
+
 ## What we don't test (and why)
 
 | TR(s) | Why not in CI |
@@ -244,7 +264,6 @@ It costs money. Each scenario sends real prompts.
 | TR-042 A (release-build `/rollout`) | The command is hidden in release builds. CI always builds debug, so the negative case is untestable. |
 | TR-044 C (`/side` recursion guard) | The unit test in `chatwidget/tests/side.rs` confirms the guard works, but in a live tmux session the expected error doesn't surface on screen. Needs deeper investigation. Marked SKIP for now. |
 | TR-048 (`/goal`) | Requires the `Feature::Goals` build flag, which isn't on by default. |
-| TR-061 D through L (Zotero GUI) | These flows need a real Zotero install responding to real API calls. Out of scope for headless CI. |
 | TR-064, TR-065, TR-066 (`paper_*` tools) | The dedicated tools only fire when the prompt names them explicitly (e.g. "use the paper_citations tool"). That's "cheating" — it tests the tool runs, not that the model picks it. Without explicit naming the model falls back to `exec_command` curl. No honest workaround. |
 | Various "during in-flight turn" scenarios (TR-010 D, TR-016 C, TR-017 E, TR-018 D, TR-040 G, TR-046 E) | Need to start a slow model call, then test that a slash command is blocked while the call is mid-flight. B1 has no real model. The B2 versions are open work. |
 
