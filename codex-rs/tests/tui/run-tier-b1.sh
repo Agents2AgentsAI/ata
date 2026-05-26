@@ -125,6 +125,13 @@ assert_not_contains() {
   fi
 }
 
+assert_match() {
+  local file=$1 regex=$2 desc=${3:-}
+  if ! grep -qE -- "$regex" "$file"; then
+    fail_assert "${desc:-expected to match regex: $regex}" "$(tail -c 800 "$file")"
+  fi
+}
+
 cleanup_all() {
   local rc=$?
   tmux kill-session -t "$SESSION" 2>/dev/null || true
@@ -473,12 +480,16 @@ tr034_a() {
   sleep 1
   local out=$WORK/034a.txt
   capture "$sess" "$out"
-  assert_contains     "$out" "Cargo.toml" "path injected into composer"
+  # File-ordering varies across platforms — the top match could be
+  # Cargo.toml or Cargo.lock. Both are paths, both prove path-injection.
+  assert_match       "$out" "Cargo\.(toml|lock)" "filename injected (top match)"
+  assert_not_contains "$out" "@Cargo"          "@ prefix consumed by Tab"
   # File-content sentinels that would only appear if ata read the file
-  # and pasted its body. Cargo.toml content invariants:
-  assert_not_contains "$out" "[workspace]" "no [workspace] section content"
-  assert_not_contains "$out" "[package]"   "no [package] section content"
-  assert_not_contains "$out" "edition ="   "no edition= field content"
+  # and pasted its body. Cover both Cargo.toml and Cargo.lock content:
+  assert_not_contains "$out" "[workspace]"  "no [workspace] section content"
+  assert_not_contains "$out" "[package]"    "no [package] section content"
+  assert_not_contains "$out" "edition ="    "no edition= field content"
+  assert_not_contains "$out" "checksum ="   "no Cargo.lock checksum content"
   kill_ata "$sess"
   end_test
 }
