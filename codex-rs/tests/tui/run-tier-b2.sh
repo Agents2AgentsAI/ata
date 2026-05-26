@@ -261,6 +261,163 @@ tr036_b() {
   end_test
 }
 
+tr050_a() {
+  start_test "TR-050 A"
+  local sess=$SESSION-050a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"
+  send_text "$sess" "coffee"
+  sleep 1
+  local out=$WORK/050a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "/coffee"          "search query echoed"
+  assert_contains "$out" "Enter: search"    "search-mode footer present"
+  assert_contains "$out" "Esc: cancel"      "esc-cancel hint shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr052_a() {
+  start_test "TR-052 A"
+  local sess=$SESSION-052a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
+  # the credential error but still enters the audio-active state, so
+  # the footer expands with playback controls.
+  send_text "$sess" "r"
+  sleep 1.5
+  local out=$WORK/052a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
+  assert_contains "$out" "s: pause"   "audio footer 'pause' control"
+  assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
+  kill_ata "$sess"
+  end_test
+}
+
+tr053_a() {
+  start_test "TR-053 A"
+  local sess=$SESSION-053a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"
+  sleep 1.5
+  local out=$WORK/053a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
+  assert_contains "$out" "Enter: explain" "Enter binding shown"
+  assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr002_a() {
+  start_test "TR-002 A"
+  local sess=$SESSION-002a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_key  "$sess" Tab
+  sleep 1
+  send_text "$sess" "what color are coffee beans"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not finish within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/002a.txt
+  capture "$sess" "$out"
+  # TR-002 contract: Tab-to-ask response stays INLINE in the reader
+  # (not as a chat bubble). The "You asked: ..." line and the agent's
+  # answer should both appear inside the reader frame.
+  assert_contains "$out" "You asked:"     "inline question marker"
+  assert_contains "$out" "color"          "agent response references the question"
+  assert_contains "$out" "Sections (n/p"  "still in reader after the answer"
+  kill_ata "$sess"
+  end_test
+}
+
+tr049_a() {
+  start_test "TR-049 A"
+  local sess=$SESSION-049a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # Vim scroll keys (j/k). Sections in our test doc are short enough to
+  # not visibly scroll the box content, but the keys must be recognized
+  # without breaking the reader. Assert the reader UI is still intact
+  # after pressing several scroll keys.
+  send_text "$sess" "jjjkk"
+  sleep 1
+  local out=$WORK/049a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Sections (n/p"     "reader still rendering after scroll keys"
+  assert_contains "$out" "q: close"          "reader footer still present"
+  kill_ata "$sess"
+  end_test
+}
+
+tr050_a() {
+  start_test "TR-050 A"
+  local sess=$SESSION-050a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"
+  send_text "$sess" "coffee"
+  sleep 1
+  local out=$WORK/050a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "/coffee"          "search query echoed"
+  assert_contains "$out" "Enter: search"    "search-mode footer present"
+  assert_contains "$out" "Esc: cancel"      "esc-cancel hint shown"
+  kill_ata "$sess"
+  end_test
+}
+
+tr051_a() {
+  start_test "TR-051 A"
+  local sess=$SESSION-051a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # Fold key (f). The 2-section coffee doc may not have foldable
+  # regions, so we can't always verify a visible fold. Minimum:
+  # 'f' is recognized and the reader stays valid afterwards.
+  send_text "$sess" "f"
+  sleep 1
+  local out=$WORK/051a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Sections (n/p" "reader still rendering after f"
+  assert_contains "$out" "q: close"      "reader footer present after f"
+  kill_ata "$sess"
+  end_test
+}
+
+tr052_a() {
+  start_test "TR-052 A"
+  local sess=$SESSION-052a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
+  # the credential error but still enters the audio-active state, so
+  # the footer expands with playback controls.
+  send_text "$sess" "r"
+  sleep 1.5
+  local out=$WORK/052a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
+  assert_contains "$out" "s: pause"   "audio footer 'pause' control"
+  assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
+  kill_ata "$sess"
+  end_test
+}
+
+tr053_a() {
+  start_test "TR-053 A"
+  local sess=$SESSION-053a
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"
+  sleep 1.5
+  local out=$WORK/053a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
+  assert_contains "$out" "Enter: explain" "Enter binding shown"
+  assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
 tr054_a() {
   start_test "TR-054 A"
   local sess=$SESSION-054a
@@ -355,6 +512,7 @@ main() {
 
   log "Numbered TRs (in order)"
   tr001_a
+  tr002_a
   tr005_a
   tr008_a
   tr016_b
@@ -362,6 +520,11 @@ main() {
   tr022_a
   tr036_a
   tr036_b
+  tr049_a
+  tr050_a
+  tr051_a
+  tr052_a
+  tr053_a
   tr054_a
   tr062_a
 
