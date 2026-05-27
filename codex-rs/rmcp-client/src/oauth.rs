@@ -26,7 +26,7 @@ use oauth2::RefreshToken;
 use oauth2::Scope;
 use oauth2::TokenResponse;
 use oauth2::basic::BasicTokenType;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use rmcp::transport::auth::OAuthTokenResponse;
 use serde::Deserialize;
 use serde::Serialize;
@@ -59,8 +59,8 @@ const REFRESH_SKEW_MILLIS: u64 = 30_000;
 /// Process-global cache of keyring-loaded MCP OAuth tokens keyed by `compute_store_key()`.
 /// This cache is process-scoped; external keyring updates by another process are not visible
 /// until restart.
-static OAUTH_KEYRING_CACHE: Lazy<StdMutex<HashMap<String, Option<StoredOAuthTokens>>>> =
-    Lazy::new(|| StdMutex::new(HashMap::new()));
+static OAUTH_KEYRING_CACHE: LazyLock<StdMutex<HashMap<String, Option<StoredOAuthTokens>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {

@@ -121,6 +121,20 @@ impl LoginServer {
     pub fn cancel_handle(&self) -> ShutdownHandle {
         self.shutdown_handle.clone()
     }
+
+    pub(crate) fn from_parts(
+        auth_url: String,
+        actual_port: u16,
+        server_handle: tokio::task::JoinHandle<io::Result<()>>,
+        shutdown_handle: ShutdownHandle,
+    ) -> Self {
+        Self {
+            auth_url,
+            actual_port,
+            server_handle,
+            shutdown_handle,
+        }
+    }
 }
 
 /// Handle used to signal the login server loop to exit.
@@ -133,6 +147,10 @@ impl ShutdownHandle {
     /// Signals the login loop to terminate.
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_one();
+    }
+
+    pub(crate) fn from_notify(shutdown_notify: Arc<tokio::sync::Notify>) -> Self {
+        Self { shutdown_notify }
     }
 }
 

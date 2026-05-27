@@ -177,6 +177,12 @@ fn response_input_to_code_mode_result(response: ResponseInputItem) -> JsonValue 
                             detail: detail.or(Some(DEFAULT_IMAGE_DETAIL)),
                         }
                     }
+                    codex_protocol::models::ContentItem::InputFile { .. }
+                    | codex_protocol::models::ContentItem::UrlFile { .. } => {
+                        FunctionCallOutputContentItem::InputText {
+                            text: String::new(),
+                        }
+                    }
                 })
                 .collect::<Vec<_>>(),
         ),
