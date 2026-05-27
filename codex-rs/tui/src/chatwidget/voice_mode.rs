@@ -4835,7 +4835,7 @@ fn say_backend_available() -> bool {
     let probe = "espeak-ng";
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        return false;
+        false
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
