@@ -1852,6 +1852,7 @@ dependencies = [
  "chrono",
  "codex-client",
  "codex-protocol",
+ "codex-utils-file",
  "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
@@ -3961,6 +3962,18 @@ dependencies = [
 [[package]]
 name = "codex-utils-elapsed"
 version = "0.134.0"
+
+[[package]]
+name = "codex-utils-file"
+version = "0.134.0"
+dependencies = [
+ "base64 0.22.1",
+ "codex-utils-cache",
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
 
 [[package]]
 name = "codex-utils-fuzzy-match"
@@ -10946,6 +10959,7 @@ dependencies = [
  "js-sys",
  "log",
  "mime",
+ "mime_guess",
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
