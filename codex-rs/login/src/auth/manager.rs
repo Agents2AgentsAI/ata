@@ -85,14 +85,14 @@ struct ChatgptAuthState {
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
 
-const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
-const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
-const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
-const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
+pub const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
+pub const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
+pub const REFRESH_TOKEN_INVALIDATED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.";
+pub const REFRESH_TOKEN_UNKNOWN_MESSAGE: &str =
     "Your access token could not be refreshed. Please log out and sign in again.";
 const REFRESH_TOKEN_ACCOUNT_MISMATCH_MESSAGE: &str = "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.";
 const DEFAULT_CHATGPT_BACKEND_BASE_URL: &str = "https://chatgpt.com/backend-api";
-const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+pub const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub(super) const REVOKE_TOKEN_URL: &str = "https://auth.openai.com/oauth/revoke";
 pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 pub const REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REVOKE_TOKEN_URL_OVERRIDE";
@@ -423,7 +423,7 @@ impl CodexAuth {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
-            providers: None,
+            providers: std::collections::HashMap::new(),
         };
 
         let client = create_client();
@@ -541,7 +541,7 @@ pub fn login_with_api_key(
         tokens: None,
         last_refresh: None,
         agent_identity: None,
-        providers: None,
+        providers: std::collections::HashMap::new(),
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -565,7 +565,7 @@ pub async fn login_with_access_token(
         tokens: None,
         last_refresh: None,
         agent_identity: Some(access_token.to_string()),
-        providers: None,
+        providers: std::collections::HashMap::new(),
     };
     save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
 }
@@ -969,7 +969,7 @@ impl AuthDotJson {
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
-            providers: None,
+            providers: std::collections::HashMap::new(),
         })
     }
 
