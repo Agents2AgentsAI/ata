@@ -100,6 +100,7 @@ members = [
     "utils/path-utils",
     "utils/plugins",
     "utils/fuzzy-match",
+    "utils/file",
     "utils/stream-parser",
     "utils/template",
     "codex-client",
@@ -220,6 +221,7 @@ codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-cli = { path = "utils/cli" }
 codex-utils-elapsed = { path = "utils/elapsed" }
 codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
+codex-utils-file = { path = "utils/file" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }
 codex-utils-json-to-toml = { path = "utils/json-to-toml" }

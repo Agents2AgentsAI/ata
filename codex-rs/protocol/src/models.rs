@@ -717,8 +717,27 @@ pub enum ContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    InputFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
     OutputText {
         text: String,
+    },
+    UrlFile {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(skip)]
+        mime_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
     },
 }
 

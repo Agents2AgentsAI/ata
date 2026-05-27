@@ -817,11 +817,13 @@ pub(crate) async fn persist_tokens_async(
             tokens.account_id = Some(acc.to_string());
         }
         let auth = AuthDotJson {
+            version: None,
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: api_key,
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            providers: None,
         };
         save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
         Ok::<_, io::Error>((previous_auth, auth))
