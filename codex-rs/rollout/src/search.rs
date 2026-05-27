@@ -207,7 +207,9 @@ fn conversation_text_from_item(item: &RolloutItem) -> Option<String> {
 fn content_item_text(item: &ContentItem) -> Option<&str> {
     match item {
         ContentItem::InputText { text } | ContentItem::OutputText { text } => Some(text.as_str()),
-        ContentItem::InputImage { .. } => None,
+        ContentItem::InputImage { .. }
+        | ContentItem::InputFile { .. }
+        | ContentItem::UrlFile { .. } => None,
     }
 }
 
