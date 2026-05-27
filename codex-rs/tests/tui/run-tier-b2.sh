@@ -1882,6 +1882,118 @@ tr066_a() {
   end_test
 }
 
+# TR-028 A: monitor_watch_for vs monitor_wait routing. The prompt has
+# two parts: (1) "start a monitor that runs <loop>" implies
+# monitor_start; (2) "tell me when 'tick 3' appears" implies
+# monitor_watch_for (NOT monitor_wait, which only fires on terminate).
+# The shell loop is the slow operation we watch on; the stable signal
+# is the agent's narration that "tick 3" was matched.
+tr028_a() {
+  start_test "TR-028 A"
+  local sess=$SESSION-028a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Use single quotes inside the bash payload so tmux doesn't eat them.
+  send_text "$sess" 'start a monitor that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done. Watch for the line "tick 3" and tell me when it appears.'
+  send_key  "$sess" Enter
+  # 5s for the loop + agent narration. 90s is generous.
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not finish within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/028a.txt
+  capture "$sess" "$out"
+  # Content predicate — agent narrated the match.
+  assert_contains "$out" "tick 3" "matched line appears in agent response"
+  if ! grep -qiE "appeared|matched|found|saw" "$out"; then
+    fail_assert "agent did not narrate the match outcome" "$(tail -c 800 "$out")"
+  fi
+  if grep -qiF "did not match" "$out"; then
+    fail_assert "agent fell back to terminated-without-match path" "$(tail -c 800 "$out")"
+  fi
+  # Routing guard — the deep regression PLAN.md targets.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "monitor_start"     "monitor must be spawned via monitor_start"
+  assert_tool_called     "$sess_jsonl" "monitor_watch_for" "pattern match must use monitor_watch_for"
+  assert_tool_not_called "$sess_jsonl" "monitor_wait"      "must NOT fall back to terminate-only monitor_wait"
+  assert_tool_not_called "$sess_jsonl" "shell"             "must not shell out to grep/tail"
+  # Argument fidelity — the literal pattern (not paraphrased), with task_id.
+  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" '"pattern"' "monitor_watch_for has a pattern field"
+  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" "tick 3"    "pattern reflects literal 'tick 3'"
+  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" '"task_id"' "monitor_watch_for targets a task_id"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-035 A: multi-source synthesis — both Hacker News AND papers must
+# contribute. PLAN.md is intentionally permissive about HOW: either the
+# main agent calls hn_search + paper_search directly, OR it spawns
+# sub-agents (one per source) via spawn_agent. The failure mode this
+# catches is "agent picked one source, silently dropped the other".
+#
+# Note: this is the slowest test in the suite. PLAN.md tolerates up to
+# 10 min; we cap at 8 to fit the 45-min B2 budget when run alongside
+# everything else.
+tr035_a() {
+  start_test "TR-035 A"
+  local sess=$SESSION-035a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "find recent papers on Rust async performance and check Hacker News for related discussion"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 480; then
+    fail_assert "multi-source synthesis did not finish within 8 min"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/035a.txt
+  capture "$sess" "$out"
+  # Content predicate — both sources represented.
+  if ! grep -qiE "hacker news|HN Signal|hn signal" "$out"; then
+    fail_assert "response does not mention Hacker News" "$(tail -c 1000 "$out")"
+  fi
+  if ! grep -qiE "paper|literature|academic|arxiv" "$out"; then
+    fail_assert "response does not mention papers/literature" "$(tail -c 1000 "$out")"
+  fi
+  # "didn't find" failure modes — agent silently dropped a source.
+  if grep -qiE "could not find any|no results|unable to find" "$out"; then
+    fail_assert "agent bailed on one of the sources" "$(tail -c 1000 "$out")"
+  fi
+  # Routing guard — accept direct OR sub-agent orchestration.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "session JSONL not found"
+    kill_ata "$sess"; end_test; return
+  fi
+  local tools
+  tools=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort -u)
+  # Academic side: paper_search direct OR spawn_agent delegation.
+  if ! printf '%s\n' "$tools" | grep -qE '^(paper_search|spawn_agent)$'; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "neither paper_search nor spawn_agent fired — academic side missing" "tool_counts: $counts"
+  fi
+  # HN side: hn_search direct, OR spawn_agent delegation AND staging
+  # files referencing HN. PLAN.md's permissive predicate.
+  local hn_ok=0
+  if printf '%s\n' "$tools" | grep -qFx "hn_search"; then
+    hn_ok=1
+  elif printf '%s\n' "$tools" | grep -qFx "spawn_agent"; then
+    # Sub-agent route: look for hn-* files in staging.
+    if ls "$HOME/.ata/workspaces/global/knowledge-base/staging/" 2>/dev/null | grep -qE '^hn-'; then
+      hn_ok=1
+    fi
+  fi
+  if [ "$hn_ok" -eq 0 ]; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "HN side missing — neither hn_search nor sub-agent staging evidence" "tool_counts: $counts"
+  fi
+  # Must not shell out — that's the regression PLAN.md guards against.
+  assert_tool_not_called "$sess_jsonl" "shell" "multi-source must not shell out via curl"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -1927,6 +2039,8 @@ main() {
   tr062_a; tr062_b; tr062_d
   tr063_a; tr063_b
   tr064_a; tr065_a; tr066_a
+  tr028_a
+  tr035_a
 
   log ""
   log "----"

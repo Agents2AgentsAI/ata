@@ -258,8 +258,6 @@ The runner backs up `~/.ata/config.toml` before writing the dummy-group `[resear
 | TR-012, TR-013 (voice mode) | `/voice` is compiled out on Linux (`#[cfg(not(target_os = "linux"))]`). Ubuntu CI doesn't have the command. Tests skip on Linux and run on macOS. |
 | TR-015 | PLAN.md marks it "superseded by TR-042". Nothing to test. |
 | TR-024 through TR-030 (scheduling lifecycle) | These cross the real cron daemon, the file system, and subprocess streams on wall-clock timers. A 70-second wait for a system cron to fire is too flaky on a shared CI runner. |
-| TR-028 (monitor_watch_for) | Verifies the model picks the right tool between `monitor_wait` and `monitor_watch_for`. Not implemented yet — needs a slow operation to watch on and a stable predicate for which tool was picked. |
-| TR-035 (multi-source synthesis) | Polls up to 10 minutes for the model to use both Hacker News and paper search. Slow and weak signal — the model often spawns sub-agents, so its tool calls live in different session files. |
 | TR-042 A (release-build `/rollout`) | The command is hidden in release builds. CI always builds debug, so the negative case is untestable. |
 | TR-044 C (`/side` recursion guard) | The unit test in `chatwidget/tests/side.rs` confirms the guard works, but in a live tmux session the expected error doesn't surface on screen. Needs deeper investigation. Marked SKIP for now. |
 | TR-048 (`/goal`) | Requires the `Feature::Goals` build flag, which isn't on by default. |
