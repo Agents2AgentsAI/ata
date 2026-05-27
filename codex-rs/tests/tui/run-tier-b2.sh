@@ -2011,7 +2011,47 @@ tr035_a() {
 
 # --- driver ----------------------------------------------------------------
 
+# Run each named test function unless FILTER is set, in which case
+# only functions whose name matches the FILTER regex run. Lets you
+# debug a single TR locally without commenting out 28 others.
+FILTER=""
+run_tests() {
+  local fn
+  for fn in "$@"; do
+    if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
+      "$fn"
+    fi
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--filter REGEX]
+
+  --filter, -f REGEX   Only run tests whose function name matches REGEX.
+                       Examples:
+                         --filter tr037_a       (one scenario)
+                         --filter tr038         (all TR-038 scenarios)
+                         --filter 'tr03[0-9]'   (range)
+
+  --help, -h           Show this message and exit.
+
+Environment:
+  ATA_BIN              Path to the ata binary (default: 'ata' from PATH).
+  OPENAI_API_KEY etc.  Provider keys for the model — see workflow file.
+EOF
+}
+
 main() {
+  # Argv parser: --filter / -f takes a regex; --help / -h prints usage.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --filter|-f) FILTER="$2"; shift 2 ;;
+      --help|-h)   usage; exit 0 ;;
+      *)           red "unknown arg: $1"; usage; exit 2 ;;
+    esac
+  done
+
   if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
     red "ata binary not found: $ATA_BIN"
     exit 2
@@ -2023,38 +2063,39 @@ main() {
 
   log "Tier B2 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
   log "WARNING: this batch sends real prompts and costs real LLM tokens."
+  [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
   log "Numbered TRs (in order)"
-  tr001_a
-  tr002_a
-  tr005_a
-  tr008_a; tr008_b; tr008_c; tr008_d; tr008_e
-  tr009_a; tr009_b; tr009_c
-  tr011_a
-  tr016_b
-  tr021_a
-  tr022_a
-  tr028_a
-  tr031_a
-  tr032_a
-  tr033_a
-  tr035_a
-  tr036_a; tr036_b
-  tr037_a
-  tr038_a; tr038_b; tr038_c; tr038_e; tr038_e_2; tr038_f
-  tr044_a; tr044_b; tr044_c; tr044_d; tr044_f
-  tr045_a; tr045_b
-  tr047_a; tr047_b; tr047_c
-  tr049_a; tr049_b; tr049_c; tr049_d; tr049_e
-  tr050_a; tr050_b; tr050_c; tr050_d; tr050_e
-  tr051_a; tr051_b; tr051_c; tr051_d; tr051_e
-  tr052_a; tr052_b; tr052_c
-  tr053_a; tr053_b; tr053_c; tr053_d; tr053_e
-  tr054_a; tr054_b; tr054_c; tr054_d
-  tr062_a; tr062_b; tr062_d
-  tr063_a; tr063_b
-  tr064_a; tr065_a; tr066_a
+  run_tests tr001_a
+  run_tests tr002_a
+  run_tests tr005_a
+  run_tests tr008_a tr008_b tr008_c tr008_d tr008_e
+  run_tests tr009_a tr009_b tr009_c
+  run_tests tr011_a
+  run_tests tr016_b
+  run_tests tr021_a
+  run_tests tr022_a
+  run_tests tr028_a
+  run_tests tr031_a
+  run_tests tr032_a
+  run_tests tr033_a
+  run_tests tr035_a
+  run_tests tr036_a tr036_b
+  run_tests tr037_a
+  run_tests tr038_a tr038_b tr038_c tr038_e tr038_e_2 tr038_f
+  run_tests tr044_a tr044_b tr044_c tr044_d tr044_f
+  run_tests tr045_a tr045_b
+  run_tests tr047_a tr047_b tr047_c
+  run_tests tr049_a tr049_b tr049_c tr049_d tr049_e
+  run_tests tr050_a tr050_b tr050_c tr050_d tr050_e
+  run_tests tr051_a tr051_b tr051_c tr051_d tr051_e
+  run_tests tr052_a tr052_b tr052_c
+  run_tests tr053_a tr053_b tr053_c tr053_d tr053_e
+  run_tests tr054_a tr054_b tr054_c tr054_d
+  run_tests tr062_a tr062_b tr062_d
+  run_tests tr063_a tr063_b
+  run_tests tr064_a tr065_a tr066_a
 
   log ""
   log "----"

@@ -882,7 +882,44 @@ tr061_l() {
 
 # --- driver ----------------------------------------------------------------
 
+FILTER=""
+run_tests() {
+  local fn
+  for fn in "$@"; do
+    if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
+      "$fn"
+    fi
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--filter REGEX]
+
+  --filter, -f REGEX   Only run tests whose function name matches REGEX.
+                       Examples:
+                         --filter tr055_a       (one scenario)
+                         --filter tr056         (all TR-056 scenarios)
+                         --filter 'tr05[5-7]'   (range)
+
+  --help, -h           Show this message and exit.
+
+Environment:
+  ATA_BIN              Path to the ata binary (default: 'ata' from PATH).
+  ZOTERO_API_KEY       Optional. When set, runs TR-061 D-L against the
+                       Zotero cloud API. Skipped silently when unset.
+EOF
+}
+
 main() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --filter|-f) FILTER="$2"; shift 2 ;;
+      --help|-h)   usage; exit 0 ;;
+      *)           red "unknown arg: $1"; usage; exit 2 ;;
+    esac
+  done
+
   if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
     red "ata binary not found: $ATA_BIN"
     exit 2
@@ -893,6 +930,7 @@ main() {
   fi
 
   log "Tier A runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+  [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
   # Bootstrap: on a totally fresh ~/.ata the list is empty. Several
@@ -904,41 +942,41 @@ main() {
   fi
 
   log "TR-055: workspace read-only inspection"
-  tr055_a; tr055_b; tr055_c; tr055_d; tr055_e; tr055_f
-  tr055_g; tr055_g2; tr055_h; tr055_i; tr055_j
+  run_tests tr055_a tr055_b tr055_c tr055_d tr055_e tr055_f
+  run_tests tr055_g tr055_g2 tr055_h tr055_i tr055_j
 
   log ""
   log "TR-056: workspace lifecycle"
-  tr056_a; tr056_b; tr056_c; tr056_d
+  run_tests tr056_a tr056_b tr056_c tr056_d
 
   log ""
   log "TR-057: workspace repo management (network)"
-  tr057_a; tr057_b; tr057_c; tr057_d; tr057_e
+  run_tests tr057_a tr057_b tr057_c tr057_d tr057_e
 
   log ""
   log "TR-058: workspace runs lifecycle"
-  tr058_a; tr058_b; tr058_c
+  run_tests tr058_a tr058_b tr058_c
 
   log ""
   log "TR-059: workspace manifest mutation"
-  tr059_a; tr059_b; tr059_c; tr059_d
+  run_tests tr059_a tr059_b tr059_c tr059_d
 
   log ""
   log "TR-060: workspace spec round-trip"
-  tr060_a; tr060_b; tr060_c; tr060_d
+  run_tests tr060_a tr060_b tr060_c tr060_d
 
   log ""
   log "TR-061: zotero CLI (no credentials)"
-  tr061_a; tr061_a2; tr061_b; tr061_c
+  run_tests tr061_a tr061_a2 tr061_b tr061_c
 
   log ""
   if [ -n "${ZOTERO_API_KEY:-}" ]; then
     log "TR-061 D-L: zotero CLI via cloud API (ZOTERO_API_KEY set)"
     tr061_setup_remote
-    tr061_d; tr061_e; tr061_e_2; tr061_f
-    tr061_g; tr061_g_neg
-    tr061_h; tr061_i; tr061_i_neg
-    tr061_j; tr061_k; tr061_l
+    run_tests tr061_d tr061_e tr061_e_2 tr061_f
+    run_tests tr061_g tr061_g_neg
+    run_tests tr061_h tr061_i tr061_i_neg
+    run_tests tr061_j tr061_k tr061_l
     tr061_teardown_remote
   else
     log "TR-061 D-L: skipped (set ZOTERO_API_KEY to enable cloud-API tests)"

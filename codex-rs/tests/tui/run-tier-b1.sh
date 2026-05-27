@@ -1374,7 +1374,43 @@ tr046_c() {
 
 # --- driver ----------------------------------------------------------------
 
+FILTER=""
+run_tests() {
+  local fn
+  for fn in "$@"; do
+    if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
+      "$fn"
+    fi
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--filter REGEX]
+
+  --filter, -f REGEX   Only run tests whose function name matches REGEX.
+                       Examples:
+                         --filter tr019_b       (one scenario)
+                         --filter tr040         (all TR-040 scenarios)
+                         --filter 'tr04[0-3]'   (range)
+                         --filter 'tr_'         (ad-hoc tests only)
+
+  --help, -h           Show this message and exit.
+
+Environment:
+  ATA_BIN              Path to the ata binary (default: 'ata' from PATH).
+EOF
+}
+
 main() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --filter|-f) FILTER="$2"; shift 2 ;;
+      --help|-h)   usage; exit 0 ;;
+      *)           red "unknown arg: $1"; usage; exit 2 ;;
+    esac
+  done
+
   if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
     red "ata binary not found: $ATA_BIN"
     exit 2
@@ -1385,40 +1421,41 @@ main() {
   fi
 
   log "Tier B1 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+  [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
   log "Numbered TRs (in order)"
-  tr003_a
-  tr004_a
-  tr006_a; tr006_b; tr006_c
-  tr010_a; tr010_b
-  tr012_a
-  tr013_a
-  tr014_a
-  tr016_a
-  tr017_a; tr017_b; tr017_c; tr017_d
-  tr018_a; tr018_b; tr018_c; tr018_d; tr018_e
-  tr019_a; tr019_b; tr019_b2; tr019_c; tr019_d; tr019_e
-  tr020_a; tr020_b; tr020_c; tr020_d; tr020_e
-  tr023_a
-  tr034_a
-  tr038_d
-  tr039_a
-  tr040_a; tr040_b; tr040_c; tr040_e; tr040_f
-  tr041_a; tr041_b; tr041_c; tr041_e; tr041_f
-  tr042_b; tr042_c
-  tr043_a; tr043_c
-  tr046_a; tr046_b; tr046_c
+  run_tests tr003_a
+  run_tests tr004_a
+  run_tests tr006_a tr006_b tr006_c
+  run_tests tr010_a tr010_b
+  run_tests tr012_a
+  run_tests tr013_a
+  run_tests tr014_a
+  run_tests tr016_a
+  run_tests tr017_a tr017_b tr017_c tr017_d
+  run_tests tr018_a tr018_b tr018_c tr018_d tr018_e
+  run_tests tr019_a tr019_b tr019_b2 tr019_c tr019_d tr019_e
+  run_tests tr020_a tr020_b tr020_c tr020_d tr020_e
+  run_tests tr023_a
+  run_tests tr034_a
+  run_tests tr038_d
+  run_tests tr039_a
+  run_tests tr040_a tr040_b tr040_c tr040_e tr040_f
+  run_tests tr041_a tr041_b tr041_c tr041_e tr041_f
+  run_tests tr042_b tr042_c
+  run_tests tr043_a tr043_c
+  run_tests tr046_a tr046_b tr046_c
 
   log ""
   log "Ad-hoc slash commands (not in PLAN.md)"
-  tr_fast_a
-  tr_ide_a
-  tr_keymap_a
-  tr_personality_a
-  tr_statusline_a
-  tr_transcript_a
-  tr_vim_a
+  run_tests tr_fast_a
+  run_tests tr_ide_a
+  run_tests tr_keymap_a
+  run_tests tr_personality_a
+  run_tests tr_statusline_a
+  run_tests tr_transcript_a
+  run_tests tr_vim_a
 
   log ""
   log "----"
