@@ -883,24 +883,33 @@ tr061_l() {
 # --- driver ----------------------------------------------------------------
 
 FILTER=""
+DRY_RUN=0
+DRY_RUN_COUNT=0
 run_tests() {
   local fn
   for fn in "$@"; do
     if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
-      "$fn"
+      if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  would run: %s\n' "$fn"
+        DRY_RUN_COUNT=$((DRY_RUN_COUNT + 1))
+      else
+        "$fn"
+      fi
     fi
   done
 }
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--filter REGEX]
+Usage: $(basename "$0") [--filter REGEX] [--dry-run]
 
   --filter, -f REGEX   Only run tests whose function name matches REGEX.
                        Examples:
                          --filter tr055_a       (one scenario)
                          --filter tr056         (all TR-056 scenarios)
                          --filter 'tr05[5-7]'   (range)
+
+  --dry-run, -n        Print which tests would run without executing them.
 
   --help, -h           Show this message and exit.
 
@@ -914,22 +923,29 @@ EOF
 main() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      --filter|-f) FILTER="$2"; shift 2 ;;
-      --help|-h)   usage; exit 0 ;;
-      *)           red "unknown arg: $1"; usage; exit 2 ;;
+      --filter|-f)  FILTER="$2"; shift 2 ;;
+      --dry-run|-n) DRY_RUN=1; shift ;;
+      --help|-h)    usage; exit 0 ;;
+      *)            red "unknown arg: $1"; usage; exit 2 ;;
     esac
   done
 
-  if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
-    red "ata binary not found: $ATA_BIN"
-    exit 2
-  fi
-  if ! command -v jq >/dev/null 2>&1; then
-    red "jq is required"
-    exit 2
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
+      red "ata binary not found: $ATA_BIN"
+      exit 2
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+      red "jq is required"
+      exit 2
+    fi
   fi
 
-  log "Tier A runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Tier A runner (DRY RUN — no tests will execute)"
+  else
+    log "Tier A runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+  fi
   [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
@@ -984,6 +1000,10 @@ main() {
 
   log ""
   log "----"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "($DRY_RUN_COUNT tests would run)"
+    exit 0
+  fi
   log "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
   if [ "$SKIP" -gt 0 ]; then
     log "Skipped: ${SKIPPED_NAMES[*]}"

@@ -2014,12 +2014,23 @@ tr035_a() {
 # Run each named test function unless FILTER is set, in which case
 # only functions whose name matches the FILTER regex run. Lets you
 # debug a single TR locally without commenting out 28 others.
+#
+# DRY_RUN=1 makes run_tests print "would run: NAME" for each matching
+# function and skip execution. Useful for sanity-checking a regex
+# before burning LLM tokens.
 FILTER=""
+DRY_RUN=0
+DRY_RUN_COUNT=0
 run_tests() {
   local fn
   for fn in "$@"; do
     if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
-      "$fn"
+      if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  would run: %s\n' "$fn"
+        DRY_RUN_COUNT=$((DRY_RUN_COUNT + 1))
+      else
+        "$fn"
+      fi
     fi
   done
 }
@@ -2034,6 +2045,10 @@ Usage: $(basename "$0") [--filter REGEX]
                          --filter tr038         (all TR-038 scenarios)
                          --filter 'tr03[0-9]'   (range)
 
+  --dry-run, -n        Print which tests would run without executing
+                       them. Useful for sanity-checking --filter before
+                       burning LLM tokens.
+
   --help, -h           Show this message and exit.
 
 Environment:
@@ -2046,23 +2061,30 @@ main() {
   # Argv parser: --filter / -f takes a regex; --help / -h prints usage.
   while [ $# -gt 0 ]; do
     case "$1" in
-      --filter|-f) FILTER="$2"; shift 2 ;;
-      --help|-h)   usage; exit 0 ;;
-      *)           red "unknown arg: $1"; usage; exit 2 ;;
+      --filter|-f)  FILTER="$2"; shift 2 ;;
+      --dry-run|-n) DRY_RUN=1; shift ;;
+      --help|-h)    usage; exit 0 ;;
+      *)            red "unknown arg: $1"; usage; exit 2 ;;
     esac
   done
 
-  if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
-    red "ata binary not found: $ATA_BIN"
-    exit 2
-  fi
-  if ! command -v tmux >/dev/null 2>&1; then
-    red "tmux is required"
-    exit 2
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
+      red "ata binary not found: $ATA_BIN"
+      exit 2
+    fi
+    if ! command -v tmux >/dev/null 2>&1; then
+      red "tmux is required"
+      exit 2
+    fi
   fi
 
-  log "Tier B2 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
-  log "WARNING: this batch sends real prompts and costs real LLM tokens."
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Tier B2 runner (DRY RUN — no tests will execute)"
+  else
+    log "Tier B2 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+    log "WARNING: this batch sends real prompts and costs real LLM tokens."
+  fi
   [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
@@ -2099,6 +2121,10 @@ main() {
 
   log ""
   log "----"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "($DRY_RUN_COUNT tests would run)"
+    exit 0
+  fi
   log "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
   if [ "$FAIL" -gt 0 ]; then
     log "Failed: ${FAILED_NAMES[*]}"
