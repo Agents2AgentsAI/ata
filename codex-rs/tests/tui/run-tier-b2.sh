@@ -107,8 +107,15 @@ wait_for_idle() {
 
 # Find the most recently modified ata session JSONL (the one our test
 # just produced). Returns the path or empty string.
+#
+# Window is 20 minutes — wider than any single test's runtime so the
+# lookup doesn't miss slow tests. TR-035 alone has an 8-minute cap and
+# PLAN.md uses -mmin -15 for that scenario; 20 gives us a comfortable
+# buffer for any future slow test. Sessions are still sorted by mtime
+# and the freshest one (head -1) is returned, so the wider window
+# doesn't pick up older runs.
 recent_session_jsonl() {
-  find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -5 2>/dev/null \
+  find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -20 2>/dev/null \
     | xargs ls -t 2>/dev/null | head -1
 }
 
