@@ -273,8 +273,10 @@ These are places where `PLAN.md` and current ATA disagree. The runner picks whic
 | TR | PLAN.md says | Reality on ATA 0.7.0 | What the test does |
 |---|---|---|---|
 | TR-019 E | Escape leaves the `@`-picker UI visible | Escape clears the picker contents; only the `@xyz` text remains in the composer | Asserts the composer text remains; doesn't assert the picker UI is still visible |
+| TR-042 C | `/rollout` path can be verified on disk | Session JSONL is written lazily — only after the first real user message lands | Verifies the path shape instead (date-segmented dir + rollout-`<timestamp>-<uuid>`.jsonl) |
 | TR-046 B | Rows show `<N> ago` (long form like "3 days ago") | Rows show `<N>d ago` (compact form, like "3d ago") | Uses the compact-form regex |
 | TR-054 D | `?` toggles the help overlay closed | Second `?` doesn't close; only Escape does | Probes for the toggle, falls back to Escape if needed, prints a yellow note about the divergence |
+| TR-063 A | Natural prompt "look up arxiv X" falls back to `exec_command` (curl scrape) | Agent often picks `paper_get` directly | Asserts the content (paper title); accepts either tool path |
 
 When ATA changes to match `PLAN.md` (or vice versa), update both files in the same PR.
 
