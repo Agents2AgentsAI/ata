@@ -24,7 +24,11 @@ jobs:
   tier-b2:
     name: Tier B2 scenarios (TUI + real LLM)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 90 min is ~2x typical B2 runtime (~40-50 min for the full suite).
+    # The headroom keeps us safe against transient slowness without
+    # being so wide that genuine hangs go unnoticed. TR-035 alone can
+    # spend 8 min on a single multi-source synthesis prompt.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: codex-rs
