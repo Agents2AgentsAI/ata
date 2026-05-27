@@ -263,7 +263,6 @@ The runner backs up `~/.ata/config.toml` before writing the dummy-group `[resear
 | TR-042 A (release-build `/rollout`) | The command is hidden in release builds. CI always builds debug, so the negative case is untestable. |
 | TR-044 C (`/side` recursion guard) | The unit test in `chatwidget/tests/side.rs` confirms the guard works, but in a live tmux session the expected error doesn't surface on screen. Needs deeper investigation. Marked SKIP for now. |
 | TR-048 (`/goal`) | Requires the `Feature::Goals` build flag, which isn't on by default. |
-| TR-064, TR-065, TR-066 (`paper_*` tools) | The dedicated tools only fire when the prompt names them explicitly (e.g. "use the paper_citations tool"). That's "cheating" — it tests the tool runs, not that the model picks it. Without explicit naming the model falls back to `exec_command` curl. No honest workaround. |
 | Various "during in-flight turn" scenarios (TR-010 D, TR-016 C, TR-017 E, TR-018 D, TR-040 G, TR-046 E) | Need to start a slow model call, then test that a slash command is blocked while the call is mid-flight. B1 has no real model. The B2 versions are open work. |
 
 If you want to attempt one of the skipped ones later: write it as a B2 scenario, pick a deterministic signal you can wait on (a specific log line, a file change, a JSONL event), and accept that the test will probably need to retry a few times before it's stable enough to merge.

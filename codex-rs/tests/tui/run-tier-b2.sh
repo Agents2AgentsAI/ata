@@ -1808,6 +1808,80 @@ tr063_b() {
   end_test
 }
 
+# TR-064 A: paper_citations — papers that cite a given paper. Explicit
+# naming routes to paper_citations (NOT paper_search). Args carry the
+# arXiv id in the documented format.
+tr064_a() {
+  start_test "TR-064 A"
+  local sess=$SESSION-064a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_citations to find recent papers that cite arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_citations" "explicit naming must trigger paper_citations"
+  assert_tool_not_called "$sess_jsonl" "paper_search"    "must not fall back to paper_search"
+  # Argument fidelity: paper_id is the documented format.
+  local args
+  args=$(jq -r 'select(.payload.name=="paper_citations") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
+  if ! printf '%s' "$args" | grep -qE '"paper_id"[[:space:]]*:[[:space:]]*"[Aa]r[Xx]iv:2505\.21323"'; then
+    fail_assert "paper_citations missing paper_id 'arXiv:2505.21323'" "$args"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-065 A: paper_references — papers cited inside a given paper (the
+# reverse of citations). Explicit naming routes to paper_references.
+tr065_a() {
+  start_test "TR-065 A"
+  local sess=$SESSION-065a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_references to list the references cited inside arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_references" "explicit naming must trigger paper_references"
+  assert_tool_not_called "$sess_jsonl" "paper_search"     "must not fall back to paper_search"
+  assert_tool_not_called "$sess_jsonl" "paper_citations"  "must not confuse references with citations"
+  local args
+  args=$(jq -r 'select(.payload.name=="paper_references") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
+  if ! printf '%s' "$args" | grep -qE '"paper_id"[[:space:]]*:[[:space:]]*"[Aa]r[Xx]iv:2505\.21323"'; then
+    fail_assert "paper_references missing paper_id 'arXiv:2505.21323'" "$args"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-066 A: paper_recommendations — similar-papers exploration. Distinct
+# argument shape: positive_paper_ids is an ARRAY (plural), unlike the
+# scalar paper_id used by citations/references/get.
+tr066_a() {
+  start_test "TR-066 A"
+  local sess=$SESSION-066a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_recommendations" "explicit naming must trigger paper_recommendations"
+  assert_tool_not_called "$sess_jsonl" "paper_search"          "must not fall back to paper_search"
+  local args
+  args=$(jq -r 'select(.payload.name=="paper_recommendations") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
+  # positive_paper_ids is an ARRAY — check the array syntax and the id inside.
+  if ! printf '%s' "$args" | grep -qE '"positive_paper_ids"[[:space:]]*:[[:space:]]*\['; then
+    fail_assert "paper_recommendations missing positive_paper_ids array" "$args"
+  fi
+  if ! printf '%s' "$args" | grep -qE '[Aa]r[Xx]iv:2505\.21323'; then
+    fail_assert "positive_paper_ids missing 'arXiv:2505.21323'" "$args"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
 main() {
@@ -1852,6 +1926,7 @@ main() {
   tr054_a; tr054_b; tr054_c; tr054_d
   tr062_a; tr062_b; tr062_d
   tr063_a; tr063_b
+  tr064_a; tr065_a; tr066_a
 
   log ""
   log "----"
