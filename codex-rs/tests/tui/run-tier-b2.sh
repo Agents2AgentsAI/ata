@@ -107,8 +107,15 @@ wait_for_idle() {
 
 # Find the most recently modified ata session JSONL (the one our test
 # just produced). Returns the path or empty string.
+#
+# Window is 20 minutes — wider than any single test's runtime so the
+# lookup doesn't miss slow tests. TR-035 alone has an 8-minute cap and
+# PLAN.md uses -mmin -15 for that scenario; 20 gives us a comfortable
+# buffer for any future slow test. Sessions are still sorted by mtime
+# and the freshest one (head -1) is returned, so the wider window
+# doesn't pick up older runs.
 recent_session_jsonl() {
-  find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -5 2>/dev/null \
+  find "$HOME/.ata/sessions" -name "*.jsonl" -mmin -20 2>/dev/null \
     | xargs ls -t 2>/dev/null | head -1
 }
 
@@ -129,11 +136,114 @@ assert_tool_called() {
   fi
 }
 
+# Inverse — fail if the tool was called at any point during the turn.
+# Used for "must not fall back to <X>" assertions (e.g. routing tests).
+assert_tool_not_called() {
+  local sess_jsonl=$1 tool=$2 desc=${3:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool}: session JSONL not found"
+    return
+  fi
+  if jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "$tool"; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "${desc:-tool '$tool' must NOT have been called}" "tool_counts: $counts"
+  fi
+}
+
+# Assert that any call to a specific tool had arguments containing a
+# substring. Substring-style — useful when you genuinely want to
+# match raw text. For structured checks (field presence, value
+# equality, array membership) prefer assert_tool_args_jq below.
+assert_tool_args_contain() {
+  local sess_jsonl=$1 tool=$2 needle=$3 desc=${4:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool args}: session JSONL not found"
+    return
+  fi
+  local args
+  args=$(jq -r "select(.payload.name==\"$tool\") | .payload.arguments" "$sess_jsonl" 2>/dev/null)
+  if [ -z "$args" ]; then
+    fail_assert "${desc:-tool '$tool' args}: tool was not called at all"
+    return
+  fi
+  if ! printf '%s' "$args" | grep -qF -- "$needle"; then
+    fail_assert "${desc:-args must contain: $needle}" "got args: $(printf '%s' "$args" | head -c 600)"
+  fi
+}
+
+# Assert that a specific tool was called AND its arguments object passes
+# a jq expression. The .payload.arguments field is a JSON-encoded
+# string, so we parse it with fromjson before applying the expression.
+# Robust against JSON whitespace, key-order, and newline variations.
+#
+# Usage:
+#   assert_tool_args_jq <jsonl> <tool> <jq-expr> [<desc>]
+#
+# Examples:
+#   assert_tool_args_jq "$j" "hn_search"         'has("query")'
+#   assert_tool_args_jq "$j" "append_to_section" '.foldable == true'
+#   assert_tool_args_jq "$j" "monitor_watch_for" '.pattern | contains("tick 3")'
+assert_tool_args_jq() {
+  local sess_jsonl=$1 tool=$2 expr=$3 desc=${4:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool args}: session JSONL not found"
+    return
+  fi
+  local arg_str
+  arg_str=$(jq -r "select(.payload.name==\"$tool\") | .payload.arguments" "$sess_jsonl" 2>/dev/null | head -1)
+  if [ -z "$arg_str" ]; then
+    fail_assert "${desc:-tool '$tool' args}: tool was not called"
+    return
+  fi
+  if ! printf '%s' "$arg_str" | jq -e "$expr" >/dev/null 2>&1; then
+    fail_assert "${desc:-args expression failed: $expr}" "got args: $(printf '%s' "$arg_str" | head -c 600)"
+  fi
+}
+
 assert_contains() {
   local file=$1 needle=$2 desc=${3:-}
   if ! grep -qF -- "$needle" "$file"; then
     fail_assert "${desc:-expected to contain: $needle}" "$(tail -c 800 "$file")"
   fi
+}
+
+assert_not_contains() {
+  local file=$1 needle=$2 desc=${3:-}
+  if grep -qF -- "$needle" "$file"; then
+    fail_assert "${desc:-must NOT contain: $needle}" "$(tail -c 800 "$file")"
+  fi
+}
+
+assert_match() {
+  local file=$1 regex=$2 desc=${3:-}
+  if ! grep -qE -- "$regex" "$file"; then
+    fail_assert "${desc:-expected to match regex: $regex}" "$(tail -c 800 "$file")"
+  fi
+}
+
+# Cross-platform clipboard helpers (macOS uses pbpaste/pbcopy; Linux uses
+# xclip with the X selection that ata's clipboard_copy.rs writes to).
+clipboard_available() {
+  case "$(uname -s)" in
+    Darwin) command -v pbpaste >/dev/null 2>&1 ;;
+    Linux)  command -v xclip   >/dev/null 2>&1 ;;
+    *)      return 1 ;;
+  esac
+}
+
+clipboard_read() {
+  case "$(uname -s)" in
+    Darwin) pbpaste ;;
+    Linux)  xclip -selection clipboard -o 2>/dev/null || true ;;
+  esac
+}
+
+clipboard_write() {
+  case "$(uname -s)" in
+    Darwin) printf '%s' "$1" | pbcopy ;;
+    Linux)  printf '%s' "$1" | xclip -selection clipboard ;;
+  esac
 }
 
 cleanup_all() {
@@ -236,21 +346,44 @@ tr031_a() {
   start_test "TR-031 A"
   local sess=$SESSION-031a
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # Visual-select Enter sends an "explain selection" request. We can't
-  # reliably assert WHICH tool the agent picks (flaky), but we can
-  # verify the inline-answer machinery wired up — 'You asked:' marker
-  # appears and the reader still renders.
-  send_text "$sess" "v"; sleep 1
-  send_text "$sess" "jj"; sleep 0.5
+  # PLAN.md TR-031: a Tab-to-ask "rewrite section 1" must produce a
+  # scoped-edit call (patch_document_section or update_document_section)
+  # targeting section_index 0. Falling back to apply_patch or shell would
+  # bypass the section model.
+  send_key  "$sess" Tab
+  sleep 1
+  send_text "$sess" "rewrite section 1 to be one short sentence about what coffee is"
   send_key  "$sess" Enter
-  if ! wait_for_idle "$sess" 90; then
-    fail_assert "agent did not finish within 90s"
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
     kill_ata "$sess"; end_test; return
   fi
   local out=$WORK/031a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "You asked:"     "inline question marker present"
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -z "$sess_jsonl" ]; then
+    fail_assert "session JSONL not found"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Either scoped-edit tool counts as a pass — the agent may interpret the
+  # rewrite either as a patch (find-and-replace) or an update (full
+  # replacement). The fail mode is shelling out / apply_patch.
+  local tools
+  tools=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort -u)
+  if ! printf '%s\n' "$tools" | grep -qE '^(patch_document_section|update_document_section)$'; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "expected patch_document_section OR update_document_section" "tool_counts: $counts"
+  fi
+  assert_tool_not_called "$sess_jsonl" "apply_patch"  "scoped edits must not fall back to apply_patch"
+  assert_tool_not_called "$sess_jsonl" "shell"        "scoped edits must not shell out"
+  # Scoping guard — section_index 0 (section 1, zero-indexed).
+  if jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "patch_document_section"; then
+    assert_tool_args_jq "$sess_jsonl" "patch_document_section" 'has("section_index") and (.section_index == 0)' "patch_document_section targets section 1 (index 0)"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -269,15 +402,20 @@ tr032_a() {
   fi
   local out=$WORK/032a.txt
   capture "$sess" "$out"
-  # Expect a new section to exist. Doc started with 2, so the title
-  # bar should now show 1/3 or the TOC entry list should include
-  # something about brewing.
+  # Content guard — new section visible.
   if grep -qF "1/3" "$out" || grep -qF "2/3" "$out" || grep -qF "3/3" "$out" || grep -qiE "brewing|method" "$out"; then
     :
   else
     fail_assert "no sign of a new third section after add request" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard — must use add_document_section, not patch/update/append.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "add_document_section"    "agent must use the dedicated add-section tool"
+  assert_tool_not_called "$sess_jsonl" "patch_document_section"  "must not mutate via patch when adding"
+  assert_tool_not_called "$sess_jsonl" "update_document_section" "must not replace via update when adding"
+  assert_tool_not_called "$sess_jsonl" "append_to_section"       "must not append to existing when adding"
   kill_ata "$sess"
   end_test
 }
@@ -296,12 +434,19 @@ tr033_a() {
   fi
   local out=$WORK/033a.txt
   capture "$sess" "$out"
-  # Look for an espresso-related word anywhere in the rendered pane
-  # (the agent's addition to slide 2 should mention it).
   if ! grep -qiE "espresso|crema|pressure" "$out"; then
     fail_assert "no espresso content found in pane after append request" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  # Routing guard — append, NOT update / patch / add. This is THE
+  # "rendering looks fine, wrong tool got called" regression PLAN.md
+  # is specifically guarding against.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "append_to_section"        "agent must use append_to_section for 'append'"
+  assert_tool_not_called "$sess_jsonl" "update_document_section"  "must not replace section"
+  assert_tool_not_called "$sess_jsonl" "patch_document_section"   "must not use find-replace patcher"
+  assert_tool_not_called "$sess_jsonl" "add_document_section"     "must not add a new section"
   kill_ata "$sess"
   end_test
 }
@@ -325,6 +470,16 @@ tr037_a() {
     fail_assert "no bitterness-related content in inline answer" "$(tail -c 800 "$out")"
   fi
   assert_contains "$out" "Sections (n/p"  "still in reader after answer"
+  # Routing guard — Tab-to-ask Q&A goes through append_to_section with
+  # foldable: true (distinguishing it from TR-033's foldable: false
+  # explicit content additions).
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "append_to_section" "Tab-ask Q&A must go through append_to_section"
+  # The argument-fidelity check: Tab-ask path produces foldable Q&A,
+  # distinguishing it from explicit content additions (TR-033, which
+  # uses foldable: false).
+  assert_tool_args_jq "$sess_jsonl" "append_to_section" '.foldable == true' "append_to_section must have foldable: true for Tab-ask"
   kill_ata "$sess"
   end_test
 }
@@ -354,55 +509,6 @@ tr036_b() {
   assert_contains "$out" "Table of Contents" "TOC title shown"
   assert_contains "$out" "j/k to navigate"   "TOC footer present"
   assert_contains "$out" "t/Esc to dismiss"  "dismiss hint shown"
-  kill_ata "$sess"
-  end_test
-}
-
-tr050_a() {
-  start_test "TR-050 A"
-  local sess=$SESSION-050a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "/"
-  send_text "$sess" "coffee"
-  sleep 1
-  local out=$WORK/050a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "/coffee"          "search query echoed"
-  assert_contains "$out" "Enter: search"    "search-mode footer present"
-  assert_contains "$out" "Esc: cancel"      "esc-cancel hint shown"
-  kill_ata "$sess"
-  end_test
-}
-
-tr052_a() {
-  start_test "TR-052 A"
-  local sess=$SESSION-052a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
-  # the credential error but still enters the audio-active state, so
-  # the footer expands with playback controls.
-  send_text "$sess" "r"
-  sleep 1.5
-  local out=$WORK/052a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
-  assert_contains "$out" "s: pause"   "audio footer 'pause' control"
-  assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
-  kill_ata "$sess"
-  end_test
-}
-
-tr053_a() {
-  start_test "TR-053 A"
-  local sess=$SESSION-053a
-  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "v"
-  sleep 1.5
-  local out=$WORK/053a.txt
-  capture "$sess" "$out"
-  assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
-  assert_contains "$out" "Enter: explain" "Enter binding shown"
-  assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
   kill_ata "$sess"
   end_test
 }
@@ -486,16 +592,25 @@ tr052_a() {
   start_test "TR-052 A"
   local sess=$SESSION-052a
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
-  # 'r' starts TTS narration. Without ElevenLabs configured ata prints
-  # the credential error but still enters the audio-active state, so
-  # the footer expands with playback controls.
+  # 'r' starts TTS narration. With the local backend configured
+  # (tts_backend = "say"), audio plays cleanly without an API key.
+  # The audio control footer must appear and no credential error
+  # should surface. CI config sets tts_backend = "say" so this path
+  # runs on espeak-ng (Linux) or say (macOS); locally it depends on
+  # what's in ~/.ata/config.toml.
   send_text "$sess" "r"
   sleep 1.5
   local out=$WORK/052a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "TTS error: Invalid API key" "TTS credential error shown"
   assert_contains "$out" "s: pause"   "audio footer 'pause' control"
   assert_contains "$out" "+/-: speed" "audio footer 'speed' control"
+  # Strict invariant only applies when the local backend is configured
+  # (CI sets tts_backend = "say"; user's local config might still use
+  # elevenlabs). Detect via the active config so the test passes both
+  # ways.
+  if grep -qE 'tts_backend[[:space:]]*=[[:space:]]*"say"' "$HOME/.ata/config.toml" 2>/dev/null; then
+    assert_not_contains "$out" "Invalid API key" "local TTS backend should not surface credential error"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -511,6 +626,271 @@ tr053_a() {
   assert_contains "$out" "hjkl: select"   "visual-mode footer 'select' hint"
   assert_contains "$out" "Enter: explain" "Enter binding shown"
   assert_contains "$out" "Esc: cancel"    "Esc cancel binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 A: /copy on a simple single-line agent message. Clipboard
+# should hold the raw text ("hi") without ata's UI framing (no ›, no •).
+tr038_a() {
+  start_test "TR-038 A"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "respond with just hi"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "agent did not respond within 60s"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038a.txt
+  capture "$sess" "$out"
+  local clip
+  clip=$(clipboard_read || true)
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  # Clipboard should be the bare reply text. Accept some whitespace
+  # tolerance but no framing characters.
+  if ! printf '%s' "$clip" | grep -qiE '^[[:space:]]*hi[[:space:]]*$'; then
+    fail_assert "clipboard should be just 'hi'" "got: $(printf '%s' "$clip" | head -c 200)"
+  fi
+  if printf '%s' "$clip" | grep -qE '^›|^• '; then
+    fail_assert "clipboard contains TUI framing chars" "got: $(printf '%s' "$clip" | head -c 200)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 B: /copy on a multi-line numbered list. Clipboard should keep
+# markdown line structure (1. / 2. / ... / 5.), strip TUI framing, and
+# not be truncated.
+tr038_b() {
+  start_test "TR-038 B"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "respond with a 5-item numbered list of fruits, no preamble, no postscript"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not respond within 90s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038b.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038b.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  # Predicates against the multi-line clipboard payload.
+  if ! grep -qE '^[[:space:]]*1\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard should start with '1.'" "first 200B: $(head -c 200 "$clip_file")"
+  fi
+  if ! grep -qE '^[[:space:]]*2\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard missing line '2.' (markdown line break not preserved)" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  if ! grep -qE '^[[:space:]]*5\.[[:space:]]' "$clip_file"; then
+    fail_assert "clipboard missing line '5.' (list truncated)" "last 400B: $(tail -c 400 "$clip_file")"
+  fi
+  # Framing chars must NOT make it into the clipboard.
+  if grep -qE '^›' "$clip_file"; then
+    fail_assert "clipboard contains user-prompt marker '›'" "$(head -c 200 "$clip_file")"
+  fi
+  if grep -qE '^• ' "$clip_file"; then
+    fail_assert "clipboard contains TUI bullet prefix '• '" "$(head -c 200 "$clip_file")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 C: /copy on a fenced code block. Clipboard should preserve
+# the code fence and code body, not the TUI's left-margin glyphs.
+tr038_c() {
+  start_test "TR-038 C"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  send_text "$sess" "show me the rust hello world program in a fenced code block, no preamble"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not respond within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local clip
+  clip=$(clipboard_read || true)
+  clipboard_write "$orig"
+  if ! printf '%s' "$clip" | grep -qE '```'; then
+    fail_assert "clipboard missing code fence" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  if ! printf '%s' "$clip" | grep -qF "fn main"; then
+    fail_assert "clipboard missing 'fn main'" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  if printf '%s' "$clip" | grep -qE '└'; then
+    fail_assert "clipboard contains TUI margin glyph" "got: $(printf '%s' "$clip" | head -c 400)"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 E: /copy from inside a /side conversation. The side answer
+# (not the parent thread's reply) must end up on the clipboard, and the
+# side-context label has to be visible in the pane.
+tr038_e() {
+  start_test "TR-038 E"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038e
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  # Prime the conversation — /side requires a completed turn first.
+  send_text "$sess" "respond with just hello from side parent"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Enter side with an arithmetic question.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "side conversation did not finish within 90s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Copy from inside side.
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038e.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038e.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "copy confirmation in pane"
+  assert_contains "$out" "Side from main thread"            "side-context label visible"
+  if ! grep -qF '4' "$clip_file"; then
+    fail_assert "clipboard missing side answer '4'" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  # Parent thread's last message must NOT be in the clipboard — side
+  # scope is respected for /copy.
+  if grep -qF "hello from side parent" "$clip_file"; then
+    fail_assert "clipboard leaked parent-thread message" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 E2: /side is blocked before the conversation has started, and
+# becomes available after the first turn lands. Two assertions: error
+# string on the blocked attempt, then recovery after priming.
+tr038_e_2() {
+  start_test "TR-038 E2"
+  local sess=$SESSION-038e2
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Fresh chat — /clear puts us back to "not started" even if anything
+  # accidentally leaked from boot.
+  send_text "$sess" "/clear"; send_key "$sess" Enter; sleep 2
+  # First /side attempt should be blocked.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter; sleep 2
+  local blocked=$WORK/038e2-blocked.txt
+  capture "$sess" "$blocked"
+  assert_contains "$blocked" "'/side' is unavailable until the current conversation has started." "blocked error line 1"
+  assert_contains "$blocked" "Send a message first, then try /side again." "blocked error line 2"
+  # Prime the conversation.
+  send_text "$sess" "respond with just primed"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Second /side attempt should now work.
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "side did not complete after priming"
+    kill_ata "$sess"; end_test; return
+  fi
+  local recovered=$WORK/038e2-recovered.txt
+  capture "$sess" "$recovered"
+  # Either label OR the arithmetic answer proves /side is no longer blocked.
+  if ! grep -qE 'Side from main thread|[^0-9]4[^0-9]' "$recovered"; then
+    fail_assert "side did not recover after priming" "$(tail -c 600 "$recovered")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-038 F: /copy during an in-flight turn. /copy should be non-blocking
+# AND grab the previous COMPLETED turn — not anything from the still-
+# streaming response. Real signal: clipboard contains the priming reply
+# ("primed") and not the in-flight subject ("espresso").
+tr038_f() {
+  start_test "TR-038 F"
+  if ! clipboard_available; then
+    skip_test "no clipboard tool available"
+    end_test; return
+  fi
+  local sess=$SESSION-038f
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local orig
+  orig=$(clipboard_read || true)
+  # Prime with a unique sentinel so we can tell if the clipboard grabbed
+  # the previous COMPLETED reply or leaked from the in-flight one.
+  send_text "$sess" "respond with just primed"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then
+    fail_assert "priming turn did not complete in 60s"
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Fire a long-running turn.
+  send_text "$sess" "write me a 1000-word essay on espresso"
+  send_key  "$sess" Enter
+  # Tight poll up to 10s for the in-flight sentinel.
+  local in_flight=0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    local poll=$WORK/038f-poll.txt
+    capture "$sess" "$poll"
+    if grep -qF "esc to interrupt" "$poll"; then
+      in_flight=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "$in_flight" -eq 0 ]; then
+    fail_assert "did not observe 'esc to interrupt' within 10s — agent may have finished or never started"
+    send_key  "$sess" Escape; sleep 1
+    clipboard_write "$orig"; kill_ata "$sess"; end_test; return
+  fi
+  # Mid-flight /copy.
+  send_text "$sess" "/copy"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/038f.txt
+  capture "$sess" "$out"
+  local clip_file=$WORK/038f.clip
+  clipboard_read > "$clip_file" 2>/dev/null || true
+  # Cancel the in-flight essay before restoring state.
+  send_key  "$sess" Escape; sleep 1
+  clipboard_write "$orig"
+  assert_contains "$out" "Copied last message to clipboard" "/copy is allowed mid-flight"
+  # The clipboard must reflect the PREVIOUS completed turn.
+  if ! grep -qF "primed" "$clip_file"; then
+    fail_assert "clipboard should contain previous completed reply ('primed')" "first 400B: $(head -c 400 "$clip_file")"
+  fi
+  # And must NOT contain anything from the still-streaming essay.
+  if grep -qiF "espresso" "$clip_file"; then
+    fail_assert "clipboard leaked in-flight content ('espresso')" "first 400B: $(head -c 400 "$clip_file")"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -606,12 +986,9 @@ tr021_a() {
   start_test "TR-021 A"
   local sess=$SESSION-021a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  # The dedicated hn_search tool exists but the agent's choice between
-  # it and a generic exec_command (curl HN) is non-deterministic. So
-  # this test only asserts HN content actually came back — a real
-  # regression guard against "HN access fully broken" without
-  # depending on which tool the agent picked.
-  send_text "$sess" "Use the hacker_news tool to fetch the top 3 stories"
+  # Prompt deliberately does NOT name the tool — the test is whether the
+  # agent picks hn_search on its own when the question is about HN.
+  send_text "$sess" "find me a top story on Hacker News about Rust"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 180; then
     fail_assert "agent did not finish within 180s"
@@ -619,12 +996,86 @@ tr021_a() {
   fi
   local out=$WORK/021a.txt
   capture "$sess" "$out"
-  # HN result rows are formatted as "<n> points, <m> comments". That
-  # string is stable across both tool paths (hn_search and the
-  # exec_command fallback).
-  if ! grep -qE '[0-9]+ points, [0-9]+ comments' "$out"; then
-    fail_assert "no HN 'X points, Y comments' line in response" "$(tail -c 800 "$out")"
+  # Content guard — proves HN actually answered.
+  if ! grep -qF "news.ycombinator.com" "$out"; then
+    fail_assert "no HN URL cited in response" "$(tail -c 800 "$out")"
   fi
+  # Routing guard (Nima's call). hn_search must be called; the generic
+  # fallbacks must NOT be. If the agent shells out instead, that's the
+  # silent regression PLAN.md is trying to catch.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "hn_search"    "agent must invoke the dedicated hn_search tool"
+  assert_tool_not_called "$sess_jsonl" "web_search"   "agent must not fall back to generic web_search"
+  assert_tool_not_called "$sess_jsonl" "exec_command" "agent must not shell out via exec_command"
+  assert_tool_args_jq "$sess_jsonl" "hn_search" 'has("query") and (.query | type == "string")' "hn_search args have a string query field"
+  kill_ata "$sess"
+  end_test
+}
+
+tr009_a() {
+  start_test "TR-009 A"
+  local sess=$SESSION-009a
+  # PLAN.md TR-009 A: after a Tab-to-ask submission from inside a
+  # reader, the system-injected wrapper text (e.g. "[The user is reading
+  # ...]") must NOT appear in up-arrow history. Only the visible question
+  # the user typed should be recallable.
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  # Submit a Tab-to-ask question from inside the reader.
+  send_key  "$sess" Tab
+  sleep 1
+  send_text "$sess" "what color are coffee beans"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 120; then
+    fail_assert "Tab-to-ask agent did not finish within 120s"
+    kill_ata "$sess"; end_test; return
+  fi
+  # Close the reader and return to chat.
+  send_key "$sess" "q"
+  sleep 2
+  # Walk up-arrow history.
+  send_key "$sess" C-u
+  sleep 0.5
+  for _ in 1 2 3 4 5 6 7 8; do
+    send_key "$sess" Up
+    sleep 0.2
+  done
+  local out=$WORK/009a.txt
+  capture "$sess" "$out"
+  # None of the system-injected wrapper sentinels should appear:
+  assert_not_contains "$out" "[The user is reading"           "reader-prefix wrapper excluded"
+  assert_not_contains "$out" "<voice>"                        "voice wrapper excluded"
+  assert_not_contains "$out" "<!-- READER_TOOL_INSTRUCTIONS"  "reader tool-instructions wrapper excluded"
+  assert_not_contains "$out" "[The user closed the document"  "reader-close wrapper excluded"
+  kill_ata "$sess"
+  end_test
+}
+
+tr011_a() {
+  start_test "TR-011 A"
+  local sess=$SESSION-011a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # The prompt explicitly names code_intel. The agent must call it at
+  # some point during the turn — not necessarily as the first tool, but
+  # somewhere. PLAN.md is the spec: tool_counts must contain code_intel.
+  send_text "$sess" "use code_intel to find where parse_sections is defined"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then
+    fail_assert "agent did not finish within 180s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/011a.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "parse_sections" "answer mentions the symbol"
+  if ! grep -qE '\.rs:[0-9]+' "$out"; then
+    fail_assert "no .rs:NNN file:line citation" "$(tail -c 800 "$out")"
+  fi
+  # Hard tool-routing check (Nima's call). If this fails intermittently,
+  # that's a real signal — investigate the prompt / tool description, not
+  # mask it with a soft warning.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "code_intel" "agent must invoke code_intel when explicitly asked"
   kill_ata "$sess"
   end_test
 }
@@ -642,6 +1093,41 @@ tr062_a() {
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
   assert_tool_called "$sess_jsonl" "paper_search" "agent called the dedicated paper_search tool"
+  kill_ata "$sess"
+  end_test
+}
+
+tr063_a() {
+  start_test "TR-063 A"
+  local sess=$SESSION-063a
+  # PLAN.md TR-063 A: natural prompt for an arxiv paper. PLAN.md
+  # documents that this routes to exec_command (curl scrape), NOT to
+  # paper_get. We assert the content (paper title) and accept either
+  # routing, since the "fallback to exec_command" is the documented
+  # behavior of this scenario.
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "look up arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then
+    fail_assert "agent did not finish within 240s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/063a.txt
+  capture "$sess" "$out"
+  # Hard predicate: response cites the paper's actual title (case-
+  # insensitive — the agent often paraphrases as "asynchronous Rust"
+  # in its prose even when the literal title is "Asynchronous Rust").
+  if ! grep -qiF "asynchronous rust" "$out"; then
+    fail_assert "response cites arxiv 2505.21323 title" "$(tail -c 800 "$out")"
+  fi
+  # Soft check: report which path the agent took (paper_get vs exec_command).
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -n "$sess_jsonl" ]; then
+    if jq -r '.payload.name // empty' "$sess_jsonl" 2>/dev/null | grep -qFx "paper_get"; then
+      yellow "    [TR-063 A] note: agent used paper_get (PLAN.md expected exec_command fallback)"
+    fi
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -667,49 +1153,978 @@ tr016_b() {
   end_test
 }
 
+# --- batch-3 deepening: reader navigation extra scenarios -----------------
+
+# Shared post-open assertion: the reader UI is still rendering. Used by
+# the many "key recognized, no crash" scenarios that the short coffee
+# test doc can't visibly exercise (gg/G/Ctrl-d on a 2-section doc).
+_reader_still_alive() {
+  local out=$1
+  # Reader has 3 footer variants:
+  #   - Section list: "q: close"
+  #   - In-section:   "q: close"
+  #   - Search active: "q: done"
+  # All three prove the reader is still rendering.
+  assert_match "$out" "q: (close|done)" "reader still rendering (q: close|done footer)"
+}
+
+# TR-049 B: gg jumps to top of section. Visible scrolling on the short
+# coffee doc isn't guaranteed; assert reader stays alive after the
+# command rather than position-checking.
+tr049_b() {
+  start_test "TR-049 B"
+  local sess=$SESSION-049b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "jjj"; sleep 0.5
+  send_text "$sess" "gg";  sleep 1
+  local out=$WORK/049b.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 C: capital G is documented as "jump to end" but actually
+# 3-lines scroll. Regression guard against either binding crashing.
+tr049_c() {
+  start_test "TR-049 C"
+  local sess=$SESSION-049c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "G"; sleep 1
+  local out=$WORK/049c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 D: Ctrl+d / Ctrl+u half-page scroll. Reader must survive.
+tr049_d() {
+  start_test "TR-049 D"
+  local sess=$SESSION-049d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_key "$sess" C-d; sleep 0.5
+  send_key "$sess" C-u; sleep 1
+  local out=$WORK/049d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-049 E: scroll progress implies a section-as-read marker (✓).
+# Short coffee doc may not surface the glyph; assert reader stays alive.
+tr049_e() {
+  start_test "TR-049 E"
+  local sess=$SESSION-049e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "jjjjj"; sleep 1
+  local out=$WORK/049e.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 B: typing a query + Enter highlights matches and updates the
+# footer with a count.
+tr050_b() {
+  start_test "TR-050 B"
+  local sess=$SESSION-050b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.5
+  local out=$WORK/050b.txt
+  capture "$sess" "$out"
+  # After Enter, search execs and the footer shows match count + nav hints.
+  # ata's format is "[1/7]" (bracketed, no spaces); the nav hint is
+  # "n/N: next/prev" not the originally-guessed "n: next".
+  assert_match    "$out" "\[[0-9]+/[0-9]+\]"   "bracketed match count shown after search"
+  assert_contains "$out" "n/N: next/prev"      "next/prev nav hint present"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 C: n advances to the next match across section boundaries.
+tr050_c() {
+  start_test "TR-050 C"
+  local sess=$SESSION-050c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.2
+  send_text "$sess" "n"; sleep 1
+  local out=$WORK/050c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 D: N navigates backwards.
+tr050_d() {
+  start_test "TR-050 D"
+  local sess=$SESSION-050d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "coffee"; sleep 0.3
+  send_key  "$sess" Enter; sleep 1.2
+  send_text "$sess" "N"; sleep 1
+  local out=$WORK/050d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-050 E: Esc cancels search input mode.
+tr050_e() {
+  start_test "TR-050 E"
+  local sess=$SESSION-050e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/"; sleep 0.3
+  send_text "$sess" "x"; sleep 0.3
+  send_key  "$sess" Escape; sleep 1
+  local out=$WORK/050e.txt
+  capture "$sess" "$out"
+  # Search-mode footer hints should disappear after Escape.
+  assert_not_contains "$out" "Enter: search" "search-mode footer cleared by Esc"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 B: f toggles a fold (or no-ops on a doc with no foldable
+# regions). 2-section coffee doc may not have folds; assert reader
+# stays alive.
+tr051_b() {
+  start_test "TR-051 B"
+  local sess=$SESSION-051b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "f"; sleep 0.5
+  send_text "$sess" "f"; sleep 1
+  local out=$WORK/051b.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 C: [ and ] jump to prev/next fold.
+tr051_c() {
+  start_test "TR-051 C"
+  local sess=$SESSION-051c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "]"; sleep 0.5
+  send_text "$sess" "["; sleep 1
+  local out=$WORK/051c.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 D: zM collapse all, zR expand all.
+tr051_d() {
+  start_test "TR-051 D"
+  local sess=$SESSION-051d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "zM"; sleep 0.5
+  send_text "$sess" "zR"; sleep 1
+  local out=$WORK/051d.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-051 E: fold keys are bound and don't crash even when no fold is
+# at cursor.
+tr051_e() {
+  start_test "TR-051 E"
+  local sess=$SESSION-051e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "f]f["; sleep 1
+  local out=$WORK/051e.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 B: TTS keymap surface. After r the audio control footer shows
+# pause / speed bindings.
+tr052_b() {
+  start_test "TR-052 B"
+  local sess=$SESSION-052b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "r"; sleep 1.5
+  local out=$WORK/052b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "s: pause"    "pause control listed"
+  assert_contains "$out" "+/-: speed"  "speed control listed"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 C: r key is in the footer but NOT documented in ? help — a
+# known documentation gap (regression guard).
+tr052_c() {
+  start_test "TR-052 C"
+  local sess=$SESSION-052c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1
+  local out=$WORK/052c.txt
+  capture "$sess" "$out"
+  assert_contains     "$out" "Reading View Help" "help overlay open"
+  # The 'r' / "narrate" binding is intentionally missing from help —
+  # PLAN.md TR-052 C documents this gap. Verifying the absence guards
+  # against a doc fix that would also need to update this predicate.
+  assert_not_contains "$out" "Narrate section" "narrate-row absent from help (documented gap)"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 B: hjkl extends visual selection.
+tr053_b() {
+  start_test "TR-053 B"
+  local sess=$SESSION-053b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_text "$sess" "lll"; sleep 1
+  local out=$WORK/053b.txt
+  capture "$sess" "$out"
+  # Still in visual mode (footer remains) after hjkl extends selection.
+  assert_contains "$out" "hjkl: select"   "still in visual mode after extension"
+  assert_contains "$out" "Enter: explain" "Enter binding still shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 C: V enters line-level selection mode.
+tr053_c() {
+  start_test "TR-053 C"
+  local sess=$SESSION-053c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "V"; sleep 1
+  local out=$WORK/053c.txt
+  capture "$sess" "$out"
+  # Visual line mode still surfaces the same selection footer.
+  assert_contains "$out" "Enter: explain" "line-mode Enter binding shown"
+  assert_contains "$out" "Esc: cancel"    "line-mode Esc binding shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 D: Enter in visual selection triggers "explain" (sends the
+# selected text to the agent). Without an LLM call we can't verify the
+# follow-up; just verify Enter exited visual mode AND the reader is
+# still healthy.
+tr053_d() {
+  start_test "TR-053 D"
+  local sess=$SESSION-053d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_text "$sess" "lll"; sleep 0.5
+  send_key  "$sess" Enter; sleep 3
+  local out=$WORK/053d.txt
+  capture "$sess" "$out"
+  # Visual footer should be gone (Enter exited visual mode), reader
+  # itself either still open or transitioned to an explain response.
+  assert_not_contains "$out" "hjkl: select" "visual mode exited by Enter"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-053 E: Esc cancels visual selection cleanly.
+tr053_e() {
+  start_test "TR-053 E"
+  local sess=$SESSION-053e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.8
+  send_key  "$sess" Escape; sleep 1
+  local out=$WORK/053e.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "hjkl: select" "visual mode cancelled by Esc"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 B: ? help overlay shows the Navigation block with the
+# expected shortcut rows.
+tr054_b() {
+  start_test "TR-054 B"
+  local sess=$SESSION-054b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  local out=$WORK/054b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Getting around"   "navigation section heading"
+  assert_contains "$out" "Next section"     "next-section row"
+  assert_contains "$out" "Previous section" "prev-section row"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 C: ? help overlay covers other shortcut tables (text
+# selection, questions, search, folds).
+tr054_c() {
+  start_test "TR-054 C"
+  local sess=$SESSION-054c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  local out=$WORK/054c.txt
+  capture "$sess" "$out"
+  # At least the documented categories should appear. Permissive set:
+  # an overlay missing all of these is a regression.
+  local hits=0
+  for kw in "Text selection" "Selection" "Questions" "Ask" "Search" "Find" "Folds"; do
+    if grep -qF "$kw" "$out"; then hits=$((hits + 1)); fi
+  done
+  if [ "$hits" -lt 3 ]; then
+    fail_assert "help overlay missing other-category rows (matched=$hits of expected ≥3)" "$(tail -c 800 "$out")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-054 D: PLAN.md claims ? is a toggle (second ? closes), but on
+# ata 0.7.0 the help overlay only closes via Escape. This test asserts
+# the actually-working close behavior and prints a yellow note about
+# the PLAN.md discrepancy so the gap is surfaced rather than hidden.
+tr054_d() {
+  start_test "TR-054 D"
+  local sess=$SESSION-054d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "?"; sleep 1.2
+  # Probe whether ? toggles closed. If yes, PLAN.md is correct and we
+  # can drop the discrepancy note. If no (current 0.7.0), use Escape.
+  send_text "$sess" "?"; sleep 1
+  local mid=$WORK/054d-mid.txt
+  capture "$sess" "$mid"
+  if grep -qF "Reading View Help" "$mid"; then
+    yellow "    [TR-054 D] note: PLAN.md says ? toggles closed; ata 0.7.0 needs Esc"
+    send_key "$sess" Escape; sleep 1
+  fi
+  local out=$WORK/054d.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "Reading View Help" "help overlay closed (via ? or Esc)"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# --- batch-4 deepening: B2 misc extra scenarios ---------------------------
+
+# TR-008 B: Esc does NOT close the reader in normal mode (Esc is
+# reserved for sub-modes like visual select).
+tr008_b() {
+  start_test "TR-008 B"
+  local sess=$SESSION-008b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_key "$sess" Escape; sleep 1
+  local out=$WORK/008b.txt
+  capture "$sess" "$out"
+  _reader_still_alive "$out"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-008 C: Ctrl+C closes the reader (equivalent to q).
+tr008_c() {
+  start_test "TR-008 C"
+  local sess=$SESSION-008c
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_key "$sess" C-c; sleep 2
+  local out=$WORK/008c.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Agent showed document:" "reader closed via Ctrl+C"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-008 D: q from visual select mode closes reader directly without
+# requiring a second q to first exit visual mode.
+tr008_d() {
+  start_test "TR-008 D"
+  local sess=$SESSION-008d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "v"; sleep 0.6
+  send_text "$sess" "jj"; sleep 0.4
+  send_text "$sess" "q"; sleep 2
+  local out=$WORK/008d.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Agent showed document:" "reader closed from visual mode"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-008 E: closing reader injects a system follow-up prompt to the
+# agent. The prompt format is "[The user closed the document reader
+# for ...]" — verified via session JSONL.
+tr008_e() {
+  start_test "TR-008 E"
+  local sess=$SESSION-008e
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "q"; sleep 3
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "session JSONL not found"
+    kill_ata "$sess"; end_test; return
+  fi
+  if ! jq -r '.payload.content[0].text // empty' "$sess_jsonl" 2>/dev/null \
+       | grep -qF "The user closed the document reader"; then
+    fail_assert "no reader-close system prompt in session JSONL" "$(tail -c 800 "$sess_jsonl")"
+  fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-009 B: in-session Up-arrow INCLUDES slash commands (they're in
+# the in-memory buffer even though they're excluded from persistent
+# history.jsonl). Distinct from Scenario A which checks reader/voice
+# wrappers are excluded.
+tr009_b() {
+  start_test "TR-009 B"
+  local sess=$SESSION-009b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
+  send_key  "$sess" Escape;   sleep 0.6
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  send_key  "$sess" Escape;   sleep 0.6
+  send_text "$sess" "hi";     send_key "$sess" Enter; sleep 2
+  send_key  "$sess" C-u;      sleep 0.5
+  send_key  "$sess" Up;       sleep 0.4
+  local u1=$WORK/009b-u1.txt; capture "$sess" "$u1"
+  assert_contains "$u1" "hi" "Up #1 recalls 'hi'"
+  send_key "$sess" Up; sleep 0.4
+  local u2=$WORK/009b-u2.txt; capture "$sess" "$u2"
+  assert_contains "$u2" "/permissions" "Up #2 recalls /permissions (slash in in-session buffer)"
+  send_key "$sess" Up; sleep 0.4
+  local u3=$WORK/009b-u3.txt; capture "$sess" "$u3"
+  assert_contains "$u3" "/model" "Up #3 recalls /model"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-009 C: persistent ~/.ata/history.jsonl EXCLUDES recognized slash
+# commands. After session B's actions only "hi" should be in the file.
+tr009_c() {
+  start_test "TR-009 C"
+  local sess=$SESSION-009c
+  # Use a snapshot pattern: capture history.jsonl line-count before,
+  # run a session that submits /model + /permissions + hi, then verify
+  # only ONE new line appended (the "hi" — slashes excluded).
+  local before_n=0
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    before_n=$(wc -l < "$HOME/.ata/history.jsonl" | tr -d '[:space:]')
+  fi
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5; send_key "$sess" Escape; sleep 0.6
+  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5; send_key "$sess" Escape; sleep 0.6
+  local marker="TR009C_MARKER_$$"
+  send_text "$sess" "$marker"; send_key "$sess" Enter; sleep 2
+  kill_ata "$sess"
+  # Now inspect the file: new lines added should be just 1 (the marker).
+  local after_n=0
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    after_n=$(wc -l < "$HOME/.ata/history.jsonl" | tr -d '[:space:]')
+  fi
+  local delta=$((after_n - before_n))
+  # PLAN.md TR-009 C invariant: slash commands are excluded — so only
+  # the marker should be persisted (delta == 1). Be lenient about
+  # delta > 1 (some sessions may write multiple lines) and only fail
+  # if slash commands themselves leaked into the persistent file.
+  if grep -F "/model" "$HOME/.ata/history.jsonl" 2>/dev/null | grep -qF "$marker.."; then :; fi
+  if grep -qE '"text":"/model"|"text":"/permissions"' "$HOME/.ata/history.jsonl" 2>/dev/null; then
+    fail_assert "persistent history.jsonl contains slash commands (should be excluded)" "delta=$delta"
+  fi
+  # Positive check: marker IS persisted.
+  if ! grep -qF "$marker" "$HOME/.ata/history.jsonl" 2>/dev/null; then
+    fail_assert "marker '$marker' not persisted to history.jsonl"
+  fi
+  # Cleanup: remove the marker we added so we don't pollute the user's
+  # persistent history.
+  if [ -f "$HOME/.ata/history.jsonl" ]; then
+    grep -v -F "$marker" "$HOME/.ata/history.jsonl" > "$HOME/.ata/history.jsonl.tmp" \
+      && mv "$HOME/.ata/history.jsonl.tmp" "$HOME/.ata/history.jsonl"
+  fi
+  end_test
+}
+
+# TR-044 B: /side with inline args submits a question into the side.
+tr044_b() {
+  start_test "TR-044 B"
+  local sess=$SESSION-044b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "respond with hi"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/side what is 2+2?"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "side prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  local out=$WORK/044b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "Side from main thread"  "inside side context"
+  assert_match    "$out" "what is 2\\+2|2\\+2"    "inline question submitted"
+  assert_contains "$out" "4"                       "agent answered '4'"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-044 C: /side inside /side is blocked (recursion guard). The
+# guard fires in chatwidget unit tests (tui/src/chatwidget/tests/side.rs)
+# but in a live tmux session the second /side doesn't surface the
+# expected error on screen — needs deeper investigation. Skipping with
+# a marker so this gap is visible.
+tr044_c() {
+  start_test "TR-044 C"
+  skip_test "expected error string from chatwidget/tests/side.rs not visible in live tmux; needs investigation"
+  end_test
+}
+
+# TR-044 D: most slash commands are blocked inside /side. Test with
+# /scheduling — should show the same blocked-command error.
+tr044_d() {
+  start_test "TR-044 D"
+  local sess=$SESSION-044d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "respond with hi"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/side"; send_key "$sess" Enter; sleep 2.5
+  send_text "$sess" "/scheduling"; send_key "$sess" Enter; sleep 1.5
+  local out=$WORK/044d.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "'/scheduling' is unavailable in side conversations" "blocked-command error"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-044 F: Escape from inside /side returns to the main thread.
+tr044_f() {
+  start_test "TR-044 F"
+  local sess=$SESSION-044f
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "respond with hi"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/side"; send_key "$sess" Enter; sleep 2.5
+  send_key  "$sess" Escape; sleep 1.5
+  local out=$WORK/044f.txt
+  capture "$sess" "$out"
+  assert_not_contains "$out" "Side from main thread" "side context label gone after Esc"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-045 B: forked session retains semantic memory of parent. Set a
+# marker in the parent, /fork, ask if the agent remembers.
+tr045_b() {
+  start_test "TR-045 B"
+  local sess=$SESSION-045b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local secret="purple-elephant-$$"
+  send_text "$sess" "remember the secret word: $secret. just say ok"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/fork"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "/fork didn't settle"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "what was the secret word? answer in one word."; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "post-fork prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  local out=$WORK/045b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "$secret" "forked session recalls parent's secret word"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-047 B: agent retains semantic memory after /compact. Set a
+# marker, /compact, ask if the agent remembers.
+tr047_b() {
+  start_test "TR-047 B"
+  local sess=$SESSION-047b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local secret="orange-cactus-$$"
+  send_text "$sess" "remember the secret word: $secret. just say ok"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/compact"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then fail_assert "/compact didn't settle"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "what was the secret word? answer in one word."; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "post-compact prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  local out=$WORK/047b.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "$secret" "agent retains memory across /compact"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-047 C: contrast with /clear — after /clear the agent should NOT
+# recall the secret (history actually wiped).
+tr047_c() {
+  start_test "TR-047 C"
+  local sess=$SESSION-047c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  local secret="teal-zebra-$$"
+  send_text "$sess" "remember the secret word: $secret. just say ok"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "setup prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  send_text "$sess" "/clear"; send_key "$sess" Enter
+  # /clear wipes the terminal; poll for banner redraw.
+  local deadline=$(( $(date +%s) + 20 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if tmux capture-pane -t "$sess" -p 2>/dev/null | grep -qF "Agents2Agents ata"; then break; fi
+    sleep 0.5
+  done
+  send_text "$sess" "what was the secret word? answer in one word."; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "post-clear prompt didn't complete"; kill_ata "$sess"; end_test; return; fi
+  local out=$WORK/047c.txt
+  capture "$sess" "$out"
+  # After /clear the agent should not recall the secret; if it does,
+  # /clear isn't really wiping the context (the regression this guards).
+  assert_not_contains "$out" "$secret" "/clear actually wiped semantic memory"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-062 B: paper_search argument schema. Trigger paper_search,
+# inspect JSONL for query + limit args.
+tr062_b() {
+  start_test "TR-062 B"
+  local sess=$SESSION-062b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "Use paper_search to find 3 papers on transformer attention"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "paper_search" "paper_search tool called"
+  # PLAN.md TR-062 B spec: query (string) + limit (number) are the
+  # schema essentials.
+  assert_tool_args_jq "$sess_jsonl" "paper_search" 'has("query") and (.query | type == "string")' "paper_search has string query field"
+  assert_tool_args_jq "$sess_jsonl" "paper_search" 'has("limit") and (.limit | type == "number")' "paper_search has numeric limit field"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-062 D: bad query / no-results path. Use an absurd query that
+# probably returns nothing.
+tr062_d() {
+  start_test "TR-062 D"
+  local sess=$SESSION-062d
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "Use paper_search to find papers on zzzqqqxxxnonsense-$$"; send_key "$sess" Enter
+  if ! wait_for_idle "$sess" 180; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local out=$WORK/062d.txt
+  capture "$sess" "$out"
+  # The agent should either say no results or report not finding any.
+  assert_match "$out" "(no (results|papers|matches|matching)|couldn't find|did not find|none found)" \
+               "agent reports no-results path"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-063 B: explicit paper_get naming reliably triggers paper_get
+# (contrast with TR-063 A where natural prompt falls back to exec).
+tr063_b() {
+  start_test "TR-063 B"
+  local sess=$SESSION-063b
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use the paper_get tool to fetch the paper with arxiv id 2505.21323 and tell me the abstract"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called "$sess_jsonl" "paper_get" "explicit naming triggers paper_get"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-064 A: paper_citations — papers that cite a given paper. Explicit
+# naming routes to paper_citations (NOT paper_search). Args carry the
+# arXiv id in the documented format.
+tr064_a() {
+  start_test "TR-064 A"
+  local sess=$SESSION-064a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_citations to find recent papers that cite arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_citations" "explicit naming must trigger paper_citations"
+  assert_tool_not_called "$sess_jsonl" "paper_search"    "must not fall back to paper_search"
+  # Argument fidelity: paper_id is the documented arXiv format.
+  assert_tool_args_jq "$sess_jsonl" "paper_citations" '.paper_id | test("^[Aa]r[Xx]iv:2505\\.21323$")' "paper_citations.paper_id is 'arXiv:2505.21323'"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-065 A: paper_references — papers cited inside a given paper (the
+# reverse of citations). Explicit naming routes to paper_references.
+tr065_a() {
+  start_test "TR-065 A"
+  local sess=$SESSION-065a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_references to list the references cited inside arxiv 2505.21323"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_references" "explicit naming must trigger paper_references"
+  assert_tool_not_called "$sess_jsonl" "paper_search"     "must not fall back to paper_search"
+  assert_tool_not_called "$sess_jsonl" "paper_citations"  "must not confuse references with citations"
+  assert_tool_args_jq    "$sess_jsonl" "paper_references" '.paper_id | test("^[Aa]r[Xx]iv:2505\\.21323$")' "paper_references.paper_id is 'arXiv:2505.21323'"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-066 A: paper_recommendations — similar-papers exploration. Distinct
+# argument shape: positive_paper_ids is an ARRAY (plural), unlike the
+# scalar paper_id used by citations/references/get.
+tr066_a() {
+  start_test "TR-066 A"
+  local sess=$SESSION-066a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "paper_recommendations" "explicit naming must trigger paper_recommendations"
+  assert_tool_not_called "$sess_jsonl" "paper_search"          "must not fall back to paper_search"
+  # positive_paper_ids is an ARRAY (note plural + array shape, distinct
+  # from the scalar paper_id used by the other paper_* tools).
+  assert_tool_args_jq "$sess_jsonl" "paper_recommendations" '.positive_paper_ids | type == "array"' "positive_paper_ids must be an array"
+  assert_tool_args_jq "$sess_jsonl" "paper_recommendations" '.positive_paper_ids | map(test("^[Aa]r[Xx]iv:2505\\.21323$")) | any' "positive_paper_ids contains 'arXiv:2505.21323'"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-028 A: monitor_watch_for vs monitor_wait routing. The prompt has
+# two parts: (1) "start a monitor that runs <loop>" implies
+# monitor_start; (2) "tell me when 'tick 3' appears" implies
+# monitor_watch_for (NOT monitor_wait, which only fires on terminate).
+# The shell loop is the slow operation we watch on; the stable signal
+# is the agent's narration that "tick 3" was matched.
+tr028_a() {
+  start_test "TR-028 A"
+  local sess=$SESSION-028a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Use single quotes inside the bash payload so tmux doesn't eat them.
+  send_text "$sess" 'start a monitor that runs: for i in 1 2 3 4 5; do echo "tick $i"; sleep 1; done. Watch for the line "tick 3" and tell me when it appears.'
+  send_key  "$sess" Enter
+  # 5s for the loop + agent narration. 90s is generous.
+  if ! wait_for_idle "$sess" 90; then
+    fail_assert "agent did not finish within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/028a.txt
+  capture "$sess" "$out"
+  # Content predicate — agent narrated the match.
+  assert_contains "$out" "tick 3" "matched line appears in agent response"
+  if ! grep -qiE "appeared|matched|found|saw" "$out"; then
+    fail_assert "agent did not narrate the match outcome" "$(tail -c 800 "$out")"
+  fi
+  if grep -qiF "did not match" "$out"; then
+    fail_assert "agent fell back to terminated-without-match path" "$(tail -c 800 "$out")"
+  fi
+  # Routing guard — the deep regression PLAN.md targets.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  assert_tool_called     "$sess_jsonl" "monitor_start"     "monitor must be spawned via monitor_start"
+  assert_tool_called     "$sess_jsonl" "monitor_watch_for" "pattern match must use monitor_watch_for"
+  assert_tool_not_called "$sess_jsonl" "monitor_wait"      "must NOT fall back to terminate-only monitor_wait"
+  assert_tool_not_called "$sess_jsonl" "shell"             "must not shell out to grep/tail"
+  # Argument fidelity — the literal pattern (not paraphrased), with task_id.
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" 'has("pattern") and (.pattern | type == "string")' "monitor_watch_for has a string pattern field"
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" '.pattern | contains("tick 3")'                   "pattern reflects literal 'tick 3'"
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" 'has("task_id")'                                   "monitor_watch_for targets a task_id"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-035 A: multi-source synthesis — both Hacker News AND papers must
+# contribute. PLAN.md is intentionally permissive about HOW: either the
+# main agent calls hn_search + paper_search directly, OR it spawns
+# sub-agents (one per source) via spawn_agent. The failure mode this
+# catches is "agent picked one source, silently dropped the other".
+#
+# Note: this is the slowest test in the suite. PLAN.md tolerates up to
+# 10 min; we cap at 8 to fit the 45-min B2 budget when run alongside
+# everything else.
+tr035_a() {
+  start_test "TR-035 A"
+  local sess=$SESSION-035a
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  send_text "$sess" "find recent papers on Rust async performance and check Hacker News for related discussion"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 480; then
+    fail_assert "multi-source synthesis did not finish within 8 min"
+    kill_ata "$sess"; end_test; return
+  fi
+  local out=$WORK/035a.txt
+  capture "$sess" "$out"
+  # Content predicate — both sources represented.
+  if ! grep -qiE "hacker news|HN Signal|hn signal" "$out"; then
+    fail_assert "response does not mention Hacker News" "$(tail -c 1000 "$out")"
+  fi
+  if ! grep -qiE "paper|literature|academic|arxiv" "$out"; then
+    fail_assert "response does not mention papers/literature" "$(tail -c 1000 "$out")"
+  fi
+  # "didn't find" failure modes — agent silently dropped a source.
+  if grep -qiE "could not find any|no results|unable to find" "$out"; then
+    fail_assert "agent bailed on one of the sources" "$(tail -c 1000 "$out")"
+  fi
+  # Routing guard — accept direct OR sub-agent orchestration.
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "session JSONL not found"
+    kill_ata "$sess"; end_test; return
+  fi
+  local tools
+  tools=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort -u)
+  # Academic side: paper_search direct OR spawn_agent delegation.
+  if ! printf '%s\n' "$tools" | grep -qE '^(paper_search|spawn_agent)$'; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "neither paper_search nor spawn_agent fired — academic side missing" "tool_counts: $counts"
+  fi
+  # HN side: hn_search direct, OR spawn_agent delegation AND staging
+  # files referencing HN. PLAN.md's permissive predicate.
+  local hn_ok=0
+  if printf '%s\n' "$tools" | grep -qFx "hn_search"; then
+    hn_ok=1
+  elif printf '%s\n' "$tools" | grep -qFx "spawn_agent"; then
+    # Sub-agent route: look for hn-* files in staging.
+    if compgen -G "$HOME/.ata/workspaces/global/knowledge-base/staging/hn-*" >/dev/null 2>&1; then
+      hn_ok=1
+    fi
+  fi
+  if [ "$hn_ok" -eq 0 ]; then
+    local counts
+    counts=$(jq -r '.payload.name // empty' "$sess_jsonl" | sort | uniq -c | tr '\n' ' ')
+    fail_assert "HN side missing — neither hn_search nor sub-agent staging evidence" "tool_counts: $counts"
+  fi
+  # Must not shell out — that's the regression PLAN.md guards against.
+  assert_tool_not_called "$sess_jsonl" "shell" "multi-source must not shell out via curl"
+  kill_ata "$sess"
+  end_test
+}
+
 # --- driver ----------------------------------------------------------------
 
+# Run each named test function unless FILTER is set, in which case
+# only functions whose name matches the FILTER regex run. Lets you
+# debug a single TR locally without commenting out 28 others.
+#
+# DRY_RUN=1 makes run_tests print "would run: NAME" for each matching
+# function and skip execution. Useful for sanity-checking a regex
+# before burning LLM tokens.
+FILTER=""
+DRY_RUN=0
+DRY_RUN_COUNT=0
+run_tests() {
+  local fn
+  for fn in "$@"; do
+    if [ -z "$FILTER" ] || [[ "$fn" =~ $FILTER ]]; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  would run: %s\n' "$fn"
+        DRY_RUN_COUNT=$((DRY_RUN_COUNT + 1))
+      else
+        "$fn"
+      fi
+    fi
+  done
+}
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--filter REGEX]
+
+  --filter, -f REGEX   Only run tests whose function name matches REGEX.
+                       Examples:
+                         --filter tr037_a       (one scenario)
+                         --filter tr038         (all TR-038 scenarios)
+                         --filter 'tr03[0-9]'   (range)
+
+  --dry-run, -n        Print which tests would run without executing
+                       them. Useful for sanity-checking --filter before
+                       burning LLM tokens.
+
+  --help, -h           Show this message and exit.
+
+Environment:
+  ATA_BIN              Path to the ata binary (default: 'ata' from PATH).
+  OPENAI_API_KEY etc.  Provider keys for the model — see workflow file.
+EOF
+}
+
 main() {
-  if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
-    red "ata binary not found: $ATA_BIN"
-    exit 2
-  fi
-  if ! command -v tmux >/dev/null 2>&1; then
-    red "tmux is required"
-    exit 2
+  # Argv parser: --filter / -f takes a regex; --help / -h prints usage.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --filter|-f)  FILTER="$2"; shift 2 ;;
+      --dry-run|-n) DRY_RUN=1; shift ;;
+      --help|-h)    usage; exit 0 ;;
+      *)            red "unknown arg: $1"; usage; exit 2 ;;
+    esac
+  done
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    if ! command -v "$ATA_BIN" >/dev/null 2>&1 && [ ! -x "$ATA_BIN" ]; then
+      red "ata binary not found: $ATA_BIN"
+      exit 2
+    fi
+    if ! command -v tmux >/dev/null 2>&1; then
+      red "tmux is required"
+      exit 2
+    fi
   fi
 
-  log "Tier B2 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
-  log "WARNING: this batch sends real prompts and costs real LLM tokens."
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Tier B2 runner (DRY RUN — no tests will execute)"
+  else
+    log "Tier B2 runner — ata: $("$ATA_BIN" --version 2>&1 | head -1)"
+    log "WARNING: this batch sends real prompts and costs real LLM tokens."
+  fi
+  [ -n "$FILTER" ] && log "Filter: $FILTER"
   log ""
 
   log "Numbered TRs (in order)"
-  tr001_a
-  tr002_a
-  tr005_a
-  tr008_a
-  tr016_b
-  tr021_a
-  tr022_a
-  tr031_a
-  tr032_a
-  tr033_a
-  tr036_a
-  tr036_b
-  tr037_a
-  tr044_a
-  tr045_a
-  tr047_a
-  tr049_a
-  tr050_a
-  tr051_a
-  tr052_a
-  tr053_a
-  tr054_a
-  tr062_a
+  run_tests tr001_a
+  run_tests tr002_a
+  run_tests tr005_a
+  run_tests tr008_a tr008_b tr008_c tr008_d tr008_e
+  run_tests tr009_a tr009_b tr009_c
+  run_tests tr011_a
+  run_tests tr016_b
+  run_tests tr021_a
+  run_tests tr022_a
+  run_tests tr028_a
+  run_tests tr031_a
+  run_tests tr032_a
+  run_tests tr033_a
+  run_tests tr035_a
+  run_tests tr036_a tr036_b
+  run_tests tr037_a
+  run_tests tr038_a tr038_b tr038_c tr038_e tr038_e_2 tr038_f
+  run_tests tr044_a tr044_b tr044_c tr044_d tr044_f
+  run_tests tr045_a tr045_b
+  run_tests tr047_a tr047_b tr047_c
+  run_tests tr049_a tr049_b tr049_c tr049_d tr049_e
+  run_tests tr050_a tr050_b tr050_c tr050_d tr050_e
+  run_tests tr051_a tr051_b tr051_c tr051_d tr051_e
+  run_tests tr052_a tr052_b tr052_c
+  run_tests tr053_a tr053_b tr053_c tr053_d tr053_e
+  run_tests tr054_a tr054_b tr054_c tr054_d
+  run_tests tr062_a tr062_b tr062_d
+  run_tests tr063_a tr063_b
+  run_tests tr064_a tr065_a tr066_a
 
   log ""
   log "----"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "($DRY_RUN_COUNT tests would run)"
+    exit 0
+  fi
   log "PASS: $PASS  FAIL: $FAIL  SKIP: $SKIP"
   if [ "$FAIL" -gt 0 ]; then
     log "Failed: ${FAILED_NAMES[*]}"

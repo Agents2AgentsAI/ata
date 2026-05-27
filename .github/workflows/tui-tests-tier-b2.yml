@@ -5,8 +5,14 @@ name: tui-tests-tier-b2
 # workflow_dispatch — i.e. someone clicks "Run workflow" in the Actions
 # UI. It will NEVER auto-run on pull_request or push.
 #
-# Requires the OPENAI_API_KEY secret to be set on the repo (separately
-# per fork; secrets are not inherited).
+# Accepts ANY of these provider secrets (only one needs to be set):
+#   - OPENAI_API_KEY     → openai (gpt-5.3-codex)
+#   - ANTHROPIC_API_KEY  → anthropic (claude-sonnet-4-6)
+#   - GOOGLE_API_KEY     → gemini (gemini-3.1-pro-preview)
+#
+# Priority when more than one is set: OPENAI > ANTHROPIC > GEMINI.
+# Tests were authored against gpt-5.5, so routing predicates may vary
+# in reliability across providers.
 on:
   workflow_dispatch:
 
@@ -18,23 +24,41 @@ jobs:
   tier-b2:
     name: Tier B2 scenarios (TUI + real LLM)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 90 min is ~2x typical B2 runtime (~40-50 min for the full suite).
+    # The headroom keeps us safe against transient slowness without
+    # being so wide that genuine hangs go unnoticed. TR-035 alone can
+    # spend 8 min on a single multi-source synthesis prompt.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: codex-rs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Verify OPENAI_API_KEY is configured
+      - name: Verify at least one provider API key is configured
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          if [ -z "${OPENAI_API_KEY:-}" ]; then
-            echo "::error::OPENAI_API_KEY secret is not set on this repository."
-            echo "Add it at: Settings → Secrets and variables → Actions → New repository secret"
+          if [ -n "${OPENAI_API_KEY:-}" ]; then
+            echo "provider=openai"     >> "$GITHUB_ENV"
+            echo "model=gpt-5.3-codex" >> "$GITHUB_ENV"
+            echo "OPENAI_API_KEY is set (using openai)"
+          elif [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "provider=anthropic"        >> "$GITHUB_ENV"
+            echo "model=claude-sonnet-4-6"   >> "$GITHUB_ENV"
+            echo "ANTHROPIC_API_KEY is set (using anthropic)"
+          elif [ -n "${GOOGLE_API_KEY:-}" ]; then
+            echo "provider=gemini"                  >> "$GITHUB_ENV"
+            echo "model=gemini-3.1-pro-preview"     >> "$GITHUB_ENV"
+            echo "GOOGLE_API_KEY is set (using gemini)"
+          else
+            echo "::error::No provider secret set."
+            echo "Configure one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_API_KEY"
+            echo "Settings → Secrets and variables → Actions → New repository secret"
             exit 1
           fi
-          echo "OPENAI_API_KEY is configured (length: ${#OPENAI_API_KEY})"
 
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
 
@@ -52,8 +76,15 @@ jobs:
             tui-tests-tier-b1-${{ runner.os }}-
             tui-tests-tier-a-${{ runner.os }}-
 
-      - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux + xclip + Xvfb + espeak-ng
+        # xclip + Xvfb give us a working clipboard for TR-038 (/copy).
+        # espeak-ng is the Linux equivalent of macOS `say`, used by the
+        # local TTS backend so TR-052 doesn't need a real ElevenLabs key.
+        # Headless CI has no real X display, so we run xclip against a
+        # virtual one started before the tests run.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux xclip xvfb espeak-ng
 
       - name: Build ata
         run: cargo build -p codex-cli --bin ata
@@ -61,22 +92,49 @@ jobs:
       - name: Bypass login + trust prompts, install API key
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           mkdir -p ~/.ata
-          # auth.json with the real OPENAI_API_KEY so the model layer
-          # can actually authenticate.
-          jq -n --arg k "$OPENAI_API_KEY" '{"OPENAI_API_KEY": $k}' > ~/.ata/auth.json
-          chmod 600 ~/.ata/auth.json
+          # auth.json is only used for the openai key. anthropic/gemini
+          # are read from env vars at runtime (see core/src/auth/providers/env.rs).
+          if [ "$provider" = "openai" ]; then
+            jq -n --arg k "$OPENAI_API_KEY" '{"OPENAI_API_KEY": $k}' > ~/.ata/auth.json
+            chmod 600 ~/.ata/auth.json
+          else
+            # Stub auth.json so the login screen doesn't pop on non-openai
+            # providers (ata still expects the file to exist).
+            echo '{}' > ~/.ata/auth.json
+            chmod 600 ~/.ata/auth.json
+          fi
           cat > ~/.ata/config.toml <<EOF
+          model = "$model"
+          model_provider = "$provider"
+
           [projects."${{ github.workspace }}"]
           trust_level = "trusted"
 
           [projects."${{ github.workspace }}/codex-rs"]
           trust_level = "trusted"
+
+          # Use the local TTS backend (espeak-ng on Linux) so TR-052
+          # doesn't need an ElevenLabs API key.
+          [voice_mode]
+          tts_backend = "say"
           EOF
+          echo "config.toml:"
+          cat ~/.ata/config.toml
+
+      - name: Start virtual X display (for xclip)
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 1
 
       - name: Run Tier B2 scenarios
         env:
           ATA_BIN: ${{ github.workspace }}/codex-rs/target/debug/ata
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DISPLAY: ":99"
         run: ./tests/tui/run-tier-b2.sh
