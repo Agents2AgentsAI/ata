@@ -24,15 +24,12 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-
-use codex_config::types::AuthCredentialsStoreMode;
 
 use codex_api::ApiError;
 use codex_api::AuthProvider;
@@ -108,11 +105,13 @@ use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 
+use crate::attestation::AttestationContext;
+use crate::attestation::AttestationProvider;
+use crate::attestation::X_OAI_ATTESTATION_HEADER;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::feedback_tags;
-use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::util::emit_feedback_auth_recovery_tags;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
@@ -125,11 +124,6 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
-
-mod anthropic;
-pub(crate) mod copilot;
-mod gemini;
-mod provider_streaming;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
 use codex_response_debug_context::extract_response_debug_context;
@@ -147,9 +141,14 @@ pub const X_OPENAI_MEMGEN_REQUEST_HEADER: &str = "x-openai-memgen-request";
 pub const X_OPENAI_SUBAGENT_HEADER: &str = "x-openai-subagent";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
+const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
+    "x-codex-ws-stream-request-start-ms";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
+// `/responses/compact` is unary, so the timeout covers the full response rather than one idle
+// period between stream events.
+const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
@@ -166,7 +165,7 @@ pub(crate) struct CompactConversationRequestSettings {
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
-pub(super) struct ModelClientState {
+struct ModelClientState {
     session_id: SessionId,
     thread_id: ThreadId,
     window_generation: AtomicU64,
@@ -178,8 +177,8 @@ pub(super) struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
-    codex_home: PathBuf,
-    cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    include_attestation: bool,
+    attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -236,7 +235,6 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
-    #[allow(dead_code)]
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
@@ -252,7 +250,7 @@ pub struct ModelClientSession {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LastResponse {
+struct LastResponse {
     response_id: String,
     items_added: Vec<ResponseItem>,
 }
@@ -262,6 +260,7 @@ struct WebsocketSession {
     connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
+    last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
 }
 
@@ -325,8 +324,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
-        codex_home: PathBuf,
-        cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
@@ -335,6 +333,7 @@ impl ModelClient {
             .is_some_and(|manager| manager.codex_api_key_env_enabled());
         let auth_env_telemetry =
             collect_auth_env_telemetry(model_provider.info(), codex_api_key_env_enabled);
+        let include_attestation = model_provider.supports_attestation();
         Self {
             state: Arc::new(ModelClientState {
                 session_id,
@@ -348,8 +347,8 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
-                codex_home,
-                cli_auth_credentials_store_mode,
+                include_attestation,
+                attestation_provider,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -370,13 +369,6 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
-    }
-
-    /// Visible to client/* sub-modules so they can read provider info,
-    /// codex_home, and credential-store mode without the public surface
-    /// growing.
-    pub(super) fn state(&self) -> &Arc<ModelClientState> {
-        &self.state
     }
 
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
@@ -485,9 +477,6 @@ impl ModelClient {
             text,
             ..
         } = request;
-        let client =
-            ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
-                .with_telemetry(Some(request_telemetry));
         let payload = ApiCompactionInput {
             model: &model,
             input: &input,
@@ -514,9 +503,19 @@ impl ModelClient {
             Some(self.state.session_id.to_string()),
             Some(self.state.thread_id.to_string()),
         ));
+        if let Some(header_value) = self.generate_attestation_header_for().await {
+            extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+        }
+        let compact_request_timeout = client_setup
+            .api_provider
+            .stream_idle_timeout
+            .saturating_mul(COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER);
+        let client =
+            ApiCompactClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                .with_telemetry(Some(request_telemetry));
         let trace_attempt = compaction_trace.start_attempt(&payload);
         let result = client
-            .compact_input(&payload, extra_headers)
+            .compact_input(&payload, extra_headers, compact_request_timeout)
             .await
             .map_err(map_api_error);
         trace_attempt.record_result(result.as_deref());
@@ -527,11 +526,14 @@ impl ModelClient {
         &self,
         sdp: String,
         session_config: ApiRealtimeSessionConfig,
-        extra_headers: ApiHeaderMap,
+        mut extra_headers: ApiHeaderMap,
     ) -> Result<RealtimeWebrtcCallStart> {
         // Create the media call over HTTP first, then retain matching auth so realtime can attach
         // the server-side control WebSocket to the call id from that HTTP response.
         let client_setup = self.current_client_setup().await?;
+        if let Some(header_value) = self.generate_attestation_header_for().await {
+            extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+        }
         let mut sideband_headers = extra_headers.clone();
         sideband_headers.extend(sideband_websocket_auth_headers(
             client_setup.api_auth.as_ref(),
@@ -662,6 +664,20 @@ impl ModelClient {
         client_metadata
     }
 
+    async fn generate_attestation_header_for(&self) -> Option<HeaderValue> {
+        if !self.state.include_attestation {
+            return None;
+        }
+
+        self.state
+            .attestation_provider
+            .as_ref()?
+            .header_for_request(AttestationContext {
+                thread_id: self.state.thread_id,
+            })
+            .await
+    }
+
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
     fn build_request_telemetry(
         session_telemetry: &SessionTelemetry,
@@ -698,7 +714,7 @@ impl ModelClient {
         }
     }
 
-    pub(super) fn build_responses_request(
+    fn build_responses_request(
         &self,
         provider: &codex_api::Provider,
         prompt: &Prompt,
@@ -733,6 +749,7 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.state.thread_id.to_string());
+        let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),
@@ -761,7 +778,6 @@ impl ModelClient {
     pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
-            || (*CODEX_RS_SSE_FIXTURE).is_some()
         {
             return false;
         }
@@ -774,11 +790,6 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        // Copilot's per-request bearer-token resolution is handled by
-        // `client/copilot::stream_copilot_chat_completions`, which patches a
-        // clone of the provider info before constructing api_provider/api_auth.
-        // Keeping this path provider-agnostic preserves the v0.129.0
-        // SharedModelProvider abstraction.
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
         let api_auth = self.state.provider.api_auth().await?;
@@ -804,7 +815,9 @@ impl ModelClient {
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
-        let headers = self.build_websocket_headers(turn_state.as_ref(), turn_metadata_header);
+        let headers = self
+            .build_websocket_headers(turn_state.as_ref(), turn_metadata_header)
+            .await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
             auth_context,
@@ -881,7 +894,7 @@ impl ModelClient {
     ///
     /// Callers should pass the current turn-state lock when available so sticky-routing state is
     /// replayed on reconnect within the same turn.
-    fn build_websocket_headers(
+    async fn build_websocket_headers(
         &self,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
@@ -899,6 +912,9 @@ impl ModelClient {
         }
         headers.extend(build_session_headers(Some(session_id), Some(thread_id)));
         headers.extend(self.build_responses_identity_headers());
+        if let Some(header_value) = self.generate_attestation_header_for().await {
+            headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+        }
         headers.insert(
             OPENAI_BETA_HEADER,
             HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
@@ -922,16 +938,11 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
-    /// Sub-modules in `client/*` use this to read provider info, codex_home,
-    /// and credential-store mode without exposing `ModelClient`'s state field.
-    pub(super) fn client(&self) -> &ModelClient {
-        &self.client
-    }
-
-    pub(crate) fn reset_websocket_session(&mut self) {
+    fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
+        self.websocket_session.last_response_from_untraced_warmup = false;
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
     }
@@ -953,7 +964,7 @@ impl ModelClientSession {
     ///
     /// Keeping option construction in one place ensures request-scoped headers are consistent
     /// regardless of transport choice.
-    pub(super) fn build_responses_options(
+    async fn build_responses_options(
         &self,
         turn_metadata_header: Option<&str>,
         compression: Compression,
@@ -972,6 +983,9 @@ impl ModelClientSession {
                     turn_metadata_header.as_ref(),
                 );
                 headers.extend(self.client.build_responses_identity_headers());
+                if let Some(header_value) = self.client.generate_attestation_header_for().await {
+                    headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
+                }
                 headers
             },
             compression,
@@ -1032,28 +1046,33 @@ impl ModelClientSession {
         &mut self,
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
-    ) -> ResponsesWsRequest {
+    ) -> (ResponsesWsRequest, bool) {
         let Some(last_response) = self.get_last_response() else {
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return (ResponsesWsRequest::ResponseCreate(payload), false);
         };
+        let previous_response_id_from_untraced_warmup =
+            self.websocket_session.last_response_from_untraced_warmup;
         let Some(incremental_items) = self.get_incremental_items(
             request,
             Some(&last_response),
             /*allow_empty_delta*/ true,
         ) else {
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return (ResponsesWsRequest::ResponseCreate(payload), false);
         };
 
         if last_response.response_id.is_empty() {
             trace!("incremental request failed, no previous response id");
-            return ResponsesWsRequest::ResponseCreate(payload);
+            return (ResponsesWsRequest::ResponseCreate(payload), false);
         }
 
-        ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
-            previous_response_id: Some(last_response.response_id),
-            input: incremental_items,
-            ..payload
-        })
+        (
+            ResponsesWsRequest::ResponseCreate(ResponseCreateWsRequest {
+                previous_response_id: Some(last_response.response_id),
+                input: incremental_items,
+                ..payload
+            }),
+            previous_response_id_from_untraced_warmup,
+        )
     }
 
     /// Opportunistically preconnects a websocket for this turn-scoped client session.
@@ -1132,6 +1151,7 @@ impl ModelClientSession {
         if needs_new {
             self.websocket_session.last_request = None;
             self.websocket_session.last_response_rx = None;
+            self.websocket_session.last_response_from_untraced_warmup = false;
             let turn_state = options
                 .turn_state
                 .clone()
@@ -1186,8 +1206,7 @@ impl ModelClientSession {
 
     /// Streams a turn via the OpenAI Responses API.
     ///
-    /// Handles SSE fixtures, reasoning summaries, verbosity, and the
-    /// `text` controls used for output schemas.
+    /// Handles reasoning summaries, verbosity, and the `text` controls used for output schemas.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
         name = "model_client.stream_responses_api",
@@ -1213,21 +1232,6 @@ impl ModelClientSession {
         turn_metadata_header: Option<&str>,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
-        if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
-            warn!(path, "Streaming from fixture");
-            let stream = codex_api::stream_from_fixture(
-                path,
-                self.client.state.provider.info().stream_idle_timeout(),
-            )
-            .map_err(map_api_error)?;
-            let (stream, _last_request_rx) = map_response_stream(
-                stream,
-                session_telemetry.clone(),
-                InferenceTraceAttempt::disabled(),
-            );
-            return Ok(stream);
-        }
-
         let auth_manager = self.client.state.provider.auth_manager();
         let mut auth_recovery = auth_manager
             .as_ref()
@@ -1248,7 +1252,9 @@ impl ModelClientSession {
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
-            let options = self.build_responses_options(turn_metadata_header, compression);
+            let mut options = self
+                .build_responses_options(turn_metadata_header, compression)
+                .await;
 
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
@@ -1259,6 +1265,7 @@ impl ModelClientSession {
                 service_tier.clone(),
             )?;
             let inference_trace_attempt = inference_trace.start_attempt();
+            inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
             let client = ApiResponsesClient::new(
                 transport,
@@ -1355,7 +1362,9 @@ impl ModelClientSession {
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
-            let options = self.build_responses_options(turn_metadata_header, compression);
+            let options = self
+                .build_responses_options(turn_metadata_header, compression)
+                .await;
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
@@ -1411,8 +1420,8 @@ impl ModelClientSession {
                 Err(err) => return Err(map_api_error(err)),
             }
 
-            let ws_request = self.prepare_websocket_request(ws_payload, &request);
-            self.websocket_session.last_request = Some(request);
+            let (mut ws_request, previous_response_id_from_untraced_warmup) =
+                self.prepare_websocket_request(ws_payload, &request);
             let inference_trace_attempt = if warmup {
                 // Prewarm sends `generate=false`; it is connection setup, not a
                 // model inference attempt that should appear in rollout traces.
@@ -1420,7 +1429,17 @@ impl ModelClientSession {
             } else {
                 inference_trace.start_attempt()
             };
-            inference_trace_attempt.record_started(&ws_request);
+            stamp_ws_stream_request_start_ms(&mut ws_request);
+            if previous_response_id_from_untraced_warmup {
+                // The transport can reuse an untraced warmup response id and omit the
+                // already-sent input, but rollout replay needs the logical model-visible
+                // request rather than the compressed websocket delta.
+                inference_trace_attempt.record_started(&request);
+            } else {
+                inference_trace_attempt.record_started(&ws_request);
+            }
+            self.websocket_session.last_request = Some(request);
+            self.websocket_session.last_response_from_untraced_warmup = warmup;
             let websocket_connection =
                 self.websocket_session.connection.as_ref().ok_or_else(|| {
                     map_api_error(ApiError::Stream(
@@ -1598,40 +1617,6 @@ impl ModelClientSession {
                 )
                 .await
             }
-            WireApi::AnthropicMessages => {
-                anthropic::stream_anthropic_api(self, prompt, model_info, effort, summary).await
-            }
-            WireApi::GeminiGenerate => {
-                gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
-            }
-            WireApi::CopilotInline => {
-                // GitHub Copilot exposes most models via Chat Completions, but
-                // newer reasoning-tier models (`gpt-N` for N>=5, except
-                // `gpt-5-mini`) only work via the Responses API — Chat
-                // Completions returns `unsupported_api_for_model` for them.
-                // Mirrors opencode's per-model dispatch.
-                if copilot::requires_responses_api(&model_info.slug) {
-                    copilot::stream_copilot_responses_api(
-                        self,
-                        prompt,
-                        model_info,
-                        effort,
-                        summary,
-                        service_tier,
-                        turn_metadata_header,
-                        session_telemetry,
-                    )
-                    .await
-                } else {
-                    copilot::stream_copilot_chat_completions(
-                        self,
-                        prompt,
-                        model_info,
-                        session_telemetry,
-                    )
-                    .await
-                }
-            }
         }
     }
 
@@ -1660,6 +1645,23 @@ impl ModelClientSession {
 /// metadata with the same sanitization path used when constructing headers.
 fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<HeaderValue> {
     turn_metadata_header.and_then(|value| HeaderValue::from_str(value).ok())
+}
+
+/// Stamp a ResponsesWsRequest with the current time.
+///
+/// Meant to be called just before sending the request over the socket, to capture realistic
+/// transport timing.
+fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
+    let ResponsesWsRequest::ResponseCreate(payload) = request else {
+        return;
+    };
+    payload
+        .client_metadata
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY.to_string(),
+            crate::turn_timing::now_unix_timestamp_ms().to_string(),
+        );
 }
 
 /// Builds the extra headers attached to Responses API requests.
@@ -1733,7 +1735,7 @@ fn parent_thread_id_header_value(session_source: &SessionSource) -> Option<Strin
 const RESPONSE_STREAM_CHANNEL_CAPACITY: usize = 1600;
 const STREAM_DROPPED_REASON: &str = "response stream dropped before provider terminal event";
 
-pub(super) fn map_response_stream(
+fn map_response_stream(
     api_stream: codex_api::ResponseStream,
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,

@@ -1,3 +1,4 @@
+use codex_feedback::DOCTOR_REPORT_ATTACHMENT_FILENAME;
 use codex_feedback::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
@@ -27,7 +28,9 @@ use super::textarea::TextArea;
 use super::textarea::TextAreaState;
 
 const BASE_CLI_BUG_ISSUE_URL: &str =
-    "https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml";
+    "https://github.com/openai/codex/issues/new?template=3-cli.yml";
+/// Internal routing link for employee feedback follow-ups. This must not be shown to external users.
+const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 
 /// The target audience for feedback follow-up instructions.
 ///
@@ -361,17 +364,31 @@ pub(crate) fn feedback_success_cell(
 fn issue_url_for_category(
     category: FeedbackCategory,
     thread_id: &str,
-    _feedback_audience: FeedbackAudience,
+    feedback_audience: FeedbackAudience,
 ) -> Option<String> {
+    // Only certain categories provide a follow-up link. We intentionally keep
+    // the external GitHub behavior identical while routing internal users to
+    // the internal go link.
     match category {
         FeedbackCategory::Bug
         | FeedbackCategory::BadResult
         | FeedbackCategory::SafetyCheck
-        | FeedbackCategory::Other => Some(format!(
-            "{BASE_CLI_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}"
-        )),
+        | FeedbackCategory::Other => Some(match feedback_audience {
+            FeedbackAudience::OpenAiEmployee => slack_feedback_url(thread_id),
+            FeedbackAudience::External => {
+                format!("{BASE_CLI_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20{thread_id}")
+            }
+        }),
         FeedbackCategory::GoodResult => None,
     }
+}
+
+/// Build the internal follow-up URL.
+///
+/// We accept a `thread_id` so the call site stays symmetric with the external
+/// path, but we currently point to a fixed channel without prefilling text.
+fn slack_feedback_url(_thread_id: &str) -> String {
+    CODEX_FEEDBACK_INTERNAL_URL.to_string()
 }
 
 // Build the selection popup params for feedback categories.
@@ -486,6 +503,11 @@ pub(crate) fn feedback_upload_consent_params(
         Line::from("").into(),
         Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
+        Line::from(vec![
+            "  • ".into(),
+            DOCTOR_REPORT_ATTACHMENT_FILENAME.into(),
+        ])
+        .into(),
     ];
     if let Some(path) = rollout_path.as_deref()
         && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
@@ -522,7 +544,7 @@ pub(crate) fn feedback_upload_consent_params(
             super::SelectionItem {
                 name: "Yes".to_string(),
                 description: Some(
-                    "Share the current Codex session logs with the team for troubleshooting."
+                    "Share the current Codex session logs and diagnostics with the team for troubleshooting."
                         .to_string(),
                 ),
                 actions: vec![yes_action],
@@ -556,7 +578,18 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         view.render(area, &mut buf);
+        render_buffer(area, &buf)
+    }
 
+    fn render_renderable(renderable: &dyn Renderable, width: u16) -> String {
+        let height = renderable.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        renderable.render(area, &mut buf);
+        render_buffer(area, &buf)
+    }
+
+    fn render_buffer(area: Rect, buf: &Buffer) -> String {
         let mut lines: Vec<String> = (0..area.height)
             .map(|row| {
                 let mut line = String::new();
@@ -655,6 +688,23 @@ mod tests {
     }
 
     #[test]
+    fn feedback_upload_consent_lists_doctor_report() {
+        let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let params = feedback_upload_consent_params(
+            tx,
+            FeedbackCategory::Bug,
+            Some(std::path::PathBuf::from("rollout.jsonl")),
+            Some("auto-review-rollout.jsonl".to_string()),
+            &FeedbackDiagnostics::default(),
+        );
+
+        let rendered = render_renderable(params.header.as_ref(), /*width*/ 60);
+
+        insta::assert_snapshot!("feedback_upload_consent_lists_doctor_report", rendered);
+    }
+
+    #[test]
     fn submit_feedback_emits_submit_event_with_trimmed_note() {
         let (tx_raw, mut rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -736,29 +786,29 @@ mod tests {
         let bug_url = issue_url_for_category(
             FeedbackCategory::Bug,
             "thread-1",
-            FeedbackAudience::External,
+            FeedbackAudience::OpenAiEmployee,
         );
-        let expected_url = format!("{BASE_CLI_BUG_ISSUE_URL}&steps=Uploaded%20thread:%20thread-1");
-        assert_eq!(bug_url.as_deref(), Some(expected_url.as_str()));
+        let expected_slack_url = "http://go/codex-feedback-internal".to_string();
+        assert_eq!(bug_url.as_deref(), Some(expected_slack_url.as_str()));
 
         let bad_result_url = issue_url_for_category(
             FeedbackCategory::BadResult,
             "thread-2",
-            FeedbackAudience::External,
+            FeedbackAudience::OpenAiEmployee,
         );
         assert!(bad_result_url.is_some());
 
         let other_url = issue_url_for_category(
             FeedbackCategory::Other,
             "thread-3",
-            FeedbackAudience::External,
+            FeedbackAudience::OpenAiEmployee,
         );
         assert!(other_url.is_some());
 
         let safety_check_url = issue_url_for_category(
             FeedbackCategory::SafetyCheck,
             "thread-4",
-            FeedbackAudience::External,
+            FeedbackAudience::OpenAiEmployee,
         );
         assert!(safety_check_url.is_some());
 
@@ -766,13 +816,13 @@ mod tests {
             issue_url_for_category(
                 FeedbackCategory::GoodResult,
                 "t",
-                FeedbackAudience::External
+                FeedbackAudience::OpenAiEmployee
             )
             .is_none()
         );
         let bug_url_non_employee =
             issue_url_for_category(FeedbackCategory::Bug, "t", FeedbackAudience::External);
-        let expected_external_url = "https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:%20t";
+        let expected_external_url = "https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20t";
         assert_eq!(bug_url_non_employee.as_deref(), Some(expected_external_url));
     }
 
@@ -789,7 +839,7 @@ mod tests {
         );
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
+            "• Feedback uploaded. Please open an issue using the following URL:\n\n  https://github.com/openai/codex/issues/new?template=3-cli.yml&steps=Uploaded%20thread:%20thread-1\n\n  Or mention your thread ID thread-1 in an existing issue."
         );
     }
 
@@ -804,10 +854,9 @@ mod tests {
             ),
             /*width*/ 120,
         );
-        // ATA fork: employees and external audiences share the same public issue URL.
         assert_eq!(
             rendered,
-            "• Feedback uploaded. Please report this in #codex-feedback:\n\n  https://github.com/Agents2AgentsAI/ata/issues/new?template=2-bug-report.yml&steps=Uploaded%20thread:%20thread-2\n\n  Share this and add some info about your problem:\n    https://go/codex-feedback/thread-2"
+            "• Feedback uploaded. Please report this in #codex-feedback:\n\n  http://go/codex-feedback-internal\n\n  Share this and add some info about your problem:\n    https://go/codex-feedback/thread-2"
         );
     }
 

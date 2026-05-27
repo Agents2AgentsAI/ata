@@ -5,12 +5,16 @@ use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::SharedCliOptions;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Clone, Debug)]
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,
+
+    /// Error out when config.toml contains fields that are not recognized by this version of Codex.
+    #[arg(long = "strict-config", default_value_t = false)]
+    pub strict_config: bool,
 
     // Internal controls set by the top-level `codex resume` subcommand.
     // These are not exposed as user flags on the base `codex` command.
@@ -63,25 +67,9 @@ pub struct Cli {
 
     /// Disable alternate screen mode
     ///
-    /// Runs the TUI in inline mode, preserving terminal scrollback history. This is useful
-    /// in terminal multiplexers like Zellij that follow the xterm spec strictly and disable
-    /// scrollback in alternate screen buffers.
+    /// Runs the TUI in inline mode, preserving terminal scrollback history.
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
-
-    /// Enable the embedded WebSocket server for remote control from mobile
-    /// devices (ATA-Swift). Listens on 0.0.0.0 by default.
-    #[arg(long = "remote-control", default_value_t = false)]
-    pub remote_control: bool,
-
-    /// Port for the remote-control WebSocket server (default: 19285).
-    #[arg(long = "remote-control-port", default_value_t = 19285)]
-    pub remote_control_port: u16,
-
-    /// Authentication token for remote-control connections.
-    /// If omitted, a random 256-bit token is generated at startup.
-    #[arg(long = "remote-control-token")]
-    pub remote_control_token: Option<String>,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
@@ -101,7 +89,7 @@ impl std::ops::DerefMut for Cli {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct TuiSharedCliOptions(SharedCliOptions);
 
 impl TuiSharedCliOptions {

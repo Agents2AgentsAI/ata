@@ -7,43 +7,6 @@
 
 mod apply_patch;
 mod apps;
-mod arc_monitor;
-pub(crate) mod auth;
-// ATA: re-export AuthManager + the `auth` module via the `legacy_core` shim
-// in `app-server-client` for voice_mode/account_view consumers in `tui`.
-pub use auth::AuthManager;
-pub mod auth_legacy {
-    pub use crate::auth::*;
-}
-/// Re-export Copilot OAuth helpers needed by `codex-app-server` to drive the
-/// device-code login flow on behalf of the TUI/desktop client. Kept narrow on
-/// purpose: the rest of `auth` stays `pub(crate)`.
-pub mod auth_public {
-    pub use crate::auth::CopilotDeviceCodeResponse;
-    pub use crate::auth::PROVIDER_COPILOT;
-    pub use crate::auth::complete_copilot_login;
-    pub use crate::auth::copilot_logout;
-    pub use crate::auth::get_provider_oauth_credential;
-    pub use crate::auth::poll_copilot_access_token;
-    pub use crate::auth::start_copilot_device_flow;
-    // === ATA: provider-specific login flows ===
-    // Surface the per-provider API key login + ATA constants the app-server
-    // needs to drive the four-option onboarding picker. All append-only so
-    // upstream Copilot re-exports above stay untouched on future merges.
-    pub use crate::auth::PROVIDER_ANTHROPIC;
-    pub use crate::auth::PROVIDER_GEMINI;
-    pub use crate::auth::PROVIDER_OPENAI;
-    pub use crate::auth::login_with_provider_api_key;
-}
-
-/// Re-export of the ElevenLabs TTS/STT crate. Surfaced through `codex-core`
-/// so consumers (TUI realtime mode, future voice modules) don't need a
-/// direct workspace dep on `codex-elevenlabs`. The crate provides
-/// `TtsStream`/`TtsChunk` (PCM 24kHz mono i16 streaming output with optional
-/// per-chunk char alignment) and an HTTP STT client; integration with the
-/// realtime audio output pipeline is a follow-up — at this layer it is
-/// available as a building block.
-pub use codex_elevenlabs as elevenlabs;
 mod client;
 mod client_common;
 mod realtime_context;
@@ -56,23 +19,21 @@ mod compact_remote;
 mod compact_remote_v2;
 mod config_lock;
 pub use codex_thread::CodexThread;
-pub use codex_thread::CodexThreadTurnContextOverrides;
+pub use codex_thread::CodexThreadSettingsOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
+pub use session::turn_context::TurnContext;
 mod agent;
+mod attestation;
 mod codex_delegate;
 mod command_canonicalization;
-mod commit_attribution;
 pub mod config;
 pub mod connectors;
 pub mod context;
 mod context_manager;
-pub(crate) mod data;
 mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
-pub mod file_watcher;
-mod flags;
 #[cfg(test)]
 mod git_info_tests;
 mod goals;
@@ -106,7 +67,6 @@ pub mod personality_migration;
 pub(crate) mod plugins;
 #[doc(hidden)]
 pub(crate) mod prompt_debug;
-mod provider_transport_capabilities;
 #[doc(hidden)]
 pub use prompt_debug::build_prompt_input;
 pub(crate) mod mentions {
@@ -118,7 +78,6 @@ pub(crate) mod mentions {
 }
 mod sandbox_tags;
 pub mod sandboxing;
-mod scheduling_runtime;
 mod session_prefix;
 mod session_startup_prewarm;
 mod shell_detect;
@@ -130,16 +89,12 @@ pub(crate) use skills::SkillsManager;
 pub(crate) use skills::build_available_skills;
 pub(crate) use skills::build_skill_injections;
 pub(crate) use skills::build_skill_name_counts;
-pub(crate) use skills::collect_env_var_dependencies;
 pub(crate) use skills::collect_explicit_skill_mentions;
 pub(crate) use skills::default_skill_metadata_budget;
 pub(crate) use skills::injection;
 pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
-pub(crate) use skills::resolve_skill_dependencies_for_turn;
 pub(crate) use skills::skills_load_input_from_config;
-pub mod research;
-mod skills_watcher;
 mod stream_events_utils;
 pub mod test_support;
 mod unified_exec;
@@ -147,7 +102,6 @@ pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
-mod response_debug_context;
 pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;
@@ -184,17 +138,9 @@ pub use state_db_bridge::StateDbHandle;
 pub use state_db_bridge::init_state_db;
 mod thread_rollout_truncation;
 mod tools;
-// Re-export the few `tools::handlers::document_reader` items consumed by the
-// ATA reading-view UI in `codex-tui` via the `app-server-client::legacy_core`
-// shim. Keeping this list explicit avoids exposing the full `tools` module.
-pub use tools::handlers::document_reader::ReadingViewDisplayMode;
-pub use tools::handlers::document_reader::reading_view_section_follow_up_guidance;
-pub use tools::handlers::document_reader::reading_view_selection_follow_up_guidance;
 pub(crate) mod turn_diff_tracker;
 mod turn_metadata;
 mod turn_timing;
-mod unavailable_tool;
-mod workspace_kb;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::Cursor;
 pub use rollout::EventPersistenceMode;
@@ -221,11 +167,13 @@ pub use rollout::read_session_meta_line;
 pub use rollout::rollout_date_parts;
 mod function_tool;
 mod state;
-pub mod supabase;
 mod tasks;
 mod user_shell_command;
 pub mod util;
 
+pub use attestation::AttestationContext;
+pub use attestation::AttestationProvider;
+pub use attestation::GenerateAttestationFuture;
 pub use client::ModelClient;
 pub use client::ModelClientSession;
 pub use client::X_CODEX_INSTALLATION_ID_HEADER;
@@ -240,7 +188,6 @@ pub use exec_policy::ExecPolicyError;
 pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
-pub use file_watcher::FileWatcherEvent;
 pub use installation_id::resolve_installation_id;
 pub use turn_metadata::build_turn_metadata_header;
 pub mod compact;

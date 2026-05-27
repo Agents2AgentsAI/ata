@@ -151,7 +151,6 @@ fn turn_started_emits_turn_started_event() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         }));
 
@@ -479,6 +478,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: json!({ "key": "value" }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -496,6 +496,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: json!({ "key": "value" }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: Vec::new(),
                     structured_content: None,
@@ -541,6 +542,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
                         arguments: json!({ "key": "value" }),
                         result: Some(McpToolCallItemResult {
                             content: Vec::new(),
+                            meta: None,
                             structured_content: None,
                         }),
                         error: None,
@@ -566,6 +568,7 @@ fn mcp_tool_call_failure_sets_failed_status() {
                 status: ApiMcpToolCallStatus::Failed,
                 arguments: json!({ "param": 42 }),
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: Some(McpToolCallError {
                     message: "tool exploded".to_string(),
@@ -614,6 +617,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 status: ApiMcpToolCallStatus::InProgress,
                 arguments: serde_json::Value::Null,
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: None,
                 error: None,
                 duration_ms: None,
@@ -631,6 +635,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                 status: ApiMcpToolCallStatus::Completed,
                 arguments: serde_json::Value::Null,
                 mcp_app_resource_uri: None,
+                plugin_id: None,
                 result: Some(Box::new(McpToolCallResult {
                     content: vec![json!({
                         "type": "text",
@@ -682,6 +687,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                                 "type": "text",
                                 "text": "done",
                             })],
+                            meta: None,
                             structured_content: Some(json!({ "status": "ok" })),
                         }),
                         error: None,
@@ -1106,7 +1112,6 @@ fn plan_update_emits_started_then_updated_then_completed() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1167,7 +1172,6 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1251,7 +1255,6 @@ fn token_usage_update_is_emitted_on_turn_completion() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1292,7 +1295,6 @@ fn turn_completion_recovers_final_message_from_turn_items() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1372,7 +1374,6 @@ fn turn_completion_reconciles_started_items_from_turn_items() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1435,7 +1436,6 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1481,7 +1481,6 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1535,7 +1534,6 @@ fn failed_turn_clears_stale_final_message() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1563,7 +1561,6 @@ fn turn_completion_falls_back_to_final_plan_text() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));
@@ -1616,7 +1613,6 @@ fn turn_failure_prefers_structured_error_message() {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
-                background: None,
             },
         },
     ));

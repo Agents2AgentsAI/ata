@@ -17,6 +17,8 @@ use ts_rs::TS;
 
 use crate::config_types::Personality;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
+use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
@@ -48,10 +50,6 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
-    Adaptive,
-    /// Anthropic Opus 4.7-only: maximum thinking budget. Falls back to
-    /// XHigh on providers that don't expose a dedicated Max tier.
-    Max,
 }
 
 impl FromStr for ReasoningEffort {
@@ -150,6 +148,9 @@ pub struct ModelPreset {
     /// Service tiers this model can run with.
     #[serde(default)]
     pub service_tiers: Vec<ModelServiceTier>,
+    /// Catalog default service tier id for this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_service_tier: Option<String>,
     /// Whether this is the default model for new users.
     pub is_default: bool,
     /// recommended upgrade model
@@ -163,10 +164,6 @@ pub struct ModelPreset {
     /// Input modalities accepted when composing user turns for this preset.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
-    /// Provider ID for this model (e.g., "openai", "anthropic", "gemini").
-    /// If None, defaults to "openai".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_id: Option<String>,
 }
 
 /// Visibility of a model in the picker or APIs.
@@ -210,7 +207,6 @@ pub enum ConfigShellToolType {
 #[serde(rename_all = "snake_case")]
 pub enum ApplyPatchToolType {
     Freeform,
-    Function,
 }
 
 #[derive(
@@ -278,6 +274,8 @@ pub struct ModelInfo {
     pub additional_speed_tiers: Vec<String>,
     #[serde(default)]
     pub service_tiers: Vec<ModelServiceTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_service_tier: Option<String>,
     pub availability_nux: Option<ModelAvailabilityNux>,
     pub upgrade: Option<ModelInfoUpgrade>,
     pub base_instructions: String,
@@ -463,6 +461,7 @@ impl From<ModelInfo> for ModelPreset {
             supports_personality,
             additional_speed_tiers: info.additional_speed_tiers,
             service_tiers: info.service_tiers,
+            default_service_tier: info.default_service_tier,
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
@@ -479,7 +478,6 @@ impl From<ModelInfo> for ModelPreset {
             availability_nux: info.availability_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
-            provider_id: None,
         }
     }
 }
@@ -488,13 +486,30 @@ impl ModelPreset {
     pub fn supports_fast_mode(&self) -> bool {
         self.service_tiers
             .iter()
-            .any(|tier| tier.id == SPEED_TIER_FAST)
+            .any(|tier| tier.id == ServiceTier::Fast.request_value())
             || self
                 .additional_speed_tiers
                 .iter()
                 .any(|tier| tier == SPEED_TIER_FAST)
     }
+}
 
+impl ModelInfo {
+    pub fn supports_service_tier(&self, service_tier: &str) -> bool {
+        self.service_tiers
+            .iter()
+            .any(|tier| tier.id == service_tier)
+    }
+
+    pub fn service_tier_for_request(&self, service_tier: Option<String>) -> Option<String> {
+        service_tier.filter(|service_tier| {
+            service_tier != SERVICE_TIER_DEFAULT_REQUEST_VALUE
+                && self.supports_service_tier(service_tier)
+        })
+    }
+}
+
+impl ModelPreset {
     /// Filter models based on authentication mode.
     ///
     /// In ChatGPT mode, all models are visible. Otherwise, only API-supported models are shown.
@@ -545,8 +560,6 @@ fn effort_rank(effort: ReasoningEffort) -> i32 {
         ReasoningEffort::Medium => 3,
         ReasoningEffort::High => 4,
         ReasoningEffort::XHigh => 5,
-        ReasoningEffort::Adaptive => 6,
-        ReasoningEffort::Max => 7,
     }
 }
 
@@ -577,6 +590,7 @@ mod tests {
             priority: 1,
             additional_speed_tiers: Vec::new(),
             service_tiers: Vec::new(),
+            default_service_tier: None,
             availability_nux: None,
             upgrade: None,
             base_instructions: "base".to_string(),
@@ -613,8 +627,6 @@ mod tests {
     fn reasoning_effort_from_str_accepts_known_values() {
         assert_eq!("high".parse(), Ok(ReasoningEffort::High));
         assert_eq!("minimal".parse(), Ok(ReasoningEffort::Minimal));
-        assert_eq!("max".parse(), Ok(ReasoningEffort::Max));
-        assert_eq!("adaptive".parse(), Ok(ReasoningEffort::Adaptive));
     }
 
     #[test]
@@ -849,6 +861,7 @@ mod tests {
                 message: "Try Spark.".to_string(),
             }),
             additional_speed_tiers: vec![SPEED_TIER_FAST.to_string()],
+            default_service_tier: Some(ServiceTier::Fast.request_value().to_string()),
             service_tiers: Vec::new(),
             ..test_model(/*spec*/ None)
         });
@@ -860,13 +873,17 @@ mod tests {
             })
         );
         assert!(preset.supports_fast_mode());
+        assert_eq!(
+            preset.default_service_tier,
+            Some(ServiceTier::Fast.request_value().to_string())
+        );
     }
 
     #[test]
     fn model_preset_supports_fast_mode_from_service_tiers() {
         let preset = ModelPreset::from(ModelInfo {
             service_tiers: vec![ModelServiceTier {
-                id: SPEED_TIER_FAST.to_string(),
+                id: ServiceTier::Fast.request_value().to_string(),
                 name: "Fast".to_string(),
                 description: "Priority processing.".to_string(),
             }],
@@ -874,5 +891,61 @@ mod tests {
         });
 
         assert!(preset.supports_fast_mode());
+    }
+
+    #[test]
+    fn service_tier_for_request_omits_explicit_default_tier() {
+        let model = ModelInfo {
+            default_service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+            service_tiers: vec![ModelServiceTier {
+                id: ServiceTier::Fast.request_value().to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing.".to_string(),
+            }],
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(
+            model.service_tier_for_request(Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn service_tier_for_request_filters_unsupported_tiers() {
+        let model = ModelInfo {
+            default_service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+            service_tiers: vec![ModelServiceTier {
+                id: ServiceTier::Fast.request_value().to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing.".to_string(),
+            }],
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(
+            model.service_tier_for_request(Some(ServiceTier::Fast.request_value().to_string())),
+            Some(ServiceTier::Fast.request_value().to_string())
+        );
+        assert_eq!(
+            model.service_tier_for_request(Some("unsupported".to_string())),
+            None
+        );
+        assert_eq!(model.service_tier_for_request(/*service_tier*/ None), None);
+    }
+
+    #[test]
+    fn service_tier_for_request_does_not_apply_catalog_default() {
+        let model = ModelInfo {
+            default_service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+            service_tiers: vec![ModelServiceTier {
+                id: ServiceTier::Fast.request_value().to_string(),
+                name: "Fast".to_string(),
+                description: "Priority processing.".to_string(),
+            }],
+            ..test_model(/*spec*/ None)
+        };
+
+        assert_eq!(model.service_tier_for_request(/*service_tier*/ None), None);
     }
 }

@@ -3,8 +3,6 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
-use codex_utils_file::encode_inline_cached;
-use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
@@ -128,7 +126,7 @@ impl FileSystemPermissions {
             match entry.access {
                 FileSystemAccessMode::Read => read.push(path.clone()),
                 FileSystemAccessMode::Write => write.push(path.clone()),
-                FileSystemAccessMode::None => return None,
+                FileSystemAccessMode::Deny => return None,
             }
         }
 
@@ -299,6 +297,15 @@ impl ManagedFileSystemPermissions {
     }
 }
 
+/// Reserved identifier for the built-in read-only permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_READ_ONLY: &str = ":read-only";
+
+/// Reserved identifier for the built-in workspace-write permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_WORKSPACE: &str = ":workspace";
+
+/// Reserved identifier for the built-in full-access permission profile.
+pub const BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS: &str = ":danger-full-access";
+
 /// Canonical active runtime permissions for a conversation, turn, or command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -332,26 +339,11 @@ pub struct ActivePermissionProfile {
     /// profile.
     pub id: String,
 
-    /// Optional parent profile identifier once permissions profiles support
-    /// inheritance. This is always `None` until that config feature exists.
+    /// Optional parent profile identifier from the selected permissions
+    /// profile's `extends` setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extends: Option<String>,
-
-    /// Bounded user-requested modifications applied on top of the named
-    /// profile, if any.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub modifications: Vec<ActivePermissionProfileModification>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
-pub enum ActivePermissionProfileModification {
-    /// Additional concrete directory that should be writable.
-    #[serde(rename_all = "snake_case")]
-    #[ts(rename_all = "snake_case")]
-    AdditionalWritableRoot { path: AbsolutePathBuf },
 }
 
 impl ActivePermissionProfile {
@@ -359,16 +351,11 @@ impl ActivePermissionProfile {
         Self {
             id: id.into(),
             extends: None,
-            modifications: Vec::new(),
         }
     }
 
-    pub fn with_modifications(
-        mut self,
-        modifications: Vec<ActivePermissionProfileModification>,
-    ) -> Self {
-        self.modifications = modifications;
-        self
+    pub fn read_only() -> Self {
+        Self::new(BUILT_IN_PERMISSION_PROFILE_READ_ONLY)
     }
 }
 
@@ -404,7 +391,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with restricted network
     /// access.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write() -> Self {
         Self::workspace_write_with(
@@ -418,7 +405,7 @@ impl PermissionProfile {
     /// Managed workspace-write filesystem access with the legacy
     /// `sandbox_workspace_write` knobs applied directly to the profile.
     ///
-    /// The returned profile contains symbolic `:project_roots` entries that
+    /// The returned profile contains symbolic `:workspace_roots` entries that
     /// must be resolved against the active permission root before enforcement.
     pub fn workspace_write_with(
         writable_roots: &[AbsolutePathBuf],
@@ -434,6 +421,28 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+        }
+    }
+
+    pub fn materialize_project_roots_with_workspace_roots(
+        self,
+        workspace_roots: &[AbsolutePathBuf],
+    ) -> Self {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+            } => {
+                let file_system = file_system
+                    .to_sandbox_policy()
+                    .materialize_project_roots_with_workspace_roots(workspace_roots);
+                Self::Managed {
+                    file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+                    network,
+                }
+            }
+            Self::Disabled => Self::Disabled,
+            Self::External { network } => Self::External { network },
         }
     }
 
@@ -697,11 +706,7 @@ pub enum ResponseInputItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "snake_case",
-    try_from = "UncheckedContentItem"
-)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
     InputText {
         text: String,
@@ -712,182 +717,14 @@ pub enum ContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
-    InputFile {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        file_data: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        file_id: Option<String>,
-        /// MIME type for the file. Stored internally for provider adapters
-        /// (Anthropic, Gemini) that need it when converting to their native
-        /// format. Skipped during serialization because the OpenAI Responses
-        /// API does not accept this field on `input_file` blocks; the MIME
-        /// type is already embedded in the `file_data` data-URI.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(skip)]
-        mime_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-    },
     OutputText {
         text: String,
     },
-    UrlFile {
-        url: String,
-        /// MIME type for provider adapters or tools that need a type hint.
-        /// Not part of the stable public wire shape.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(skip)]
-        mime_type: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum UncheckedContentItem {
-    InputText {
-        text: String,
-    },
-    InputImage {
-        image_url: String,
-        #[serde(default)]
-        detail: Option<ImageDetail>,
-    },
-    InputFile {
-        file_data: Option<String>,
-        file_id: Option<String>,
-        file_url: Option<String>,
-        mime_type: Option<String>,
-        filename: Option<String>,
-    },
-    OutputText {
-        text: String,
-    },
-    UrlFile {
-        url: Option<String>,
-        mime_type: Option<String>,
-        filename: Option<String>,
-    },
-}
-
-const MAX_URL_FILE_URL_LENGTH: usize = 8192;
-
-fn validated_http_url(
-    url: Option<String>,
-    missing_error: &'static str,
-) -> Result<String, &'static str> {
-    let url = url
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .ok_or(missing_error)?;
-    if url.len() > MAX_URL_FILE_URL_LENGTH {
-        return Err("url_file `url` exceeds max length of 8192 characters");
-    }
-    let parsed =
-        reqwest::Url::parse(&url).map_err(|_| "url_file `url` must be a valid absolute URL")?;
-    if !matches!(parsed.scheme(), "http" | "https") {
-        return Err("url_file `url` must use http or https");
-    }
-    Ok(url)
-}
-
-impl TryFrom<UncheckedContentItem> for ContentItem {
-    type Error = &'static str;
-
-    fn try_from(value: UncheckedContentItem) -> Result<Self, Self::Error> {
-        match value {
-            UncheckedContentItem::InputText { text } => Ok(Self::InputText { text }),
-            UncheckedContentItem::InputImage { image_url, detail } => {
-                Ok(Self::InputImage { image_url, detail })
-            }
-            UncheckedContentItem::InputFile {
-                file_data,
-                file_id,
-                file_url,
-                mime_type,
-                filename,
-            } => {
-                let file_data = file_data.filter(|value| !value.trim().is_empty());
-                let file_id = file_id.filter(|value| !value.trim().is_empty());
-                let file_url = file_url.filter(|value| !value.trim().is_empty());
-                let has_file_data = file_data.is_some();
-                let has_file_id = file_id.is_some();
-                let has_file_url = file_url.is_some();
-                if has_file_url {
-                    if has_file_data || has_file_id {
-                        return Err(
-                            "input_file with `file_url` cannot include `file_data` or `file_id`",
-                        );
-                    }
-                    let url = validated_http_url(file_url, "url_file requires a non-empty `url`")?;
-                    return Ok(Self::UrlFile {
-                        url,
-                        mime_type,
-                        filename,
-                    });
-                }
-                if has_file_data == has_file_id {
-                    return Err("input_file must include exactly one of `file_data` or `file_id`");
-                }
-
-                Ok(Self::InputFile {
-                    file_data,
-                    file_id,
-                    mime_type,
-                    filename,
-                })
-            }
-            UncheckedContentItem::OutputText { text } => Ok(Self::OutputText { text }),
-            UncheckedContentItem::UrlFile {
-                url,
-                mime_type,
-                filename,
-            } => {
-                let url = validated_http_url(url, "url_file requires a non-empty `url`")?;
-                Ok(Self::UrlFile {
-                    url,
-                    mime_type,
-                    filename,
-                })
-            }
-        }
-    }
-}
-
-impl ContentItem {
-    pub fn inline_file(base64_data: String, mime_type: String, filename: Option<String>) -> Self {
-        Self::InputFile {
-            file_data: Some(base64_data),
-            file_id: None,
-            mime_type: Some(mime_type),
-            filename,
-        }
-    }
-
-    pub fn file_ref(file_id: String, mime_type: String, filename: Option<String>) -> Self {
-        Self::InputFile {
-            file_data: None,
-            file_id: Some(file_id),
-            mime_type: Some(mime_type),
-            filename,
-        }
-    }
-
-    pub fn url_file(url: String, mime_type: Option<String>, filename: Option<String>) -> Self {
-        Self::UrlFile {
-            url,
-            mime_type,
-            filename,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
-    Auto,
-    Low,
     High,
     Original,
 }
@@ -1052,7 +889,10 @@ pub enum ResponseItem {
         result: String,
     },
     #[serde(alias = "compaction_summary")]
-    Compaction { encrypted_content: String },
+    Compaction {
+        encrypted_content: String,
+    },
+    CompactionTrigger,
     ContextCompaction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -1164,10 +1004,6 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
-const FILE_OPEN_TAG_BARE: &str = "<file_start>";
-const FILE_OPEN_TAG_PREFIX: &str = "<file_start";
-const FILE_OPEN_TAG_SUFFIX: &str = "</file_start>";
-const FILE_CLOSE_TAG: &str = "<file_end></file_end>";
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -1181,33 +1017,9 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
-pub fn local_file_label_text(label_number: usize) -> String {
-    format!("[File #{label_number}]")
-}
-
 pub fn local_image_open_tag_text(label_number: usize) -> String {
     let label = local_image_label_text(label_number);
     format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
-}
-
-pub fn local_file_open_tag_text(label_number: usize) -> String {
-    local_file_open_tag_text_with_filename(label_number, None)
-}
-
-pub fn local_file_open_tag_text_with_filename(
-    label_number: usize,
-    filename: Option<&str>,
-) -> String {
-    let label = local_file_label_text(label_number);
-    match filename.filter(|name| !name.is_empty()) {
-        Some(filename) => {
-            let escaped_filename = escape_tag_attribute_value(filename);
-            format!(
-                r#"{FILE_OPEN_TAG_PREFIX} name="{escaped_filename}">{label}{FILE_OPEN_TAG_SUFFIX}"#
-            )
-        }
-        None => format!("{FILE_OPEN_TAG_BARE}{label}{FILE_OPEN_TAG_SUFFIX}"),
-    }
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -1215,49 +1027,16 @@ pub fn is_local_image_open_tag_text(text: &str) -> bool {
         .is_some_and(|rest| rest.ends_with(LOCAL_IMAGE_OPEN_TAG_SUFFIX))
 }
 
-pub fn is_local_file_open_tag_text(text: &str) -> bool {
-    let Some(rest) = text.strip_prefix(FILE_OPEN_TAG_PREFIX) else {
-        return false;
-    };
-    let Some((attributes, tail)) = rest.split_once('>') else {
-        return false;
-    };
-    if !attributes.is_empty() && !attributes.starts_with(' ') {
-        return false;
-    }
-    tail.ends_with(FILE_OPEN_TAG_SUFFIX)
-}
-
 pub fn is_local_image_close_tag_text(text: &str) -> bool {
     is_image_close_tag_text(text)
-}
-
-pub fn is_local_file_close_tag_text(text: &str) -> bool {
-    is_file_close_tag_text(text)
 }
 
 pub fn is_image_open_tag_text(text: &str) -> bool {
     text == IMAGE_OPEN_TAG
 }
 
-pub fn is_file_open_tag_text(text: &str) -> bool {
-    text == FILE_OPEN_TAG_BARE || is_local_file_open_tag_text(text)
-}
-
 pub fn is_image_close_tag_text(text: &str) -> bool {
     text == IMAGE_CLOSE_TAG
-}
-
-pub fn is_file_close_tag_text(text: &str) -> bool {
-    text == FILE_CLOSE_TAG
-}
-
-fn escape_tag_attribute_value(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 fn invalid_image_error_placeholder(
@@ -1287,8 +1066,13 @@ pub fn local_image_content_items_with_label_number(
     path: &std::path::Path,
     file_bytes: Vec<u8>,
     label_number: Option<usize>,
-    mode: PromptImageMode,
+    detail: ImageDetail,
 ) -> Vec<ContentItem> {
+    let mode = match detail {
+        ImageDetail::Original => PromptImageMode::Original,
+        ImageDetail::High => PromptImageMode::ResizeToFit,
+    };
+
     match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
@@ -1299,7 +1083,7 @@ pub fn local_image_content_items_with_label_number(
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
+                detail: Some(detail),
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1323,54 +1107,6 @@ pub fn local_image_content_items_with_label_number(
             }
         },
     }
-}
-
-pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
-    match encode_inline_cached(path) {
-        Ok(processed) => {
-            let processed = into_owned_processed_file(processed);
-            let filename = processed.filename.clone();
-            let file_item = ContentItem::inline_file(
-                processed.base64,
-                processed.mime_type,
-                Some(filename.clone()),
-            );
-            wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
-        }
-        Err(error) => {
-            tracing::warn!(
-                path = %path.display(),
-                %error,
-                "local file encoding failed; inserting error placeholder"
-            );
-            vec![ContentItem::InputText {
-                text: format!(
-                    "ATA could not read the local file at `{}`: {error}",
-                    path.display()
-                ),
-            }]
-        }
-    }
-}
-
-fn wrap_file_content_items(
-    file_item: ContentItem,
-    label_number: Option<usize>,
-    filename: Option<&str>,
-) -> Vec<ContentItem> {
-    let mut items = Vec::with_capacity(if label_number.is_some() { 3 } else { 1 });
-    if let Some(label_number) = label_number {
-        items.push(ContentItem::InputText {
-            text: local_file_open_tag_text_with_filename(label_number, filename),
-        });
-    }
-    items.push(file_item);
-    if label_number.is_some() {
-        items.push(ContentItem::InputText {
-            text: FILE_CLOSE_TAG.to_string(),
-        });
-    }
-    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -1485,60 +1221,41 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        // Use a single attachment counter so images and files share the same
-        // numbering sequence, matching the composer's combined label counter.
-        let mut attachment_index = 0;
+        let mut image_index = 0;
         Self::Message {
             role: "user".to_string(),
             content: items
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url } => {
-                        attachment_index += 1;
+                    UserInput::Image { image_url, detail } => {
+                        image_index += 1;
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         vec![
                             ContentItem::InputText {
                                 text: image_open_tag_text(),
                             },
                             ContentItem::InputImage {
                                 image_url,
-                                detail: Some(DEFAULT_IMAGE_DETAIL),
+                                detail: Some(detail),
                             },
                             ContentItem::InputText {
                                 text: image_close_tag_text(),
                             },
                         ]
                     }
-                    UserInput::LocalImage { path } => {
-                        attachment_index += 1;
+                    UserInput::LocalImage { path, detail } => {
+                        image_index += 1;
+                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {
                             Ok(file_bytes) => local_image_content_items_with_label_number(
                                 &path,
                                 file_bytes,
-                                Some(attachment_index),
-                                PromptImageMode::ResizeToFit,
+                                Some(image_index),
+                                detail,
                             ),
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
-                    }
-                    UserInput::LocalFile { path } => {
-                        attachment_index += 1;
-                        local_file_content_items(&path, Some(attachment_index))
-                    }
-                    UserInput::UploadedFile {
-                        file_id,
-                        mime_type,
-                        filename,
-                        ..
-                    } => {
-                        attachment_index += 1;
-                        let file_item =
-                            ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
-                        wrap_file_content_items(
-                            file_item,
-                            Some(attachment_index),
-                            Some(filename.as_str()),
-                        )
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
@@ -1553,30 +1270,6 @@ pub struct SearchToolCallParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub limit: Option<usize>,
-}
-
-/// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
-/// or `shell`, the `arguments` field should deserialize to this struct.
-#[derive(Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-pub struct ShellToolCallParams {
-    pub command: Vec<String>,
-    pub workdir: Option<String>,
-
-    /// This is the maximum time in milliseconds that the command is allowed to run.
-    #[serde(alias = "timeout")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sandbox_permissions: Option<SandboxPermissions>,
-    /// Suggests a command prefix to persist for future sessions
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub prefix_rule: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub additional_permissions: Option<AdditionalPermissionProfile>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub justification: Option<String>,
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is `shell_command`, the
@@ -1621,6 +1314,9 @@ pub enum FunctionCallOutputContentItem {
         #[ts(optional)]
         detail: Option<ImageDetail>,
     },
+    EncryptedContent {
+        encrypted_content: String,
+    },
 }
 
 /// Converts structured function-call output content into plain text for
@@ -1644,7 +1340,8 @@ pub fn function_call_output_content_items_to_text(
                 Some(text.as_str())
             }
             FunctionCallOutputContentItem::InputText { .. }
-            | FunctionCallOutputContentItem::InputImage { .. } => None,
+            | FunctionCallOutputContentItem::InputImage { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
         })
         .collect::<Vec<_>>();
 
@@ -1903,8 +1600,6 @@ fn convert_mcp_content_to_items(
                         .and_then(|meta| meta.get(CODEX_IMAGE_DETAIL_META_KEY))
                         .and_then(serde_json::Value::as_str)
                         .and_then(|detail| match detail {
-                            "auto" => Some(ImageDetail::Auto),
-                            "low" => Some(ImageDetail::Low),
                             "high" => Some(ImageDetail::High),
                             "original" => Some(ImageDetail::Original),
                             _ => None,
@@ -1948,6 +1643,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
+
+    // A tiny valid PNG (1x1) so image conversion tests don't depend on cross-crate
+    // file paths, which break under Bazel sandboxing.
+    const TINY_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
 
     #[test]
     fn response_input_message_conversion_preserves_phase() {
@@ -2089,7 +1792,7 @@ mod tests {
                 path: FileSystemPath::GlobPattern {
                     pattern: "**/*.env".to_string(),
                 },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             }]);
         file_system_sandbox_policy.glob_scan_max_depth = Some(2);
 
@@ -2364,6 +2067,9 @@ mod tests {
                 image_url: "data:image/png;base64,AAA".to_string(),
                 detail: Some(DEFAULT_IMAGE_DETAIL),
             },
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: "enc_opaque".to_string(),
+            },
         ];
 
         let text = function_call_output_content_items_to_text(&content_items);
@@ -2572,6 +2278,35 @@ mod tests {
     }
 
     #[test]
+    fn serializes_encrypted_function_output_content_as_array() -> Result<()> {
+        let item = ResponseInputItem::FunctionCallOutput {
+            call_id: "call1".into(),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::EncryptedContent {
+                    encrypted_content: "enc_opaque".into(),
+                },
+            ]),
+        };
+
+        let json = serde_json::to_value(&item)?;
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "function_call_output",
+                "call_id": "call1",
+                "output": [
+                    {
+                        "type": "encrypted_content",
+                        "encrypted_content": "enc_opaque",
+                    }
+                ],
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn preserves_existing_image_data_urls() -> Result<()> {
         let call_tool_result = CallToolResult {
             content: vec![serde_json::json!({
@@ -2696,6 +2431,30 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_encrypted_array_payload_into_items() -> Result<()> {
+        let json = r#"[
+            {"type": "encrypted_content", "encrypted_content": "enc_opaque"}
+        ]"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+        let expected_items = vec![FunctionCallOutputContentItem::EncryptedContent {
+            encrypted_content: "enc_opaque".into(),
+        }];
+
+        assert_eq!(payload.success, None);
+        assert_eq!(
+            payload.body,
+            FunctionCallOutputBody::ContentItems(expected_items.clone())
+        );
+        assert_eq!(
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&expected_items)?
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn deserializes_compaction_alias() -> Result<()> {
         let json = r#"{"type":"compaction_summary","encrypted_content":"abc"}"#;
 
@@ -2726,17 +2485,25 @@ mod tests {
     }
 
     #[test]
-    fn serializes_context_compaction_trigger_without_payload() -> Result<()> {
-        let item = ResponseItem::ContextCompaction {
-            encrypted_content: None,
-        };
+    fn serializes_compaction_trigger_without_payload() -> Result<()> {
+        let item = ResponseItem::CompactionTrigger;
 
         assert_eq!(
             serde_json::to_value(item)?,
             serde_json::json!({
-                "type": "context_compaction",
+                "type": "compaction_trigger",
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_compaction_trigger_without_payload() -> Result<()> {
+        let json = r#"{"type":"compaction_trigger"}"#;
+
+        let item: ResponseItem = serde_json::from_str(json)?;
+
+        assert_eq!(item, ResponseItem::CompactionTrigger);
         Ok(())
     }
 
@@ -2848,35 +2615,12 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_shell_tool_call_params() -> Result<()> {
-        let json = r#"{
-            "command": ["ls", "-l"],
-            "workdir": "/tmp",
-            "timeout": 1000
-        }"#;
-
-        let params: ShellToolCallParams = serde_json::from_str(json)?;
-        assert_eq!(
-            ShellToolCallParams {
-                command: vec!["ls".to_string(), "-l".to_string()],
-                workdir: Some("/tmp".to_string()),
-                timeout_ms: Some(1000),
-                sandbox_permissions: None,
-                prefix_rule: None,
-                additional_permissions: None,
-                justification: None,
-            },
-            params
-        );
-        Ok(())
-    }
-
-    #[test]
     fn wraps_image_user_input_with_tags() -> Result<()> {
         let image_url = "data:image/png;base64,abc".to_string();
 
         let item = ResponseInputItem::from(vec![UserInput::Image {
             image_url: image_url.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -2894,6 +2638,31 @@ mod tests {
                     },
                 ];
                 assert_eq!(content, expected);
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn image_user_input_preserves_requested_detail() -> Result<()> {
+        let image_url = "data:image/png;base64,abc".to_string();
+
+        let item = ResponseInputItem::from(vec![UserInput::Image {
+            image_url: image_url.clone(),
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert_eq!(
+                    content.get(1),
+                    Some(&ContentItem::InputImage {
+                        image_url,
+                        detail: Some(ImageDetail::Original),
+                    })
+                );
             }
             other => panic!("expected message response but got {other:?}"),
         }
@@ -3069,20 +2838,17 @@ mod tests {
         let image_url = "data:image/png;base64,abc".to_string();
         let dir = tempdir()?;
         let local_path = dir.path().join("local.png");
-        // A tiny valid PNG (1x1) so this test doesn't depend on cross-crate file paths, which
-        // break under Bazel sandboxing.
-        const TINY_PNG_BYTES: &[u8] = &[
-            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
-            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2,
-            0, 0, 5, 0, 1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-        ];
         std::fs::write(&local_path, TINY_PNG_BYTES)?;
 
         let item = ResponseInputItem::from(vec![
             UserInput::Image {
                 image_url: image_url.clone(),
+                detail: None,
             },
-            UserInput::LocalImage { path: local_path },
+            UserInput::LocalImage {
+                path: local_path,
+                detail: None,
+            },
         ]);
 
         match item {
@@ -3130,12 +2896,40 @@ mod tests {
     }
 
     #[test]
+    fn local_image_user_input_preserves_requested_detail() -> Result<()> {
+        let dir = tempdir()?;
+        let local_path = dir.path().join("local.png");
+        std::fs::write(&local_path, TINY_PNG_BYTES)?;
+
+        let item = ResponseInputItem::from(vec![UserInput::LocalImage {
+            path: local_path,
+            detail: Some(ImageDetail::Original),
+        }]);
+
+        match item {
+            ResponseInputItem::Message { content, .. } => {
+                assert!(matches!(
+                    content.get(1),
+                    Some(ContentItem::InputImage {
+                        detail: Some(ImageDetail::Original),
+                        ..
+                    })
+                ));
+            }
+            other => panic!("expected message response but got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn local_image_read_error_adds_placeholder() -> Result<()> {
         let dir = tempdir()?;
         let missing_path = dir.path().join("missing-image.png");
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: missing_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -3170,6 +2964,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: json_path.clone(),
+            detail: None,
         }]);
 
         match item {
@@ -3207,6 +3002,7 @@ mod tests {
 
         let item = ResponseInputItem::from(vec![UserInput::LocalImage {
             path: svg_path.clone(),
+            detail: None,
         }]);
 
         match item {

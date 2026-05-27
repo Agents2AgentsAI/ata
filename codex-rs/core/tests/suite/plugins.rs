@@ -110,9 +110,6 @@ async fn build_analytics_plugin_test_codex(
         .with_model("gpt-5.2")
         .with_config(move |config| {
             config.chatgpt_base_url = chatgpt_base_url;
-            // ATA defaults `analytics_enabled` to false (privacy posture);
-            // tests that verify the analytics pipeline must opt in explicitly.
-            config.analytics_enabled = Some(true);
         });
     Ok(builder
         .build(server)
@@ -230,6 +227,7 @@ async fn capability_sections_render_in_developer_message_in_order() -> Result<()
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -308,6 +306,7 @@ async fn explicit_plugin_mentions_inject_plugin_guidance() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
@@ -389,6 +388,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;

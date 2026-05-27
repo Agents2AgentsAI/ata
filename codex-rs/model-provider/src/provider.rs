@@ -70,6 +70,10 @@ impl std::error::Error for ProviderAccountError {}
 
 pub type ProviderAccountResult = std::result::Result<ProviderAccountState, ProviderAccountError>;
 
+/// Default model used for automatic approval review when a provider does not
+/// require a backend-specific model ID.
+pub const DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL: &str = "codex-auto-review";
+
 /// Runtime provider abstraction used by model execution.
 ///
 /// Implementations own provider-specific behavior for a model backend. The
@@ -83,6 +87,18 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     /// Returns the provider-owned capability upper bounds.
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Returns the preferred model used for automatic approval review.
+    ///
+    /// Providers that require backend-specific model IDs should override this.
+    fn approval_review_preferred_model(&self) -> &'static str {
+        DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+    }
+
+    /// Returns whether requests made through this provider should include attestation.
+    fn supports_attestation(&self) -> bool {
+        false
     }
 
     /// Returns the provider-scoped auth manager, when this provider uses one.
@@ -167,6 +183,13 @@ impl ModelProvider for ConfiguredModelProvider {
         self.auth_manager.clone()
     }
 
+    fn supports_attestation(&self) -> bool {
+        self.auth_manager
+            .as_ref()
+            .and_then(|auth_manager| auth_manager.auth_cached())
+            .is_some_and(|auth| auth.is_chatgpt_auth())
+    }
+
     async fn auth(&self) -> Option<CodexAuth> {
         match self.auth_manager.as_ref() {
             Some(auth_manager) => auth_manager.auth().await,
@@ -217,36 +240,7 @@ impl ModelProvider for ConfiguredModelProvider {
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
     ) -> SharedModelsManager {
-        // Resolve the effective catalog. Precedence:
-        //   1. Explicit `[model_catalog]` from config.toml (caller-provided).
-        //   2. Bundled per-provider catalog keyed off the wire API. Each
-        //      non-OpenAI provider ships its own static slug list because
-        //      none of these endpoints expose a `/models` route that ATA
-        //      can authenticate against today:
-        //        - CopilotInline       -> bundled_copilot_models_response
-        //        - AnthropicMessages   -> bundled_anthropic_models_response
-        //        - GeminiGenerate      -> bundled_gemini_models_response
-        //      Without these branches the picker silently falls back to the
-        //      bundled OpenAI/Codex catalog, which is the wrong list for
-        //      every non-OpenAI provider and surfaces models the provider
-        //      doesn't accept (e.g. `gpt-5.5` against Anthropic).
-        let resolved_catalog = config_model_catalog.or_else(|| {
-            use codex_model_provider_info::WireApi;
-            match self.info.wire_api {
-                WireApi::CopilotInline => {
-                    codex_models_manager::bundled_copilot_models_response().ok()
-                }
-                WireApi::AnthropicMessages => {
-                    codex_models_manager::bundled_anthropic_models_response().ok()
-                }
-                WireApi::GeminiGenerate => {
-                    codex_models_manager::bundled_gemini_models_response().ok()
-                }
-                _ => None,
-            }
-        });
-
-        match resolved_catalog {
+        match config_model_catalog {
             Some(model_catalog) => Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
@@ -365,6 +359,19 @@ mod tests {
         );
 
         assert_eq!(provider.capabilities(), ProviderCapabilities::default());
+    }
+
+    #[test]
+    fn configured_provider_uses_default_approval_review_preferred_model() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            /*auth_manager*/ None,
+        );
+
+        assert_eq!(
+            provider.approval_review_preferred_model(),
+            DEFAULT_APPROVAL_REVIEW_PREFERRED_MODEL
+        );
     }
 
     #[tokio::test]
@@ -539,65 +546,6 @@ mod tests {
 
         assert_eq!(catalog.models.len(), 1);
         assert_eq!(catalog.models[0].slug, "custom-bedrock-model");
-    }
-
-    #[tokio::test]
-    async fn copilot_provider_serves_bundled_copilot_catalog() {
-        // Regression: `/model` for a Copilot user must show Copilot's catalog
-        // (gpt-4.1, Claude, Gemini, etc.), not the bundled OpenAI/Codex
-        // catalog. Before this branch, the picker silently fell back to the
-        // OpenAI bundled models because `should_refresh_models` returned
-        // false for Copilot and no provider-specific static catalog existed.
-        let provider = create_model_provider(
-            ModelProviderInfo::create_copilot_provider(),
-            /*auth_manager*/ None,
-        );
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
-        let slugs: Vec<&str> = catalog.models.iter().map(|m| m.slug.as_str()).collect();
-
-        assert!(
-            slugs.contains(&"gpt-4.1"),
-            "Copilot catalog should include gpt-4.1; got: {slugs:?}"
-        );
-        assert!(
-            slugs.iter().any(|s| s.starts_with("claude-")),
-            "Copilot catalog should include at least one Claude model; got: {slugs:?}"
-        );
-        assert!(
-            slugs.iter().any(|s| s.starts_with("gemini-")),
-            "Copilot catalog should include at least one Gemini model; got: {slugs:?}"
-        );
-        // The OpenAI bundled "Frontier model" should NOT appear in the
-        // picker for Copilot users (e.g., a hypothetical Codex-only model).
-        // We assert positively that the catalog is the Copilot one by
-        // checking it's a strict superset of what Copilot publishes.
-        assert!(catalog.models.len() >= 5);
-    }
-
-    #[tokio::test]
-    async fn copilot_provider_honors_explicit_static_catalog_override() {
-        // If config.toml supplies an explicit `[model_catalog]`, that
-        // override must still win over the bundled Copilot catalog.
-        let custom_model =
-            codex_models_manager::model_info::model_info_from_slug("custom-copilot-override");
-
-        let provider = create_model_provider(
-            ModelProviderInfo::create_copilot_provider(),
-            /*auth_manager*/ None,
-        );
-        let manager = provider.models_manager(
-            test_codex_home(),
-            Some(ModelsResponse {
-                models: vec![custom_model],
-            }),
-        );
-
-        let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
-        assert_eq!(catalog.models.len(), 1);
-        assert_eq!(catalog.models[0].slug, "custom-copilot-override");
     }
 
     #[tokio::test]

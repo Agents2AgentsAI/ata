@@ -13,7 +13,6 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
-    Fast,
     Ide,
     Permissions,
     Keymap,
@@ -23,17 +22,8 @@ pub enum SlashCommand {
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
     Experimental,
-    Scheduling,
     #[strum(to_string = "approve")]
     AutoReview,
-    Account,
-    #[strum(to_string = "reading-view")]
-    ReadingView,
-    #[cfg(not(target_os = "linux"))]
-    Voice,
-    #[cfg(not(target_os = "linux"))]
-    #[strum(serialize = "voice-setup")]
-    VoiceSetup,
     Memories,
     Skills,
     Hooks,
@@ -46,9 +36,9 @@ pub enum SlashCommand {
     Compact,
     Plan,
     Goal,
-    Collab,
     Agent,
     Side,
+    Btw,
     Copy,
     Raw,
     Diff,
@@ -58,12 +48,11 @@ pub enum SlashCommand {
     Title,
     Statusline,
     Theme,
+    #[strum(to_string = "pets", serialize = "pet")]
+    Pets,
     Mcp,
     Apps,
     Plugins,
-    Workspace,
-    Jobs,
-    Research,
     Logout,
     Quit,
     Exit,
@@ -111,14 +100,12 @@ impl SlashCommand {
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
+            SlashCommand::Pets => "choose or hide the terminal pet",
             SlashCommand::Ps => "list background terminals",
             SlashCommand::Stop => "stop all background terminals",
             SlashCommand::MemoryDrop => "DO NOT USE",
             SlashCommand::MemoryUpdate => "DO NOT USE",
             SlashCommand::Model => "choose what model and reasoning effort to use",
-            SlashCommand::Fast => {
-                "toggle Fast mode to enable fastest inference with increased plan usage"
-            }
             SlashCommand::Ide => {
                 "include current selection, open files, and other context from your IDE"
             }
@@ -127,9 +114,10 @@ impl SlashCommand {
             SlashCommand::Settings => "configure realtime microphone/speaker",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
-            SlashCommand::Collab => "change collaboration mode (experimental)",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
-            SlashCommand::Side => "start a side conversation in an ephemeral fork",
+            SlashCommand::Side | SlashCommand::Btw => {
+                "start a side conversation in an ephemeral fork"
+            }
             SlashCommand::Permissions => "choose what Codex is allowed to do",
             SlashCommand::Keymap => "remap TUI shortcuts",
             SlashCommand::Vim => "toggle Vim mode for the composer",
@@ -138,23 +126,11 @@ impl SlashCommand {
                 "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>"
             }
             SlashCommand::Experimental => "toggle experimental features",
-            SlashCommand::Scheduling => "view active cron / monitor / loop tasks",
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
-            SlashCommand::Account => "sign in / out of your ATA account",
-            SlashCommand::ReadingView => "configure the reading-view display mode",
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice => "toggle voice mode for this ATA session",
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT, API key, language)",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Workspace => {
-                "summarize the active workspace; manage with `ata workspace`"
-            }
-            SlashCommand::Jobs => "summarize scheduled jobs; manage with `ata jobs`",
-            SlashCommand::Research => "configure research tool integrations",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -175,15 +151,15 @@ impl SlashCommand {
                 | SlashCommand::Rename
                 | SlashCommand::Plan
                 | SlashCommand::Goal
-                | SlashCommand::Fast
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
+                | SlashCommand::Pets
                 | SlashCommand::Side
+                | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
-                | SlashCommand::Workspace
         )
     }
 
@@ -209,7 +185,6 @@ impl SlashCommand {
             | SlashCommand::Init
             | SlashCommand::Compact
             | SlashCommand::Model
-            | SlashCommand::Fast
             | SlashCommand::Personality
             | SlashCommand::Permissions
             | SlashCommand::Keymap
@@ -217,8 +192,6 @@ impl SlashCommand {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::Account
-            | SlashCommand::ReadingView
             | SlashCommand::Memories
             | SlashCommand::Review
             | SlashCommand::Plan
@@ -241,9 +214,6 @@ impl SlashCommand {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
-            | SlashCommand::Workspace
-            | SlashCommand::Jobs
-            | SlashCommand::Research
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::AutoReview
@@ -252,18 +222,13 @@ impl SlashCommand {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Side
-            | SlashCommand::Scheduling => true,
+            | SlashCommand::Btw => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
-            SlashCommand::Collab => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Theme => false,
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice => true,
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::VoiceSetup => true,
+            SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }
 
@@ -300,6 +265,12 @@ mod tests {
     #[test]
     fn clean_alias_parses_to_stop_command() {
         assert_eq!(SlashCommand::from_str("clean"), Ok(SlashCommand::Stop));
+    }
+
+    #[test]
+    fn pet_alias_parses_to_pets_command() {
+        assert_eq!(SlashCommand::Pets.command(), "pets");
+        assert_eq!(SlashCommand::from_str("pet"), Ok(SlashCommand::Pets));
     }
 
     #[test]

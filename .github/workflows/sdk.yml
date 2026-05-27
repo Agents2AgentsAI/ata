@@ -1,28 +1,57 @@
 name: sdk
 
 on:
-  workflow_dispatch:
-  pull_request:
-    paths:
-      - "sdk/**"
-      - ".github/workflows/sdk.yml"
   push:
     branches: [main]
-    paths:
-      - "sdk/**"
-      - ".github/workflows/sdk.yml"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref_name != 'main' }}
+  pull_request: {}
 
 jobs:
-  sdks:
-    runs-on: ubuntu-latest
+  python-sdk:
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
     timeout-minutes: 10
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Test Python SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Run inside Alpine so dependency resolution exercises the pinned
+          # runtime wheel on the same Linux wheel family that CI installs.
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp/codex-python-sdk-home \
+            -e UV_LINK_MODE=copy \
+            -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
+            -w "${GITHUB_WORKSPACE}/sdk/python" \
+            python:3.12-alpine \
+            sh -euxc '
+              python -m venv /tmp/uv
+              /tmp/uv/bin/python -m pip install uv==0.11.3
+              /tmp/uv/bin/uv sync --extra dev --frozen
+              /tmp/uv/bin/uv run --extra dev ruff check --output-format=github .
+              /tmp/uv/bin/uv run --extra dev ruff format --check .
+              /tmp/uv/bin/uv run --extra dev pytest
+            '
+
+  sdks:
+    runs-on:
+      group: codex-runners
+      labels: codex-linux-x64
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Install Linux bwrap build dependencies
         shell: bash
@@ -49,11 +78,6 @@ jobs:
           target: x86_64-unknown-linux-gnu
 
       - name: Build codex with Bazel
-        # Skip when BuildBuddy credentials are unavailable (fork PRs); the
-        # local Bazel fallback still tries to fetch via remote_downloader and
-        # fails. Re-enable once a BUILDBUDDY_API_KEY secret is provisioned on
-        # the public ATA repo.
-        if: env.BUILDBUDDY_API_KEY != ''
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -109,9 +133,6 @@ jobs:
           echo "CODEX_EXEC_PATH=${install_dir}/codex" >> "$GITHUB_ENV"
 
       - name: Warm up Bazel-built codex
-        if: env.BUILDBUDDY_API_KEY != ''
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
@@ -127,9 +148,6 @@ jobs:
         run: pnpm -r --filter ./sdk/typescript run lint
 
       - name: Test SDK packages
-        if: env.BUILDBUDDY_API_KEY != ''
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: pnpm -r --filter ./sdk/typescript run test
 
       - name: Save bazel repository cache

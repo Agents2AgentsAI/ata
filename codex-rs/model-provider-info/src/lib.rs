@@ -2,7 +2,7 @@
 //!
 //! Providers can be defined in two places:
 //!   1. Built-in defaults compiled into the binary so Codex works out-of-the-box.
-//!   2. User-defined entries inside `~/.ata/config.toml` under the `model_providers`
+//!   2. User-defined entries inside `~/.codex/config.toml` under the `model_providers`
 //!      key. These override or extend the defaults at runtime.
 
 use codex_api::Provider as ApiProvider;
@@ -34,21 +34,14 @@ const MAX_REQUEST_MAX_RETRIES: u64 = 100;
 
 const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
-
-/// Version string sent in the `version` request header to OpenAI's Responses
-/// API (and `/models`). Upstream Codex sends `env!("CARGO_PKG_VERSION")` here,
-/// which for them is a recent Codex release (e.g. `0.130.x`). ATA's own crate
-/// version is far lower, and OpenAI's backend gates newer models on the
-/// reported Codex version — e.g. requesting `gpt-5.5` with a low version yields
-/// `"The 'gpt-5.5' model requires a newer version of Codex."`. So we report the
-/// upstream Codex version this tree is based on instead of ATA's version. Bump
-/// this on every upstream merge (the `verify-openai-model-override` justfile
-/// recipe is the reminder); keep it >= the upstream version we merged.
-pub const OPENAI_CLIENT_VERSION_OVERRIDE: &str = "0.130.0";
+pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
+pub const AMAZON_BEDROCK_GPT_5_4_MODEL_ID: &str = "openai.gpt-5.4";
 pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
+const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
+const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
 const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
@@ -60,24 +53,12 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
-    /// The Anthropic Messages API at `/v1/messages`.
-    AnthropicMessages,
-    /// The Google Gemini `generateContent` API.
-    GeminiGenerate,
-    /// GitHub Copilot's Chat Completions endpoint at
-    /// `https://api.githubcopilot.com/chat/completions`. Despite the legacy
-    /// "inline" suffix, this is the streamed Chat Completions wire format,
-    /// translated to ResponseEvents by `codex-api::sse::chat_completions`.
-    CopilotInline,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
-            Self::AnthropicMessages => "anthropic_messages",
-            Self::GeminiGenerate => "gemini_generate",
-            Self::CopilotInline => "copilot_inline",
         };
         f.write_str(value)
     }
@@ -91,19 +72,8 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
-            "anthropic_messages" => Ok(Self::AnthropicMessages),
-            "gemini_generate" => Ok(Self::GeminiGenerate),
-            "copilot_inline" => Ok(Self::CopilotInline),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(
-                &value,
-                &[
-                    "responses",
-                    "anthropic_messages",
-                    "gemini_generate",
-                    "copilot_inline",
-                ],
-            )),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
         }
     }
 }
@@ -268,7 +238,7 @@ impl ModelProviderInfo {
             auth_mode,
             Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
         ) {
-            "https://chatgpt.com/backend-api/codex"
+            CHATGPT_CODEX_BASE_URL
         } else {
             "https://api.openai.com/v1"
         };
@@ -357,12 +327,9 @@ impl ModelProviderInfo {
             wire_api: WireApi::Responses,
             query_params: None,
             http_headers: Some(
-                [(
-                    "version".to_string(),
-                    OPENAI_CLIENT_VERSION_OVERRIDE.to_string(),
-                )]
-                .into_iter()
-                .collect(),
+                [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
+                    .into_iter()
+                    .collect(),
             ),
             env_http_headers: Some(
                 [
@@ -385,80 +352,6 @@ impl ModelProviderInfo {
         }
     }
 
-    /// Test/helper constructor for an Anthropic Messages provider.
-    pub fn create_anthropic_provider() -> ModelProviderInfo {
-        ModelProviderInfo {
-            name: "Anthropic".into(),
-            base_url: None,
-            env_key: None,
-            env_key_instructions: None,
-            experimental_bearer_token: None,
-            auth: None,
-            aws: None,
-            wire_api: WireApi::AnthropicMessages,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
-            request_max_retries: None,
-            stream_max_retries: None,
-            stream_idle_timeout_ms: None,
-            websocket_connect_timeout_ms: None,
-            requires_openai_auth: false,
-            supports_websockets: false,
-        }
-    }
-
-    /// Test/helper constructor for a Google Gemini `generateContent` provider.
-    pub fn create_gemini_provider() -> ModelProviderInfo {
-        ModelProviderInfo {
-            name: "Gemini".into(),
-            base_url: None,
-            env_key: None,
-            env_key_instructions: None,
-            experimental_bearer_token: None,
-            auth: None,
-            aws: None,
-            wire_api: WireApi::GeminiGenerate,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
-            request_max_retries: None,
-            stream_max_retries: None,
-            stream_idle_timeout_ms: None,
-            websocket_connect_timeout_ms: None,
-            requires_openai_auth: false,
-            supports_websockets: false,
-        }
-    }
-
-    /// Built-in GitHub Copilot provider. Auth is performed via the OAuth
-    /// device flow in `core::auth::copilot_oauth`; the bearer token is
-    /// resolved per-request by `ModelClient::current_client_setup` rather
-    /// than carried in `experimental_bearer_token`.
-    pub fn create_copilot_provider() -> ModelProviderInfo {
-        ModelProviderInfo {
-            name: "GitHub Copilot".into(),
-            base_url: Some("https://api.githubcopilot.com".into()),
-            env_key: None,
-            env_key_instructions: Some(
-                "Sign in with GitHub Copilot from the login screen to authenticate.".into(),
-            ),
-            experimental_bearer_token: None,
-            auth: None,
-            aws: None,
-            wire_api: WireApi::CopilotInline,
-            query_params: None,
-            http_headers: None,
-            env_http_headers: None,
-            request_max_retries: None,
-            stream_max_retries: None,
-            stream_idle_timeout_ms: None,
-            websocket_connect_timeout_ms: None,
-            requires_openai_auth: false,
-            supports_websockets: false,
-        }
-    }
-
     pub fn create_amazon_bedrock_provider(
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
@@ -475,7 +368,10 @@ impl ModelProviderInfo {
             })),
             wire_api: WireApi::Responses,
             query_params: None,
-            http_headers: None,
+            http_headers: Some(HashMap::from([(
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.to_string(),
+            )])),
             env_http_headers: None,
             request_max_retries: None,
             stream_max_retries: None,
@@ -524,18 +420,6 @@ pub fn built_in_model_providers(
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
-        // GitHub Copilot is a built-in provider so the OAuth login flow can
-        // wire `model_provider = "copilot"` without writing a manual provider
-        // entry to config.toml.
-        ("copilot", ModelProviderInfo::create_copilot_provider()),
-        // Anthropic and Gemini are also built-in: the onboarding picker's
-        // "Configure model providers" flow writes `model_provider =
-        // "anthropic"` / `"gemini"` to config.toml, and without these
-        // registry entries the loader silently falls back to OpenAI on the
-        // next launch — making the `/model` picker show OpenAI models and
-        // every chat turn fail with a missing OpenAI key.
-        ("anthropic", ModelProviderInfo::create_anthropic_provider()),
-        ("gemini", ModelProviderInfo::create_gemini_provider()),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

@@ -256,7 +256,10 @@ fn test_create_amazon_bedrock_provider() {
             }),
             wire_api: WireApi::Responses,
             query_params: None,
-            http_headers: None,
+            http_headers: Some(maplit::hashmap! {
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>
+                    AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.to_string(),
+            }),
             env_http_headers: None,
             request_max_retries: None,
             stream_max_retries: None,
@@ -265,6 +268,21 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
         }
+    );
+}
+
+#[test]
+fn test_amazon_bedrock_provider_adds_mantle_client_agent_header() {
+    let api_provider = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None)
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("Amazon Bedrock provider should build API provider");
+
+    assert_eq!(
+        api_provider
+            .headers
+            .get(AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some(AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE)
     );
 }
 
@@ -437,52 +455,4 @@ refresh_interval_ms = 0
     let auth = provider.auth.expect("auth config should deserialize");
     assert_eq!(auth.refresh_interval_ms, 0);
     assert_eq!(auth.refresh_interval(), None);
-}
-
-/// Regression: every provider id the onboarding picker can persist into
-/// `model_provider` must resolve to a built-in entry. Without this
-/// guarantee the config loader silently falls back to OpenAI, which
-/// breaks the `/model` picker (shows OpenAI models) and login
-/// persistence (next launch can't find the configured provider).
-#[test]
-fn built_in_model_providers_registers_login_targets() {
-    let providers = crate::built_in_model_providers(/*openai_base_url*/ None);
-
-    for (provider_id, expected_wire_api) in [
-        ("openai", crate::WireApi::Responses),
-        ("anthropic", crate::WireApi::AnthropicMessages),
-        ("gemini", crate::WireApi::GeminiGenerate),
-        ("copilot", crate::WireApi::CopilotInline),
-    ] {
-        let info = providers
-            .get(provider_id)
-            .unwrap_or_else(|| panic!("built-in provider `{provider_id}` should be registered"));
-        assert_eq!(
-            info.wire_api, expected_wire_api,
-            "{provider_id} should resolve to {expected_wire_api:?}, got {:?}",
-            info.wire_api
-        );
-    }
-}
-
-#[test]
-fn openai_provider_version_header_uses_override_not_crate_version() {
-    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-    let version = provider
-        .http_headers
-        .as_ref()
-        .and_then(|h| h.get("version"))
-        .map(String::as_str);
-    assert_eq!(
-        version,
-        Some(OPENAI_CLIENT_VERSION_OVERRIDE),
-        "the OpenAI `version` header must report the upstream Codex version override, \
-         not ATA's crate version — otherwise OpenAI rejects newer models \
-         (\"... requires a newer version of Codex\")"
-    );
-    assert_ne!(
-        version,
-        Some(env!("CARGO_PKG_VERSION")),
-        "the OpenAI `version` header must NOT be env!(\"CARGO_PKG_VERSION\")"
-    );
 }

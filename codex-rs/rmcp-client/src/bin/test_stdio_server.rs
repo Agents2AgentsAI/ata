@@ -70,6 +70,7 @@ impl TestToolServer {
             Self::echo_dash_tool(),
             Self::cwd_tool(),
             Self::sync_tool(),
+            Self::sync_readonly_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
             sandbox_meta_tool,
@@ -205,6 +206,12 @@ impl TestToolServer {
         }))
         .expect("sync tool output schema should deserialize");
         tool.output_schema = Some(Arc::new(output_schema));
+        tool
+    }
+
+    fn sync_readonly_tool() -> Tool {
+        let mut tool = Self::sync_tool();
+        tool.name = Cow::Borrowed("sync_readonly");
         tool.annotations = Some(ToolAnnotations::new().read_only(true));
         tool
     }
@@ -304,7 +311,7 @@ impl TestToolServer {
         let raw = RawResourceTemplate {
             uri_template: "memo://codex/{slug}".to_string(),
             name: "codex-memo".to_string(),
-            title: Some("Ata Memo".to_string()),
+            title: Some("Codex Memo".to_string()),
             description: Some(
                 "Template for memo://codex/{slug} resources used in tests.".to_string(),
             ),
@@ -549,6 +556,10 @@ impl ServerHandler for TestToolServer {
             }
             "sync" => {
                 let args = Self::parse_call_args::<SyncArgs>(&request, "sync")?;
+                Self::sync_result(args).await
+            }
+            "sync_readonly" => {
+                let args = Self::parse_call_args::<SyncArgs>(&request, "sync_readonly")?;
                 Self::sync_result(args).await
             }
             other => Err(McpError::invalid_params(

@@ -43,6 +43,14 @@
         "defaultReasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
         },
+        "defaultServiceTier": {
+          "default": null,
+          "description": "Catalog default service tier id for this model, when one is configured.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": "string"
         },
@@ -178,27 +186,15 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "adaptive"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
-          "enum": [
-            "max"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
     },
     "ReasoningEffortOption": {
       "properties": {

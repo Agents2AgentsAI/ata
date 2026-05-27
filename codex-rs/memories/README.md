@@ -10,8 +10,8 @@ Runtime orchestration for Phase 1 and Phase 2 still lives in `codex-core` under
 - `codex-rs/memories/read` (`codex-memories-read`) owns the read path:
   memory developer-instruction injection, memory citation parsing, and
   read-usage telemetry classification.
-- `codex-rs/memories/mcp` (`codex-memories-mcp`) exposes the read-only memory
-  filesystem through the built-in MCP surface.
+- `codex-rs/memories/mcp` (`codex-memories-mcp`) owns the read-only memory
+  filesystem MCP server implementation.
 - `codex-rs/memories/write` (`codex-memories-write`) owns the write path:
   Phase 1 and Phase 2 prompt rendering, filesystem artifact helpers,
   workspace diff helpers, and extension resource pruning.
@@ -25,18 +25,6 @@ Memory prompt templates live with the crate that uses them:
   - `write/templates/memories/stage_one_system.md`
   - `write/templates/memories/stage_one_input.md`
   - `write/templates/memories/consolidation.md`
-- In `codex`, edit those undated template files in place.
-- The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
-
-## Prompt Templates
-
-Memory prompt templates live under `codex-rs/core/templates/memories/`.
-
-- The undated template files are the canonical latest versions used at runtime:
-  - `stage_one_system.md`
-  - `stage_one_input.md`
-  - `consolidation.md`
-  - `read_path.md`
 - In `codex`, edit those undated template files in place.
 - The dated snapshot-copy workflow is used in the separate `openai/project/agent_memory/write` harness repo, not here.
 

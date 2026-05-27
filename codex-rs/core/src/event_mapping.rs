@@ -90,17 +90,14 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
                     text_elements: Vec::new(),
                 });
             }
-            ContentItem::InputImage { image_url, .. } => {
+            ContentItem::InputImage { image_url, detail } => {
                 content.push(UserInput::Image {
                     image_url: image_url.clone(),
+                    detail: *detail,
                 });
             }
             ContentItem::OutputText { text } => {
                 warn!("Output text in user message: {}", text);
-            }
-            ContentItem::InputFile { .. } | ContentItem::UrlFile { .. } => {
-                // File attachments are handled by the file_injection pipeline
-                // before user-input mapping, so they do not surface here.
             }
         }
     }

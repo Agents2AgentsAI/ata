@@ -423,7 +423,6 @@
           ]
         },
         "includeLayers": {
-          "default": false,
           "type": "boolean"
         }
       },
@@ -513,47 +512,6 @@
         },
         {
           "properties": {
-            "file_data": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "file_id": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "mime_type": {
-              "description": "MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini) that need it when converting to their native format. Skipped during serialization because the OpenAI Responses API does not accept this field on `input_file` blocks; the MIME type is already embedded in the `file_data` data-URI.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "input_file"
-              ],
-              "title": "InputFileContentItemType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "InputFileContentItem",
-          "type": "object"
-        },
-        {
-          "properties": {
             "text": {
               "type": "string"
             },
@@ -570,39 +528,6 @@
             "type"
           ],
           "title": "OutputTextContentItem",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "filename": {
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "mime_type": {
-              "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "url_file"
-              ],
-              "title": "UrlFileContentItemType",
-              "type": "string"
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "url"
-          ],
-          "title": "UrlFileContentItem",
           "type": "object"
         }
       ]
@@ -663,6 +588,13 @@
           "minimum": 0.0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "description": "Optional loaded thread id. Pass this when showing feature state for an existing thread so enablement is computed from that thread's refreshed config, including project-local config for the thread's cwd.",
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -788,206 +720,9 @@
         }
       },
       "required": [
-        "classification",
-        "includeLogs"
+        "classification"
       ],
       "type": "object"
-    },
-    "FileSystemAccessMode": {
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ],
-      "type": "string"
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "PathFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "title": "GlobPatternFileSystemPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "required": [
-            "type",
-            "value"
-          ],
-          "title": "SpecialFileSystemPath",
-          "type": "object"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      },
-      "required": [
-        "access",
-        "path"
-      ],
-      "type": "object"
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "root"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "RootFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "minimal"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "MinimalFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "project_roots"
-              ],
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "KindFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "tmpdir"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "TmpdirFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "slash_tmp"
-              ],
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "title": "SlashTmpFileSystemSpecialPath",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "kind": {
-              "enum": [
-                "unknown"
-              ],
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        }
-      ]
     },
     "FsCopyParams": {
       "description": "Copy a file or directory tree on the host filesystem.",
@@ -1247,6 +982,26 @@
           ],
           "title": "InputImageFunctionCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "encrypted_content"
+              ],
+              "title": "EncryptedContentFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "EncryptedContentFunctionCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
@@ -1277,7 +1032,6 @@
     "GetAccountParams": {
       "properties": {
         "refreshToken": {
-          "default": false,
           "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
           "type": "boolean"
         }
@@ -1309,8 +1063,6 @@
     },
     "ImageDetail": {
       "enum": [
-        "auto",
-        "low",
         "high",
         "original"
       ],
@@ -1333,6 +1085,11 @@
             "array",
             "null"
           ]
+        },
+        "requestAttestation": {
+          "default": false,
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1512,23 +1269,6 @@
           "type": "object"
         },
         {
-          "description": "Start the GitHub Copilot device-code OAuth flow. The response carries the user_code + verification URI the client should display; the completion notification arrives once the user authorizes.",
-          "properties": {
-            "type": {
-              "enum": [
-                "copilotDeviceCode"
-              ],
-              "title": "CopilotDeviceCodeLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "CopilotDeviceCodeLoginAccountParams",
-          "type": "object"
-        },
-        {
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
@@ -1560,111 +1300,6 @@
             "type"
           ],
           "title": "ChatgptAuthTokensLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "Persist an API key for a specific provider. Generalizes the legacy OpenAI-only `apiKey` variant by carrying the provider id so the processor can route to the right credential store (OpenAI, Anthropic, Gemini, etc.).",
-          "properties": {
-            "apiKey": {
-              "type": "string"
-            },
-            "providerId": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "providerApiKey"
-              ],
-              "title": "ProviderApiKeyLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "apiKey",
-            "providerId",
-            "type"
-          ],
-          "title": "ProviderApiKeyLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The response carries a browser URL the client should open; the completion notification fires once the OAuth callback exchanges tokens.",
-          "properties": {
-            "type": {
-              "enum": [
-                "geminiOauth"
-              ],
-              "title": "GeminiOauthLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "GeminiOauthLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "Send the Supabase OTP for an ATA account email.",
-          "properties": {
-            "email": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "ataSendOtp"
-              ],
-              "title": "AtaSendOtpLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "email",
-            "type"
-          ],
-          "title": "AtaSendOtpLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "Verify a Supabase OTP and persist the ATA session.",
-          "properties": {
-            "email": {
-              "type": "string"
-            },
-            "otp": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "ataVerifyOtp"
-              ],
-              "title": "AtaVerifyOtpLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "email",
-            "otp",
-            "type"
-          ],
-          "title": "AtaVerifyOtpLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "Sign out of the active ATA account session.",
-          "properties": {
-            "type": {
-              "enum": [
-                "ataLogout"
-              ],
-              "title": "AtaLogoutLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "AtaLogoutLoginAccountParams",
           "type": "object"
         }
       ]
@@ -1923,193 +1558,33 @@
       ],
       "type": "string"
     },
-    "PermissionProfile": {
-      "oneOf": [
-        {
-          "description": "Codex owns sandbox construction for this profile.",
-          "properties": {
-            "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
-            },
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "managed"
-              ],
-              "title": "ManagedPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "fileSystem",
-            "network",
-            "type"
-          ],
-          "title": "ManagedPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Do not apply an outer sandbox.",
-          "properties": {
-            "type": {
-              "enum": [
-                "disabled"
-              ],
-              "title": "DisabledPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "DisabledPermissionProfile",
-          "type": "object"
-        },
-        {
-          "description": "Filesystem isolation is enforced by an external caller.",
-          "properties": {
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "enum": [
-                "external"
-              ],
-              "title": "ExternalPermissionProfileType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "network",
-            "type"
-          ],
-          "title": "ExternalPermissionProfile",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileFileSystemPermissions": {
-      "oneOf": [
-        {
-          "properties": {
-            "entries": {
-              "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
-              },
-              "type": "array"
-            },
-            "globScanMaxDepth": {
-              "format": "uint",
-              "minimum": 1.0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "restricted"
-              ],
-              "title": "RestrictedPermissionProfileFileSystemPermissionsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "entries",
-            "type"
-          ],
-          "title": "RestrictedPermissionProfileFileSystemPermissions",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "unrestricted"
-              ],
-              "title": "UnrestrictedPermissionProfileFileSystemPermissionsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "UnrestrictedPermissionProfileFileSystemPermissions",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileModificationParams": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootPermissionProfileModificationParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "AdditionalWritableRootPermissionProfileModificationParams",
-          "type": "object"
-        }
-      ]
-    },
-    "PermissionProfileNetworkPermissions": {
+    "PermissionProfileListParams": {
       "properties": {
-        "enabled": {
-          "type": "boolean"
+        "cursor": {
+          "description": "Opaque pagination cursor returned by a previous call.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cwd": {
+          "description": "Optional working directory to resolve project config layers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Optional page size; defaults to the full result set.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
-      "required": [
-        "enabled"
-      ],
       "type": "object"
-    },
-    "PermissionProfileSelectionParams": {
-      "oneOf": [
-        {
-          "description": "Select a named built-in or user-defined profile and optionally apply bounded modifications that Codex knows how to validate.",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "modifications": {
-              "items": {
-                "$ref": "#/definitions/PermissionProfileModificationParams"
-              },
-              "type": [
-                "array",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "profile"
-              ],
-              "title": "ProfilePermissionProfileSelectionParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "id",
-            "type"
-          ],
-          "title": "ProfilePermissionProfileSelectionParams",
-          "type": "object"
-        }
-      ]
     },
     "Personality": {
       "enum": [
@@ -2146,9 +1621,35 @@
       ],
       "type": "object"
     },
+    "PluginInstalledParams": {
+      "properties": {
+        "cwds": {
+          "description": "Optional working directories used to discover repo marketplaces.",
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "installSuggestionPluginNames": {
+          "description": "Additional uninstalled plugin names that should be returned when present locally. This is used by mention surfaces that intentionally expose install entrypoints.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "PluginListMarketplaceKind": {
       "enum": [
         "local",
+        "vertical",
         "workspace-directory",
         "shared-with-me"
       ],
@@ -2203,6 +1704,17 @@
       },
       "required": [
         "pluginName"
+      ],
+      "type": "object"
+    },
+    "PluginShareCheckoutParams": {
+      "properties": {
+        "remotePluginId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "remotePluginId"
       ],
       "type": "object"
     },
@@ -2279,13 +1791,24 @@
         },
         "principalType": {
           "$ref": "#/definitions/PluginSharePrincipalType"
+        },
+        "role": {
+          "$ref": "#/definitions/PluginShareTargetRole"
         }
       },
       "required": [
         "principalId",
-        "principalType"
+        "principalType",
+        "role"
       ],
       "type": "object"
+    },
+    "PluginShareTargetRole": {
+      "enum": [
+        "reader",
+        "editor"
+      ],
+      "type": "string"
     },
     "PluginShareUpdateDiscoverability": {
       "enum": [
@@ -2419,27 +1942,15 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "minimal",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "adaptive"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
-          "enum": [
-            "max"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "type": "string"
     },
     "ReasoningItemContent": {
       "oneOf": [
@@ -2971,6 +2482,22 @@
         },
         {
           "properties": {
+            "type": {
+              "enum": [
+                "compaction_trigger"
+              ],
+              "title": "CompactionTriggerResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompactionTriggerResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "encrypted_content": {
               "type": [
                 "string",
@@ -3342,45 +2869,6 @@
         }
       ]
     },
-    "SchedulingTaskDeleteParams": {
-      "description": "ATA: delete one scheduling task (cron job, monitor, or loop) from a thread's registry. Used by the `/scheduling` TUI panel's `d` shortcut. Server aborts the task first if it's still running. Response is empty; the panel observes the removal via the next `SchedulingTasksSnapshot` notification, which the server emits immediately after the delete.",
-      "properties": {
-        "kind": {
-          "$ref": "#/definitions/SchedulingTaskKind"
-        },
-        "taskId": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "kind",
-        "taskId",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "SchedulingTaskKind": {
-      "description": "ATA: discriminator for the scheduling task families, used on the wire by [`Op::DeleteSchedulingTask`] and any future per-kind operations.",
-      "enum": [
-        "cron",
-        "monitor"
-      ],
-      "type": "string"
-    },
-    "SchedulingTasksListParams": {
-      "properties": {
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
     "SendAddCreditsNudgeEmailParams": {
       "properties": {
         "creditType": {
@@ -3565,7 +3053,7 @@
       "type": "object"
     },
     "ThreadForkParams": {
-      "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
+      "description": "There are two ways to fork a thread: 1. By thread_id: load the thread from disk by thread_id and fork it into a new thread. 2. By path: load the thread from disk by path and fork it into a new thread.\n\nIf using a non-empty path, the thread_id param will be ignored. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",
       "properties": {
         "approvalPolicy": {
           "anyOf": [
@@ -3665,10 +3153,68 @@
       ],
       "type": "object"
     },
+    "ThreadGoalClearParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadGoalGetParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadGoalSetParams": {
+      "properties": {
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tokenBudget": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadGoalStatus": {
       "enum": [
         "active",
         "paused",
+        "blocked",
+        "usageLimited",
         "budgetLimited",
         "complete"
       ],
@@ -3875,7 +3421,6 @@
     "ThreadReadParams": {
       "properties": {
         "includeTurns": {
-          "default": false,
           "description": "When true, include turns and their items from rollout history.",
           "type": "boolean"
         },
@@ -3969,7 +3514,7 @@
       ]
     },
     "ThreadResumeParams": {
-      "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nThe precedence is: history > path > thread_id. If using history or path, the thread_id param will be ignored.\n\nPrefer using thread_id whenever possible.",
+      "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nFor non-running threads, the precedence is: history > non-empty path > thread_id. If using history or a non-empty path for a non-running thread, the thread_id param will be ignored.\n\nIf thread_id identifies a running thread, app-server rejoins that thread and treats a non-empty path as a consistency check against the active rollout path. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",
       "properties": {
         "approvalPolicy": {
           "anyOf": [
@@ -4513,6 +4058,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "type": {
               "enum": [
                 "image"
@@ -4533,6 +4089,17 @@
         },
         {
           "properties": {
+            "detail": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
             "path": {
               "type": "string"
             },
@@ -4597,60 +4164,6 @@
             "type"
           ],
           "title": "MentionUserInput",
-          "type": "object"
-        },
-        {
-          "description": "Local PDF or other file the user attached, either explicitly via the composer or implicitly via the proactive-injection pipeline that detects PDF mentions in turn text. Sent through to the model as a `ContentItem::InputFile` block once the file is read or uploaded.",
-          "properties": {
-            "path": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "localFile"
-              ],
-              "title": "LocalFileUserInputType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "path",
-            "type"
-          ],
-          "title": "LocalFileUserInput",
-          "type": "object"
-        },
-        {
-          "description": "File previously uploaded to the provider's file API and reused by `file_id` (avoids re-uploading on subsequent turns).",
-          "properties": {
-            "file_id": {
-              "type": "string"
-            },
-            "filename": {
-              "type": "string"
-            },
-            "mime_type": {
-              "type": "string"
-            },
-            "source_path": {
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "uploadedFile"
-              ],
-              "title": "UploadedFileUserInputType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "file_id",
-            "filename",
-            "mime_type",
-            "source_path",
-            "type"
-          ],
-          "title": "UploadedFileUserInput",
           "type": "object"
         }
       ]
@@ -4862,6 +4375,78 @@
         },
         "method": {
           "enum": [
+            "thread/goal/set"
+          ],
+          "title": "Thread/goal/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadGoalSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/goal/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/goal/get"
+          ],
+          "title": "Thread/goal/getRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadGoalGetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/goal/getRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/goal/clear"
+          ],
+          "title": "Thread/goal/clearRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadGoalClearParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/goal/clearRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "thread/metadata/update"
           ],
           "title": "Thread/metadata/updateRequestMethod",
@@ -4925,54 +4510,6 @@
         "params"
       ],
       "title": "Thread/compact/startRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "scheduling/tasks/list"
-          ],
-          "title": "Scheduling/tasks/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SchedulingTasksListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Scheduling/tasks/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "scheduling/tasks/delete"
-          ],
-          "title": "Scheduling/tasks/deleteRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SchedulingTaskDeleteParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Scheduling/tasks/deleteRequest",
       "type": "object"
     },
     {
@@ -5295,6 +4832,30 @@
         },
         "method": {
           "enum": [
+            "plugin/installed"
+          ],
+          "title": "Plugin/installedRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginInstalledParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/installedRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "plugin/read"
           ],
           "title": "Plugin/readRequestMethod",
@@ -5406,6 +4967,30 @@
         "params"
       ],
       "title": "Plugin/share/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "plugin/share/checkout"
+          ],
+          "title": "Plugin/share/checkoutRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PluginShareCheckoutParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Plugin/share/checkoutRequest",
       "type": "object"
     },
     {
@@ -5910,6 +5495,30 @@
         "params"
       ],
       "title": "ExperimentalFeature/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "permissionProfile/list"
+          ],
+          "title": "PermissionProfile/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PermissionProfileListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "PermissionProfile/listRequest",
       "type": "object"
     },
     {

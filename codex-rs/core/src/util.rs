@@ -2,11 +2,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_protocol::ThreadId;
 use rand::Rng;
 use tracing::error;
-
-use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
@@ -92,74 +89,6 @@ pub fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
-const REDACTED_SECRET: &str = "[REDACTED_SECRET]";
-
-pub(crate) fn redact_error_body(body: &str) -> String {
-    let redacted_json = serde_json::from_str::<serde_json::Value>(body)
-        .map(|mut value| {
-            redact_sensitive_json_fields(&mut value);
-            serde_json::to_string(&value).unwrap_or_else(|_| body.to_string())
-        })
-        .unwrap_or_else(|_| body.to_string());
-
-    redact_secrets_in_text(redacted_json)
-}
-
-fn redact_sensitive_json_fields(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, nested) in map.iter_mut() {
-                if is_sensitive_error_key(key) {
-                    *nested = serde_json::Value::String(REDACTED_SECRET.to_string());
-                } else {
-                    redact_sensitive_json_fields(nested);
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                redact_sensitive_json_fields(item);
-            }
-        }
-        serde_json::Value::Null
-        | serde_json::Value::Bool(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::String(_) => {}
-    }
-}
-
-fn is_sensitive_error_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    matches!(
-        lower.as_str(),
-        "access_token"
-            | "refresh_token"
-            | "id_token"
-            | "token"
-            | "authorization"
-            | "authorization_code"
-            | "code_verifier"
-            | "client_secret"
-            | "secret"
-            | "password"
-            | "api_key"
-            | "apikey"
-    ) || lower.ends_with("_token")
-        || lower.ends_with("_api_key")
-}
-
-fn redact_secrets_in_text(text: String) -> String {
-    use regex_lite::Regex;
-    use std::sync::LazyLock;
-    static BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._\-]+")
-            .unwrap_or_else(|e| panic!("BEARER_RE compile failed: {e}"))
-    });
-    BEARER_RE
-        .replace_all(&text, format!("Bearer {REDACTED_SECRET}").as_str())
-        .into_owned()
-}
-
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     if cfg!(debug_assertions) {
         panic!("{}", message.to_string());
@@ -184,22 +113,6 @@ pub fn normalize_thread_name(name: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
-    let resume_target = thread_name
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .or_else(|| thread_id.map(|thread_id| thread_id.to_string()));
-    resume_target.map(|target| {
-        let needs_double_dash = target.starts_with('-');
-        let escaped = shlex_join(&[target]);
-        if needs_double_dash {
-            format!("ata resume -- {escaped}")
-        } else {
-            format!("ata resume {escaped}")
-        }
-    })
 }
 
 #[cfg(test)]

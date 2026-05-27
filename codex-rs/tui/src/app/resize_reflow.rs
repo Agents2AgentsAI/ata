@@ -98,11 +98,7 @@ impl App {
         if display.is_empty() {
             return;
         }
-        // When an overlay owns the screen, OR when the reading view has taken
-        // over the alternate screen, queue lines instead of inserting them —
-        // otherwise history insertion scrolls into the active buffer and
-        // corrupts the reader's rendering.
-        if self.overlay.is_some() || self.reader_alt_screen_active {
+        if self.overlay.is_some() {
             self.deferred_history_lines.extend(display);
         } else {
             tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
@@ -191,7 +187,7 @@ impl App {
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
             if let Some(max_rows) = max_rows {
                 Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
-            } else if self.overlay.is_some() || self.reader_alt_screen_active {
+            } else if self.overlay.is_some() {
                 self.deferred_history_lines.extend(display);
             } else {
                 tui.insert_history_lines_with_wrap_policy(display, self.history_line_wrap_policy());
@@ -423,12 +419,13 @@ impl App {
     }
 
     pub(super) fn reflow_transcript_now(&mut self, tui: &mut tui::Tui) -> Result<u16> {
-        let width = tui.terminal.size()?.width;
+        let terminal_width = tui.terminal.size()?.width;
+        let width = self.chat_widget.history_wrap_width(terminal_width);
         if self.transcript_cells.is_empty() {
             // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
             tui.clear_pending_history_lines();
             self.reset_history_emission_state();
-            return Ok(width);
+            return Ok(terminal_width);
         }
 
         let reflow_result = self.render_transcript_lines_for_reflow(width);
@@ -446,7 +443,7 @@ impl App {
             );
         }
 
-        Ok(width)
+        Ok(terminal_width)
     }
 
     /// Render transcript cells for the current resize rebuild.

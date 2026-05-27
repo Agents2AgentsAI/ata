@@ -97,13 +97,14 @@ const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
 ];
 const APP_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const APP_SERVER_GRACEFUL_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const OTEL_SERVICE_NAME: &str = "codex-app-server-test-client";
 const TRACE_DISABLED_MESSAGE: &str =
     "Not enabled - enable tracing in $CODEX_HOME/config.toml to get a trace URL!";
 
 /// Minimal launcher that initializes the Codex app-server and logs the handshake.
 #[derive(Parser)]
-#[command(author = "Ata", version, about = "Bootstrap Codex app-server", long_about = None)]
+#[command(author = "Codex", version, about = "Bootstrap Codex app-server", long_about = None)]
 struct Cli {
     /// Path to the `codex` CLI binary. When set, requests use stdio by
     /// spawning `codex app-server` as a child process.
@@ -1545,11 +1546,12 @@ impl CodexClient {
             params: InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-toy-app-server".to_string(),
-                    title: Some("Ata Toy App Server".to_string()),
+                    title: Some("Codex Toy App Server".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api,
+                    request_attestation: false,
                     opt_out_notification_methods: Some(
                         NOTIFICATIONS_TO_OPT_OUT
                             .iter()
@@ -2136,7 +2138,7 @@ impl TestClientTracing {
             &config,
             env!("CARGO_PKG_VERSION"),
             Some(OTEL_SERVICE_NAME),
-            /*default_analytics_enabled*/ false,
+            DEFAULT_ANALYTICS_ENABLED,
         )
         .map_err(|e| anyhow::anyhow!("error loading otel config: {e}"))?;
         let traces_enabled = otel_provider

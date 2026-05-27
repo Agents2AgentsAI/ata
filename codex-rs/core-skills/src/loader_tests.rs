@@ -99,6 +99,7 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
         ConfigLayerEntry::new(
             ConfigLayerSource::User {
                 file: config_file(user_config_path),
+                profile: None,
             },
             TomlValue::Table(toml::map::Map::new()),
         ),
@@ -164,7 +165,10 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
             TomlValue::Table(toml::map::Map::new()),
         ),
         ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: user_file },
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
             TomlValue::Table(toml::map::Map::new()),
         ),
     ];
@@ -198,20 +202,6 @@ async fn skill_roots_from_layer_stack_maps_user_to_user_and_system_cache_and_sys
                 SkillScope::System,
                 user_folder.join("skills").join(".system")
             ),
-            // ATA-bundled custom system skill categories (see
-            // codex_skills::custom_skill_cache_root_dirs in skills/src/lib.rs).
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-research")
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-workspace")
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-adapt-environment")
-            ),
             (SkillScope::Admin, system_folder.join("skills")),
         ]
     );
@@ -236,7 +226,10 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
 
     let layers = vec![
         ConfigLayerEntry::new(
-            ConfigLayerSource::User { file: user_file },
+            ConfigLayerSource::User {
+                file: user_file,
+                profile: None,
+            },
             TomlValue::Table(toml::map::Map::new()),
         ),
         ConfigLayerEntry::new_disabled(
@@ -279,20 +272,6 @@ async fn skill_roots_from_layer_stack_includes_disabled_project_layers() -> anyh
                 SkillScope::System,
                 user_folder.join("skills").join(".system")
             ),
-            // ATA-bundled custom system skill categories (see
-            // codex_skills::custom_skill_cache_root_dirs in skills/src/lib.rs).
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-research")
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-workspace")
-            ),
-            (
-                SkillScope::System,
-                user_folder.join("skills").join(".system-adapt-environment")
-            ),
         ]
     );
 
@@ -309,7 +288,10 @@ async fn loads_skills_from_home_agents_dir_for_user_scope() -> anyhow::Result<()
 
     let user_file = user_folder.join("config.toml").abs();
     let layers = vec![ConfigLayerEntry::new(
-        ConfigLayerSource::User { file: user_file },
+        ConfigLayerSource::User {
+            file: user_file,
+            profile: None,
+        },
         TomlValue::Table(toml::map::Map::new()),
     )];
     let stack = ConfigLayerStack::new(
@@ -418,11 +400,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
   "dependencies": {
     "tools": [
       {
-        "type": "env_var",
-        "value": "GITHUB_TOKEN",
-        "description": "GitHub API token with repo scopes"
-      },
-      {
         "type": "mcp",
         "value": "github",
         "description": "GitHub MCP server",
@@ -464,14 +441,6 @@ async fn loads_skill_dependencies_metadata_from_yaml() {
             interface: None,
             dependencies: Some(SkillDependencies {
                 tools: vec![
-                    SkillToolDependency {
-                        r#type: "env_var".to_string(),
-                        value: "GITHUB_TOKEN".to_string(),
-                        description: Some("GitHub API token with repo scopes".to_string()),
-                        transport: None,
-                        command: None,
-                        url: None,
-                    },
                     SkillToolDependency {
                         r#type: "mcp".to_string(),
                         value: "github".to_string(),
@@ -853,6 +822,116 @@ async fn drops_interface_when_icons_are_invalid() {
     );
 }
 
+#[tokio::test]
+async fn loads_plugin_skill_interface_icons_from_shared_plugin_assets() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("plugins/twilio-developer-kit");
+    let skill_path = write_skill_at(
+        &plugin_root.join("skills"),
+        "twilio-send-message",
+        "send-message",
+        "send messages",
+    );
+    let skill_dir = skill_path.parent().expect("skill dir");
+    fs::create_dir_all(plugin_root.join("assets")).unwrap();
+    fs::write(plugin_root.join("assets/logo.svg"), "<svg/>").unwrap();
+    write_skill_interface_at(
+        skill_dir,
+        r##"
+interface:
+  icon_small: "../../assets/logo.svg"
+  icon_large: "../../assets/logo.svg"
+"##,
+    );
+
+    let plugin_root_abs = plugin_root.abs();
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_root: Some(plugin_root_abs.clone()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    let expected_icon_path = normalized(&plugin_root.join("assets/logo.svg"));
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "send messages".to_string(),
+            short_description: None,
+            interface: Some(SkillInterface {
+                display_name: None,
+                short_description: None,
+                icon_small: Some(expected_icon_path.clone()),
+                icon_large: Some(expected_icon_path),
+                brand_color: None,
+                default_prompt: None,
+            }),
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn drops_plugin_skill_interface_icons_that_escape_shared_plugin_assets() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_root = root.path().join("plugins/twilio-developer-kit");
+    let skill_path = write_skill_at(
+        &plugin_root.join("skills"),
+        "twilio-send-message",
+        "send-message",
+        "send messages",
+    );
+    let skill_dir = skill_path.parent().expect("skill dir");
+    write_skill_interface_at(
+        skill_dir,
+        r##"
+interface:
+  icon_small: "../../other/logo.svg"
+"##,
+    );
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("twilio-developer-kit@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: "send-message".to_string(),
+            description: "send messages".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("twilio-developer-kit@test".to_string()),
+        }]
+    );
+}
+
 #[cfg(unix)]
 fn symlink_dir(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).unwrap();
@@ -974,6 +1053,7 @@ async fn loads_skills_via_symlinked_subdir_for_admin_scope() {
         scope: SkillScope::Admin,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
 
@@ -1055,6 +1135,7 @@ async fn system_scope_ignores_symlinked_subdir() {
         scope: SkillScope::System,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
     assert!(
@@ -1088,6 +1169,7 @@ async fn respects_max_scan_depth_for_user_scope() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: None,
+        plugin_root: None,
     }])
     .await;
 
@@ -1194,6 +1276,7 @@ async fn namespaces_plugin_skills_using_plugin_name() {
         scope: SkillScope::User,
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
     }])
     .await;
 
@@ -1516,12 +1599,14 @@ async fn deduplicates_by_path_preferring_first_root() {
             scope: SkillScope::Repo,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_root: None,
         },
         SkillRoot {
             path: root.path().abs(),
             scope: SkillScope::User,
             file_system: Arc::clone(&LOCAL_FS),
             plugin_id: None,
+            plugin_root: None,
         },
     ])
     .await;
@@ -1765,44 +1850,13 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
 
     let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
 
-    // The test asserts that, in the absence of a project-root marker,
-    // skill discovery does NOT walk to parent directories. On CI runners
-    // where the test tempdir resolves under an ancestor that already
-    // contains a `.git` (e.g. `/tmp/.git` exists on some RunsOn images),
-    // `find_project_root` resolves a project root above `outer_dir`,
-    // `dirs_between_project_root_and_cwd` then includes `outer_dir`, and
-    // the helper picks up `outer_dir/.codex/skills/outer/SKILL.md` as a
-    // legitimate Repo-scope skill — completely defeating the test premise.
-    // Skip when that environmental condition is present so the test still
-    // exercises the intended invariant on hermetic developer machines.
-    if outer_dir
-        .path()
-        .ancestors()
-        .any(|a| a.join(".git").exists())
-    {
-        eprintln!(
-            "skipping non-git-walk test: {} has an ancestor `.git`",
-            outer_dir.path().display()
-        );
-        return;
-    }
-
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
         outcome.errors.is_empty(),
         "unexpected errors: {:?}",
         outcome.errors
     );
-    // ATA's bundled system skill cache (`$CODEX_HOME/skills/.system-*`) may
-    // discover skills regardless of cwd. The intent of this test is that
-    // non-system project skills do not leak from parent dirs of a non-git
-    // cwd, so only assert that no Project/Repo/User-scoped skills appear.
-    let non_system_skills: Vec<&SkillMetadata> = outcome
-        .skills
-        .iter()
-        .filter(|s| s.scope != SkillScope::System)
-        .collect();
-    assert_eq!(non_system_skills.len(), 0, "{non_system_skills:?}");
+    assert_eq!(outcome.skills.len(), 0);
 }
 
 #[tokio::test]
@@ -1855,19 +1909,6 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
     }
-    // ATA-bundled custom system skill categories register 3 extra System
-    // roots after the upstream `.system` entry.
-    expected.extend([SkillScope::System, SkillScope::System, SkillScope::System]);
     expected.push(SkillScope::Admin);
-    // On CI runners where `TMPDIR` resolves inside the ata workspace, walking
-    // ancestors of cwd encounters the workspace's `.codex/` directory and
-    // `project_layers_for_cwd` adds Project layer(s), which become Repo
-    // scope(s) at the front of the returned roots. Strip any leading Repo
-    // scopes so the test still captures the intended ordering invariant
-    // (User → System tail → Admin) regardless of the runner's TMPDIR.
-    let scopes_normalized: Vec<SkillScope> = scopes
-        .into_iter()
-        .skip_while(|s| *s == SkillScope::Repo)
-        .collect();
-    assert_eq!(scopes_normalized, expected);
+    assert_eq!(scopes, expected);
 }

@@ -2,23 +2,9 @@ name: cargo-deny
 
 on:
   pull_request:
-    paths:
-      - "codex-rs/**/Cargo.toml"
-      - "codex-rs/Cargo.lock"
-      - "codex-rs/deny.toml"
-      - ".github/workflows/cargo-deny.yml"
   push:
     branches:
       - main
-    paths:
-      - "codex-rs/**/Cargo.toml"
-      - "codex-rs/Cargo.lock"
-      - "codex-rs/deny.toml"
-      - ".github/workflows/cargo-deny.yml"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref_name != 'main' }}
 
 jobs:
   cargo-deny:
@@ -29,6 +15,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
@@ -36,5 +25,5 @@ jobs:
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@82eb9f621fbc699dd0918f3ea06864c14cc84246 # v2
         with:
-          rust-version: "1.93.0"
+          rust-version: 1.93.0
           manifest-path: ./codex-rs/Cargo.toml

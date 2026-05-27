@@ -12,7 +12,6 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
-use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use regex_lite::Regex;
@@ -54,6 +53,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -73,8 +73,6 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
 /// responses server, and ensures the model receives the synthesized abort.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_tool_records_history_entries() {
-    skip_if_sandbox!();
-
     let command = "sleep 60";
     let call_id = "call-history";
 
@@ -112,6 +110,7 @@ async fn interrupt_tool_records_history_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -132,6 +131,7 @@ async fn interrupt_tool_records_history_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -177,8 +177,6 @@ async fn interrupt_tool_records_history_entries() {
 /// history. This test asserts that the marker is included in the next `/responses` request.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_persists_turn_aborted_marker_in_next_request() {
-    skip_if_sandbox!();
-
     let command = "sleep 60";
     let call_id = "call-turn-aborted-marker";
 
@@ -216,6 +214,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -236,6 +235,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();

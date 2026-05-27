@@ -116,6 +116,7 @@ pub async fn run_codex_tool_session(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         },
         trace: None,
     };
@@ -165,6 +166,7 @@ pub async fn run_codex_tool_session_reply(
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
     {
@@ -331,6 +333,7 @@ async fn run_codex_tool_session_inner(
                     }
                     EventMsg::AgentReasoningRawContent(_)
                     | EventMsg::TurnStarted(_)
+                    | EventMsg::ThreadSettingsApplied(_)
                     | EventMsg::TokenCount(_)
                     | EventMsg::AgentReasoning(_)
                     | EventMsg::AgentReasoningSectionBreak(_)
@@ -364,7 +367,6 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentMessageContentDelta(_)
                     | EventMsg::ReasoningContentDelta(_)
                     | EventMsg::ReasoningRawContentDelta(_)
-                    | EventMsg::SkillsUpdateAvailable
                     | EventMsg::ExitedReviewMode(_)
                     | EventMsg::RequestUserInput(_)
                     | EventMsg::RequestPermissions(_)
@@ -387,14 +389,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::RealtimeConversationSdp(_)
                     | EventMsg::RealtimeConversationRealtime(_)
                     | EventMsg::RealtimeConversationClosed(_)
-                    | EventMsg::DeprecationNotice(_)
-                    | EventMsg::PresentDocument(_)
-                    | EventMsg::UpdateDocumentSection(_)
-                    | EventMsg::AppendDocumentSection(_)
-                    | EventMsg::AddDocumentSection(_)
-                    | EventMsg::PatchDocumentSection(_)
-                    | EventMsg::SchedulingTasksSnapshot(_)
-                    | EventMsg::SchedulingMonitorOutputDelta(_) => {
+                    | EventMsg::DeprecationNotice(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

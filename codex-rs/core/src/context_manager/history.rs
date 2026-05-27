@@ -29,13 +29,6 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
 
-/// Information about a file attachment that was dropped from history.
-/// `url` is `Some` for `UrlFile` items and `None` for `InputFile` items.
-pub(crate) struct DroppedUrlFileInfo {
-    pub(crate) url: Option<String>,
-    pub(crate) filename: Option<String>,
-}
-
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {
@@ -133,6 +126,11 @@ impl ContextManager {
         &self.items
     }
 
+    /// Returns raw items in the history and consumes the snapshot.
+    pub(crate) fn into_raw_items(self) -> Vec<ResponseItem> {
+        self.items
+    }
+
     pub(crate) fn history_version(&self) -> u64 {
         self.history_version
     }
@@ -189,72 +187,6 @@ impl ContextManager {
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
-    }
-
-    /// Drops up to `max_count` URL/inline file attachments from user messages
-    /// in the most recent turn. Returns metadata for each dropped attachment so
-    /// the caller can attempt cache-based recovery (e.g., re-inject the cached
-    /// bytes when the provider rejected the live URL fetch).
-    ///
-    /// `max_count == 0` is a no-op and returns an empty vec. Empty user message
-    /// content blocks are removed once their attachments are stripped.
-    pub(crate) fn drop_last_turn_url_files(&mut self, max_count: usize) -> Vec<DroppedUrlFileInfo> {
-        if max_count == 0 {
-            return Vec::new();
-        }
-
-        let last_turn_start = self
-            .items
-            .iter()
-            .rposition(is_user_turn_boundary)
-            .unwrap_or(self.items.len());
-
-        let mut dropped = Vec::new();
-        let mut bumped = false;
-        for item in self.items[last_turn_start..].iter_mut() {
-            let ResponseItem::Message { role, content, .. } = item else {
-                continue;
-            };
-            if role != "user" {
-                continue;
-            }
-            content.retain_mut(|c| {
-                if dropped.len() >= max_count {
-                    return true;
-                }
-                match c {
-                    ContentItem::UrlFile { url, filename, .. } => {
-                        dropped.push(DroppedUrlFileInfo {
-                            url: Some(std::mem::take(url)),
-                            filename: filename.take(),
-                        });
-                        bumped = true;
-                        false
-                    }
-                    ContentItem::InputFile { filename, .. } => {
-                        dropped.push(DroppedUrlFileInfo {
-                            url: None,
-                            filename: filename.take(),
-                        });
-                        bumped = true;
-                        false
-                    }
-                    _ => true,
-                }
-            });
-        }
-
-        // Drop user messages that became empty after stripping attachments.
-        let len_before = self.items.len();
-        self.items.retain(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => !content.is_empty(),
-            _ => true,
-        });
-        if bumped || self.items.len() != len_before {
-            self.history_version = self.history_version.saturating_add(1);
-        }
-
-        dropped
     }
 
     /// Replace image content in the last turn if it originated from a tool output.
@@ -473,6 +405,7 @@ impl ContextManager {
             | ResponseItem::ImageGenerationCall { .. }
             | ResponseItem::CustomToolCall { .. }
             | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
             | ResponseItem::ContextCompaction { .. }
             | ResponseItem::Other => item.clone(),
         }
@@ -563,6 +496,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::ImageGenerationCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::CompactionTrigger => false,
         ResponseItem::Other => false,
     }
 }
@@ -573,6 +507,10 @@ fn estimate_reasoning_length(encoded_len: usize) -> usize {
         .checked_div(4)
         .unwrap_or(0)
         .saturating_sub(650)
+}
+
+fn estimate_encrypted_function_output_length(encoded_len: usize) -> usize {
+    encoded_len.saturating_mul(9).div_ceil(16)
 }
 
 fn estimate_item_token_count(item: &ResponseItem) -> i64 {
@@ -618,16 +556,18 @@ pub(crate) fn estimate_response_item_model_visible_bytes(item: &ResponseItem) ->
             let raw = serde_json::to_string(item)
                 .map(|serialized| i64::try_from(serialized.len()).unwrap_or(i64::MAX))
                 .unwrap_or_default();
-            let (payload_bytes, replacement_bytes) = image_data_url_estimate_adjustment(item);
-            if payload_bytes == 0 || replacement_bytes == 0 {
-                raw
-            } else {
-                // Replace raw base64 payload bytes with a per-image estimate.
-                // We intentionally preserve the data URL prefix and JSON
-                // wrapper bytes already included in `raw`.
-                raw.saturating_sub(payload_bytes)
-                    .saturating_add(replacement_bytes)
-            }
+            let (image_payload_bytes, image_replacement_bytes) =
+                image_data_url_estimate_adjustment(item);
+            let (encrypted_payload_bytes, encrypted_replacement_bytes) =
+                encrypted_function_output_estimate_adjustment(item);
+            // Replace raw base64 payload bytes with a per-image estimate.
+            // We intentionally preserve the data URL prefix and JSON
+            // wrapper bytes already included in `raw`.
+            let raw = raw
+                .saturating_sub(image_payload_bytes)
+                .saturating_add(image_replacement_bytes);
+            raw.saturating_sub(encrypted_payload_bytes)
+                .saturating_add(encrypted_replacement_bytes)
         }
     }
 }
@@ -749,6 +689,31 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
     (payload_bytes, replacement_bytes)
 }
 
+fn encrypted_function_output_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
+    let ResponseItem::FunctionCallOutput { output, .. } = item else {
+        return (0, 0);
+    };
+    let FunctionCallOutputBody::ContentItems(items) = &output.body else {
+        return (0, 0);
+    };
+
+    items.iter().fold((0i64, 0i64), |acc, item| {
+        let FunctionCallOutputContentItem::EncryptedContent { encrypted_content } = item else {
+            return acc;
+        };
+        let payload_bytes = acc
+            .0
+            .saturating_add(i64::try_from(encrypted_content.len()).unwrap_or(i64::MAX));
+        let replacement_bytes = acc.1.saturating_add(
+            i64::try_from(estimate_encrypted_function_output_length(
+                encrypted_content.len(),
+            ))
+            .unwrap_or(i64::MAX),
+        );
+        (payload_bytes, replacement_bytes)
+    })
+}
+
 fn is_model_generated_item(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => role == "assistant",
@@ -761,6 +726,7 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Compaction { .. }
         | ResponseItem::ContextCompaction { .. } => true,
+        ResponseItem::CompactionTrigger => false,
         ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::ToolSearchOutput { .. }
         | ResponseItem::CustomToolCallOutput { .. }

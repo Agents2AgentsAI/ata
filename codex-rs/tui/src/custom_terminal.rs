@@ -256,7 +256,7 @@ where
     }
 
     /// Gets the current buffer as a reference.
-    pub(crate) fn current_buffer(&self) -> &Buffer {
+    fn current_buffer(&self) -> &Buffer {
         &self.buffers[self.current]
     }
 
@@ -273,23 +273,6 @@ where
     /// Gets the previous buffer as a mutable reference.
     fn previous_buffer_mut(&mut self) -> &mut Buffer {
         &mut self.buffers[1 - self.current]
-    }
-
-    /// Fill the previous buffer with a sentinel symbol so that ratatui's
-    /// diff renderer treats every cell of the next frame as changed and
-    /// emits writes for every cell — even cells whose new value happens
-    /// to be the default space. Use after a resize where the terminal
-    /// (tmux pane reflow, full-screen toggle) may have left stale cells
-    /// in the visible area that ratatui doesn't otherwise know about.
-    pub(crate) fn force_full_repaint_next_frame(&mut self) {
-        let prev = self.previous_buffer_mut();
-        let area = *prev.area();
-        for y in area.top()..area.bottom() {
-            for x in area.left()..area.right() {
-                let cell = &mut prev[(x, y)];
-                cell.set_symbol("\u{FFFE}"); // private-use sentinel
-            }
-        }
     }
 
     /// Gets the backend
@@ -503,9 +486,8 @@ where
     }
 
     /// Force the next draw pass to repaint the entire viewport by resetting the
-    /// diff buffer. Call this after operations that move screen content outside of
-    /// ratatui's knowledge (e.g., Zellij-mode scrolling via raw newlines), since
-    /// the diff buffer's assumptions about what is currently displayed are invalid.
+    /// diff buffer. Call this after raw terminal operations that move screen
+    /// content outside ratatui's knowledge.
     pub fn invalidate_viewport(&mut self) {
         self.previous_buffer_mut().reset();
     }

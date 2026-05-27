@@ -37,7 +37,6 @@ codex-config = { workspace = true }
 codex-connectors = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
-codex-elevenlabs = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
@@ -51,9 +50,9 @@ codex-models-manager = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-protocol = { workspace = true }
-codex-reading-view-server = { workspace = true }
 codex-realtime-webrtc = { workspace = true }
 codex-rollout = { workspace = true }
+codex-sandboxing = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-state = { workspace = true }
 codex-terminal-detection = { workspace = true }
@@ -62,13 +61,13 @@ codex-utils-absolute-path = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-elapsed = { workspace = true }
 codex-utils-fuzzy-match = { workspace = true }
+codex-utils-home-dir = { workspace = true }
 codex-utils-oss = { workspace = true }
 codex-utils-path = { workspace = true }
 codex-utils-plugins = { workspace = true }
 codex-utils-sandbox-summary = { workspace = true }
 codex-utils-sleep-inhibitor = { workspace = true }
 codex-utils-string = { workspace = true }
-codex-workspace = { workspace = true }
 color-eyre = { workspace = true }
 crossterm = { workspace = true, features = ["bracketed-paste", "event-stream"] }
 derive_more = { workspace = true, features = ["is_variant"] }
@@ -89,10 +88,11 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 rmcp = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
@@ -127,8 +127,7 @@ codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = { workspace = true }
-hound = { workspace = true }
+cpal = "0.15"
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -155,8 +154,8 @@ arboard = { workspace = true }
 [dev-dependencies]
 codex-cli = { workspace = true }
 codex-mcp = { workspace = true }
+core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-codex-utils-pty = { workspace = true }
 assert_matches = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 insta = { workspace = true }
@@ -165,3 +164,4 @@ rand = { workspace = true }
 serial_test = { workspace = true }
 vt100 = { workspace = true }
 uuid = { workspace = true }
+wiremock = { workspace = true }
