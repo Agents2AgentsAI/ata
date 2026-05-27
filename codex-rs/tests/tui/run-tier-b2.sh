@@ -2020,11 +2020,12 @@ main() {
   tr016_b
   tr021_a
   tr022_a
+  tr028_a
   tr031_a
   tr032_a
   tr033_a
-  tr036_a
-  tr036_b
+  tr035_a
+  tr036_a; tr036_b
   tr037_a
   tr038_a; tr038_b; tr038_c; tr038_e; tr038_e_2; tr038_f
   tr044_a; tr044_b; tr044_c; tr044_d; tr044_f
@@ -2039,8 +2040,6 @@ main() {
   tr062_a; tr062_b; tr062_d
   tr063_a; tr063_b
   tr064_a; tr065_a; tr066_a
-  tr028_a
-  tr035_a
 
   log ""
   log "----"

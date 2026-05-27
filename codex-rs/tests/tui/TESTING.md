@@ -257,7 +257,7 @@ The runner backs up `~/.ata/config.toml` before writing the dummy-group `[resear
 |---|---|
 | TR-012, TR-013 (voice mode) | `/voice` is compiled out on Linux (`#[cfg(not(target_os = "linux"))]`). Ubuntu CI doesn't have the command. Tests skip on Linux and run on macOS. |
 | TR-015 | PLAN.md marks it "superseded by TR-042". Nothing to test. |
-| TR-024 through TR-030 (scheduling lifecycle) | These cross the real cron daemon, the file system, and subprocess streams on wall-clock timers. A 70-second wait for a system cron to fire is too flaky on a shared CI runner. |
+| TR-024 through TR-027, TR-029, TR-030 (scheduling lifecycle) | These cross the real cron daemon, the file system, and subprocess streams on wall-clock timers. A 70-second wait for a system cron to fire is too flaky on a shared CI runner. |
 | TR-042 A (release-build `/rollout`) | The command is hidden in release builds. CI always builds debug, so the negative case is untestable. |
 | TR-044 C (`/side` recursion guard) | The unit test in `chatwidget/tests/side.rs` confirms the guard works, but in a live tmux session the expected error doesn't surface on screen. Needs deeper investigation. Marked SKIP for now. |
 | TR-048 (`/goal`) | Requires the `Feature::Goals` build flag, which isn't on by default. |
@@ -339,6 +339,6 @@ If you're stuck and want to drive ATA interactively to see what's happening, the
 
 This testing setup grew across several sessions. The PLAN.md was written first, by hand, while exploring the TUI for behaviors worth guarding. The runners were added next, translating each TR into a shell function. The three-tier split was added when we realized some tests cost real money and shouldn't fire on every push. The CI workflows came last.
 
-Coverage now: 154 (TR, scenario) pairs across 51 of the 65 TRs in PLAN.md. The remaining 14 TRs are real blockers (hardware, build flags, non-determinism), documented in the "What we don't test" section above.
+Coverage now: 174 (TR, scenario) pairs across 57 of the 65 TRs in PLAN.md. The remaining 8 TRs are real blockers (hardware, build flags, non-determinism), documented in the "What we don't test" section above.
 
 If you add new tests, the cheapest path is: write the TR in PLAN.md first, then mirror it as a shell function in the right tier's runner.
