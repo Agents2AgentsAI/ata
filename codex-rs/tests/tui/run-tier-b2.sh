@@ -152,8 +152,9 @@ assert_tool_not_called() {
 }
 
 # Assert that any call to a specific tool had arguments containing a
-# substring. Useful for argument-fidelity checks (e.g. "section_index":0,
-# "foldable":true) where the exact JSON whitespace varies.
+# substring. Substring-style — useful when you genuinely want to
+# match raw text. For structured checks (field presence, value
+# equality, array membership) prefer assert_tool_args_jq below.
 assert_tool_args_contain() {
   local sess_jsonl=$1 tool=$2 needle=$3 desc=${4:-}
   if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
@@ -168,6 +169,35 @@ assert_tool_args_contain() {
   fi
   if ! printf '%s' "$args" | grep -qF -- "$needle"; then
     fail_assert "${desc:-args must contain: $needle}" "got args: $(printf '%s' "$args" | head -c 600)"
+  fi
+}
+
+# Assert that a specific tool was called AND its arguments object passes
+# a jq expression. The .payload.arguments field is a JSON-encoded
+# string, so we parse it with fromjson before applying the expression.
+# Robust against JSON whitespace, key-order, and newline variations.
+#
+# Usage:
+#   assert_tool_args_jq <jsonl> <tool> <jq-expr> [<desc>]
+#
+# Examples:
+#   assert_tool_args_jq "$j" "hn_search"         'has("query")'
+#   assert_tool_args_jq "$j" "append_to_section" '.foldable == true'
+#   assert_tool_args_jq "$j" "monitor_watch_for" '.pattern | contains("tick 3")'
+assert_tool_args_jq() {
+  local sess_jsonl=$1 tool=$2 expr=$3 desc=${4:-}
+  if [ -z "$sess_jsonl" ] || [ ! -f "$sess_jsonl" ]; then
+    fail_assert "${desc:-tool $tool args}: session JSONL not found"
+    return
+  fi
+  local arg_str
+  arg_str=$(jq -r "select(.payload.name==\"$tool\") | .payload.arguments" "$sess_jsonl" 2>/dev/null | head -1)
+  if [ -z "$arg_str" ]; then
+    fail_assert "${desc:-tool '$tool' args}: tool was not called"
+    return
+  fi
+  if ! printf '%s' "$arg_str" | jq -e "$expr" >/dev/null 2>&1; then
+    fail_assert "${desc:-args expression failed: $expr}" "got args: $(printf '%s' "$arg_str" | head -c 600)"
   fi
 }
 
@@ -352,7 +382,7 @@ tr031_a() {
   assert_tool_not_called "$sess_jsonl" "shell"        "scoped edits must not shell out"
   # Scoping guard — section_index 0 (section 1, zero-indexed).
   if jq -r '.payload.name // empty' "$sess_jsonl" | grep -qFx "patch_document_section"; then
-    assert_tool_args_contain "$sess_jsonl" "patch_document_section" '"section_index"' "patch_document_section has section_index"
+    assert_tool_args_jq "$sess_jsonl" "patch_document_section" 'has("section_index") and (.section_index == 0)' "patch_document_section targets section 1 (index 0)"
   fi
   kill_ata "$sess"
   end_test
@@ -446,13 +476,10 @@ tr037_a() {
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
   assert_tool_called "$sess_jsonl" "append_to_section" "Tab-ask Q&A must go through append_to_section"
-  # The argument-fidelity check: foldable must be true. Accept either
-  # JSON whitespace variant.
-  local args
-  args=$(jq -r 'select(.payload.name=="append_to_section") | .payload.arguments' "$sess_jsonl" 2>/dev/null)
-  if ! printf '%s' "$args" | grep -qE '"foldable"[[:space:]]*:[[:space:]]*true'; then
-    fail_assert "append_to_section must have foldable: true for Tab-ask" "got args: $(printf '%s' "$args" | head -c 600)"
-  fi
+  # The argument-fidelity check: Tab-ask path produces foldable Q&A,
+  # distinguishing it from explicit content additions (TR-033, which
+  # uses foldable: false).
+  assert_tool_args_jq "$sess_jsonl" "append_to_section" '.foldable == true' "append_to_section must have foldable: true for Tab-ask"
   kill_ata "$sess"
   end_test
 }
@@ -981,7 +1008,7 @@ tr021_a() {
   assert_tool_called     "$sess_jsonl" "hn_search"    "agent must invoke the dedicated hn_search tool"
   assert_tool_not_called "$sess_jsonl" "web_search"   "agent must not fall back to generic web_search"
   assert_tool_not_called "$sess_jsonl" "exec_command" "agent must not shell out via exec_command"
-  assert_tool_args_contain "$sess_jsonl" "hn_search" "query" "hn_search args have a query field"
+  assert_tool_args_jq "$sess_jsonl" "hn_search" 'has("query") and (.query | type == "string")' "hn_search args have a string query field"
   kill_ata "$sess"
   end_test
 }
@@ -1768,16 +1795,10 @@ tr062_b() {
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
   assert_tool_called "$sess_jsonl" "paper_search" "paper_search tool called"
-  # Verify arguments contain expected fields. PLAN.md TR-062 B spec
-  # mentions query + limit as schema essentials.
-  local args
-  args=$(jq -r 'select(.payload.name=="paper_search") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
-  if ! printf '%s' "$args" | grep -qE '"query"\s*:\s*"'; then
-    fail_assert "paper_search args missing 'query' field" "$args"
-  fi
-  if ! printf '%s' "$args" | grep -qE '"limit"\s*:\s*[0-9]+'; then
-    fail_assert "paper_search args missing 'limit' field" "$args"
-  fi
+  # PLAN.md TR-062 B spec: query (string) + limit (number) are the
+  # schema essentials.
+  assert_tool_args_jq "$sess_jsonl" "paper_search" 'has("query") and (.query | type == "string")' "paper_search has string query field"
+  assert_tool_args_jq "$sess_jsonl" "paper_search" 'has("limit") and (.limit | type == "number")' "paper_search has numeric limit field"
   kill_ata "$sess"
   end_test
 }
@@ -1829,12 +1850,8 @@ tr064_a() {
   sess_jsonl=$(recent_session_jsonl)
   assert_tool_called     "$sess_jsonl" "paper_citations" "explicit naming must trigger paper_citations"
   assert_tool_not_called "$sess_jsonl" "paper_search"    "must not fall back to paper_search"
-  # Argument fidelity: paper_id is the documented format.
-  local args
-  args=$(jq -r 'select(.payload.name=="paper_citations") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
-  if ! printf '%s' "$args" | grep -qE '"paper_id"[[:space:]]*:[[:space:]]*"[Aa]r[Xx]iv:2505\.21323"'; then
-    fail_assert "paper_citations missing paper_id 'arXiv:2505.21323'" "$args"
-  fi
+  # Argument fidelity: paper_id is the documented arXiv format.
+  assert_tool_args_jq "$sess_jsonl" "paper_citations" '.paper_id | test("^[Aa]r[Xx]iv:2505\\.21323$")' "paper_citations.paper_id is 'arXiv:2505.21323'"
   kill_ata "$sess"
   end_test
 }
@@ -1853,11 +1870,7 @@ tr065_a() {
   assert_tool_called     "$sess_jsonl" "paper_references" "explicit naming must trigger paper_references"
   assert_tool_not_called "$sess_jsonl" "paper_search"     "must not fall back to paper_search"
   assert_tool_not_called "$sess_jsonl" "paper_citations"  "must not confuse references with citations"
-  local args
-  args=$(jq -r 'select(.payload.name=="paper_references") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
-  if ! printf '%s' "$args" | grep -qE '"paper_id"[[:space:]]*:[[:space:]]*"[Aa]r[Xx]iv:2505\.21323"'; then
-    fail_assert "paper_references missing paper_id 'arXiv:2505.21323'" "$args"
-  fi
+  assert_tool_args_jq    "$sess_jsonl" "paper_references" '.paper_id | test("^[Aa]r[Xx]iv:2505\\.21323$")' "paper_references.paper_id is 'arXiv:2505.21323'"
   kill_ata "$sess"
   end_test
 }
@@ -1876,15 +1889,10 @@ tr066_a() {
   sess_jsonl=$(recent_session_jsonl)
   assert_tool_called     "$sess_jsonl" "paper_recommendations" "explicit naming must trigger paper_recommendations"
   assert_tool_not_called "$sess_jsonl" "paper_search"          "must not fall back to paper_search"
-  local args
-  args=$(jq -r 'select(.payload.name=="paper_recommendations") | .payload.arguments' "$sess_jsonl" 2>/dev/null | head -1)
-  # positive_paper_ids is an ARRAY — check the array syntax and the id inside.
-  if ! printf '%s' "$args" | grep -qE '"positive_paper_ids"[[:space:]]*:[[:space:]]*\['; then
-    fail_assert "paper_recommendations missing positive_paper_ids array" "$args"
-  fi
-  if ! printf '%s' "$args" | grep -qE '[Aa]r[Xx]iv:2505\.21323'; then
-    fail_assert "positive_paper_ids missing 'arXiv:2505.21323'" "$args"
-  fi
+  # positive_paper_ids is an ARRAY (note plural + array shape, distinct
+  # from the scalar paper_id used by the other paper_* tools).
+  assert_tool_args_jq "$sess_jsonl" "paper_recommendations" '.positive_paper_ids | type == "array"' "positive_paper_ids must be an array"
+  assert_tool_args_jq "$sess_jsonl" "paper_recommendations" '.positive_paper_ids | map(test("^[Aa]r[Xx]iv:2505\\.21323$")) | any' "positive_paper_ids contains 'arXiv:2505.21323'"
   kill_ata "$sess"
   end_test
 }
@@ -1925,9 +1933,9 @@ tr028_a() {
   assert_tool_not_called "$sess_jsonl" "monitor_wait"      "must NOT fall back to terminate-only monitor_wait"
   assert_tool_not_called "$sess_jsonl" "shell"             "must not shell out to grep/tail"
   # Argument fidelity — the literal pattern (not paraphrased), with task_id.
-  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" '"pattern"' "monitor_watch_for has a pattern field"
-  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" "tick 3"    "pattern reflects literal 'tick 3'"
-  assert_tool_args_contain "$sess_jsonl" "monitor_watch_for" '"task_id"' "monitor_watch_for targets a task_id"
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" 'has("pattern") and (.pattern | type == "string")' "monitor_watch_for has a string pattern field"
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" '.pattern | contains("tick 3")'                   "pattern reflects literal 'tick 3'"
+  assert_tool_args_jq "$sess_jsonl" "monitor_watch_for" 'has("task_id")'                                   "monitor_watch_for targets a task_id"
   kill_ata "$sess"
   end_test
 }
