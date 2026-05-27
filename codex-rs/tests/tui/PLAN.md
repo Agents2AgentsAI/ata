@@ -2531,7 +2531,7 @@ daemon may have already enqueued that fire from its in-memory state
 even after the crontab entry is removed — the result is a new process
 tree (with a NEW set of PIDs, distinct from the pre-delete ones) that
 runs to natural completion. The PR #20 fix correctly kills the
-*pre-delete* process tree, but cannot pre-empt a fire that the cron
+*pre-delete* process tree, but cannot preempt a fire that the cron
 daemon already scheduled. This is why the post-delete predicate is
 "every PID we recorded pre-delete is dead", not "no processes match
 the task id" — the latter is too strict and flags the OS race as a
