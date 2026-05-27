@@ -1986,7 +1986,7 @@ tr035_a() {
     hn_ok=1
   elif printf '%s\n' "$tools" | grep -qFx "spawn_agent"; then
     # Sub-agent route: look for hn-* files in staging.
-    if ls "$HOME/.ata/workspaces/global/knowledge-base/staging/" 2>/dev/null | grep -qE '^hn-'; then
+    if compgen -G "$HOME/.ata/workspaces/global/knowledge-base/staging/hn-*" >/dev/null 2>&1; then
       hn_ok=1
     fi
   fi

@@ -21,7 +21,10 @@ jobs:
   tier-b1:
     name: Tier B1 scenarios (TUI via tmux, no LLM)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Tier B1 drives the TUI via tmux but doesn't call the model.
+    # 52 tests, mostly fast key/render assertions (~5-15s each). 20
+    # min is comfortable headroom over ~10-12 min realistic total.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: codex-rs

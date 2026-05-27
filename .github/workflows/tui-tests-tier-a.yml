@@ -21,7 +21,10 @@ jobs:
   tier-a:
     name: Tier A scenarios (no LLM, no TUI)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # Tier A is shell-only (no TUI, no LLM). Full suite finishes in
+    # ~60 seconds locally; cargo build dominates total wall-clock at
+    # ~3-5 min on a cold cache. 15 min is comfortable headroom.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: codex-rs
