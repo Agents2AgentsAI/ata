@@ -28,6 +28,10 @@ pub enum Account {
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {},
+
+    #[serde(rename = "copilot", rename_all = "camelCase")]
+    #[ts(rename = "copilot", rename_all = "camelCase")]
+    Copilot {},
 }
 
 impl From<ProviderAccount> for Account {
@@ -36,6 +40,7 @@ impl From<ProviderAccount> for Account {
             ProviderAccount::ApiKey => Self::ApiKey {},
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
             ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
+            ProviderAccount::Copilot => Self::Copilot {},
         }
     }
 }
