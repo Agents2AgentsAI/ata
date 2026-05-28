@@ -87,6 +87,57 @@ where
     })
 }
 
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn function_arguments_from_payload(
+    payload: crate::tools::context::ToolPayload,
+    handler_name: &str,
+) -> Result<String, FunctionCallError> {
+    match payload {
+        crate::tools::context::ToolPayload::Function { arguments } => Ok(arguments),
+        _ => Err(FunctionCallError::RespondToModel(format!(
+            "{handler_name} handler received unsupported payload"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn truncate_tool_output(output: &str, max_bytes: usize) -> (String, bool) {
+    if output.len() <= max_bytes {
+        return (output.to_string(), false);
+    }
+
+    let prefix = codex_utils_string::take_bytes_at_char_boundary(output, max_bytes);
+    if prefix.is_empty() {
+        return ("... truncated".to_string(), true);
+    }
+
+    let cut = prefix.rfind('\n').unwrap_or(prefix.len());
+    (format!("{}\n\n... truncated", &prefix[..cut]), true)
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_DEFAULT_LIMIT: usize = 10;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_MAX_RESULTS: usize = 50;
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) const HANDLER_MAX_RESULT_BYTES: usize = 8 * 1024;
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+pub(super) fn require_absolute_path_argument(
+    path_value: Option<&str>,
+    key: &str,
+) -> Result<std::path::PathBuf, FunctionCallError> {
+    let raw = path_value
+        .ok_or_else(|| FunctionCallError::RespondToModel(format!("`{key}` is required")))?;
+    let path = std::path::PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{key}` must be an absolute path, got: {raw:?}"
+        )));
+    }
+    Ok(path)
+}
+
 fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
     updated_input
         .get("command")
