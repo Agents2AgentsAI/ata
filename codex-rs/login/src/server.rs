@@ -1320,6 +1320,7 @@ mod tests {
 
     fn chatgpt_auth(access_token: &str, refresh_token: &str, account_id: &str) -> AuthDotJson {
         AuthDotJson {
+            version: None,
             auth_mode: Some(AuthMode::Chatgpt),
             openai_api_key: None,
             tokens: Some(TokenData {
@@ -1331,6 +1332,7 @@ mod tests {
             }),
             last_refresh: None,
             agent_identity: None,
+            providers: std::collections::HashMap::new(),
         }
     }
 

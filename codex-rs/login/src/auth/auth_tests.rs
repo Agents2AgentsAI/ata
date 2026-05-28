@@ -228,6 +228,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
 
     assert_eq!(
         AuthDotJson {
+            version: None,
             auth_mode: None,
             openai_api_key: None,
             tokens: Some(TokenData {
@@ -245,6 +246,7 @@ async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
             }),
             last_refresh: Some(last_refresh),
             agent_identity: None,
+            providers: std::collections::HashMap::new(),
         },
         auth_dot_json
     );
@@ -281,11 +283,13 @@ async fn loads_api_key_from_auth_json() {
 fn logout_removes_auth_file() -> Result<(), std::io::Error> {
     let dir = tempdir()?;
     let auth_dot_json = AuthDotJson {
+        version: None,
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some("sk-test-key".to_string()),
         tokens: None,
         last_refresh: None,
         agent_identity: None,
+        providers: std::collections::HashMap::new(),
     };
     super::save_auth(dir.path(), &auth_dot_json, AuthCredentialsStoreMode::File)?;
     let auth_file = get_auth_file(dir.path());
@@ -933,11 +937,13 @@ async fn enforce_login_restrictions_logs_out_for_agent_identity_workspace_mismat
     save_auth(
         codex_home.path(),
         &AuthDotJson {
+            version: None,
             auth_mode: Some(ApiAuthMode::AgentIdentity),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
             agent_identity: Some(agent_identity),
+            providers: std::collections::HashMap::new(),
         },
         AuthCredentialsStoreMode::File,
     )
