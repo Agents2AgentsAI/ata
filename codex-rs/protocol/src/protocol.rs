@@ -5405,3 +5405,57 @@ mod tests {
         assert_eq!(info.model_context_window, Some(258_400));
     }
 }
+
+// === ATA scheduling Slice 5: types layered on top of upstream protocol ===
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingCronRow {
+    pub task_id: String,
+    pub cron_expr: String,
+    pub prompt: String,
+    pub status: String,
+    pub fire_count: u64,
+    pub last_fired_at: Option<String>,
+    pub next_fire_at: Option<String>,
+    /// Optional agent-supplied human-readable label. Empty/whitespace
+    /// strings collapse to `None`; the TUI then falls back to the short id.
+    pub name: Option<String>,
+    /// Pre-formatted history records (newest last) for the `/scheduling`
+    /// detail view. For in-session crons this is the per-fire ring buffer;
+    /// for OS-cron rows the host leaves this empty (the TUI reads the log
+    /// file directly when the user opens the detail view).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_events: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingMonitorRow {
+    pub task_id: String,
+    pub command: String,
+    pub status: String,
+    pub lines_emitted: u64,
+    pub started_at: Option<String>,
+    pub stopped_at: Option<String>,
+    /// Optional agent-supplied human-readable label.
+    pub name: Option<String>,
+    /// Tail of recent output lines (already prefixed with `[stdout]` or
+    /// `[stderr]`). Used by the detail view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tail: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingMonitorOutputDeltaEvent {
+    pub task_id: String,
+    pub stream: String,
+    pub line: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SchedulingTasksSnapshotEvent {
+    pub cron_jobs: Vec<SchedulingCronRow>,
+    pub monitors: Vec<SchedulingMonitorRow>,
+    /// True iff `Feature::Scheduling` is enabled for the session. Lets the
+    /// TUI distinguish "scheduling off" from "scheduling on but no tasks".
+    pub scheduling_enabled: bool,
+}
+

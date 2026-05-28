@@ -15,7 +15,6 @@ use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::LoginAccountResponse;
-use codex_login::read_openai_api_key_from_env;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -107,7 +106,11 @@ fn mark_hyperlink_cells(
 
 use super::onboarding_screen::StepState;
 
+mod copilot_login;
 mod headless_chatgpt_login;
+
+pub(crate) use super::provider_picker::ProviderOption;
+pub(crate) use copilot_login::start_copilot_login;
 
 #[derive(Clone)]
 pub(crate) enum SignInState {
@@ -117,19 +120,63 @@ pub(crate) enum SignInState {
     ChatGptDeviceCode(ContinueWithDeviceCodeState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
+    /// GitHub Copilot OAuth device-code flow. Reuses
+    /// `ContinueWithDeviceCodeState` since the UX is identical to ChatGPT
+    /// device code; differentiation is by enum variant so completion
+    /// notifications (matched by `login_id`) can route to the right path.
+    CopilotDeviceCode(ContinueWithDeviceCodeState),
+    /// Terminal "you're signed in" screen for the Copilot flow, mirroring
+    /// `ChatGptSuccessMessage`/`ChatGptSuccess`.
+    CopilotSuccessMessage,
+    CopilotSuccess,
     ApiKeyEntry(ApiKeyInputState),
     ApiKeyConfigured,
+    // === ATA: provider-picker + email-OTP states ===
+    // Appended at the end of the enum so future upstream additions land
+    // ahead of our overlay states and merges stay clean.
+    /// "Configure model providers" sub-screen (OpenAI / Anthropic / Gemini /
+    /// GitHub Copilot). Highlights `AuthModeWidget::highlighted_provider`.
+    PickProvider,
+    /// Per-provider auth method picker. Used only by providers that support
+    /// both API key and OAuth (currently Gemini).
+    PickProviderAuthMethod(ProviderOption),
+    /// "Configured providers" view. Wired in the key handler but never
+    /// pushed by the picker yet — kept in the state machine so the
+    /// L-shortcut can be re-enabled without an enum change.
+    #[allow(dead_code)]
+    ProviderList,
+    /// Browser-based OAuth login in progress (Gemini Code Assist). Mirrors
+    /// `ChatGptContinueInBrowser` but scoped to a per-provider flow.
+    ProviderOauthContinueInBrowser(ProviderOauthContinueInBrowserState),
+    /// Provider OAuth completed — terminal success screen.
+    ProviderOauthSuccessMessage(ProviderOption),
+    ProviderConfigured,
+    /// "Sign in with ATA account" email step.
+    AtaEmailInput(AtaEmailInputState),
+    AtaSendingOtp {
+        email: String,
+    },
+    AtaOtpInput(AtaOtpInputState),
+    AtaVerifyingOtp {
+        _email: String,
+    },
+    AtaSuccessMessage,
+    AtaSuccess,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SignInOption {
     ChatGpt,
     DeviceCode,
-    ApiKey,
+    // === ATA: top-level picker entries that replace the legacy Copilot/ApiKey
+    // direct options — the same flows still exist but are reached via the
+    // provider sub-picker (Copilot, OpenAI API key) below. ===
+    ConfigureProviders,
+    AtaAccount,
 }
 
 const API_KEY_DISABLED_MESSAGE: &str = "API key login is disabled.";
-fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
+pub(super) fn onboarding_request_id() -> codex_app_server_protocol::RequestId {
     codex_app_server_protocol::RequestId::String(Uuid::new_v4().to_string())
 }
 
@@ -151,6 +198,80 @@ pub(super) async fn cancel_login_attempt(
 pub(crate) struct ApiKeyInputState {
     value: String,
     prepopulated_from_env: bool,
+    /// Which provider this API key is being saved for. `None` preserves the
+    /// historic "top-level Provide your own API key" path that always wrote
+    /// to OpenAI. The provider picker sets this to a concrete provider.
+    provider: Option<ProviderOption>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AtaEmailInputState {
+    pub email: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AtaOtpInputState {
+    pub email: String,
+    pub otp: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProviderOauthContinueInBrowserState {
+    provider: ProviderOption,
+    auth_url: String,
+    login_id: Option<String>,
+}
+
+impl ProviderOauthContinueInBrowserState {
+    pub(super) fn new(
+        provider: ProviderOption,
+        auth_url: String,
+        login_id: Option<String>,
+    ) -> Self {
+        Self {
+            provider,
+            auth_url,
+            login_id,
+        }
+    }
+
+    pub(crate) fn provider(&self) -> ProviderOption {
+        self.provider
+    }
+
+    pub(super) fn auth_url(&self) -> &str {
+        self.auth_url.as_str()
+    }
+
+    pub(crate) fn login_id(&self) -> Option<&str> {
+        self.login_id.as_deref()
+    }
+}
+
+impl ApiKeyInputState {
+    pub(super) fn new(
+        value: String,
+        prepopulated_from_env: bool,
+        provider: Option<ProviderOption>,
+    ) -> Self {
+        Self {
+            value,
+            prepopulated_from_env,
+            provider,
+        }
+    }
+
+    pub(crate) fn provider(&self) -> Option<ProviderOption> {
+        self.provider
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProviderAuthMethod {
+    ApiKey,
+    Oauth,
 }
 
 #[derive(Clone)]
@@ -212,6 +333,16 @@ impl KeyboardHandler for AuthModeWidget {
         if self.handle_api_key_entry_key_event(&key_event) {
             return;
         }
+        // === ATA: dispatch into provider sub-picker / email-OTP first ===
+        {
+            let sign_in_state = { (*self.sign_in_state.read().unwrap()).clone() };
+            if self.handle_provider_picker_key_event(&key_event, &sign_in_state) {
+                return;
+            }
+        }
+        if self.handle_ata_input_key_event(&key_event) {
+            return;
+        }
 
         if keys::MOVE_UP.is_pressed(key_event) {
             self.move_highlight(/*delta*/ -1);
@@ -242,6 +373,13 @@ impl KeyboardHandler for AuthModeWidget {
                 SignInState::ChatGptSuccessMessage => {
                     *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
                 }
+                SignInState::CopilotSuccessMessage => {
+                    *self.sign_in_state.write().unwrap() = SignInState::CopilotSuccess;
+                }
+                // === ATA: success transitions ===
+                SignInState::AtaSuccessMessage => {
+                    *self.sign_in_state.write().unwrap() = SignInState::AtaSuccess;
+                }
                 _ => {}
             }
             return;
@@ -269,9 +407,27 @@ pub(crate) struct AuthModeWidget {
     pub forced_login_method: Option<ForcedLoginMethod>,
     pub animations_enabled: bool,
     pub animations_suppressed: Cell<bool>,
+    // === ATA: provider-picker + ATA-account state ===
+    /// Highlighted row in `SignInState::PickProvider`.
+    pub highlighted_provider: ProviderOption,
+    /// Highlighted row in `SignInState::PickProviderAuthMethod`.
+    pub highlighted_provider_auth_method: ProviderAuthMethod,
 }
 
 impl AuthModeWidget {
+    // === ATA: helpers used by provider_picker.rs ===
+    pub(super) fn set_error_message(&self, message: Option<String>) {
+        *self.error.write().unwrap() = message;
+    }
+
+    pub(super) fn error_message_snapshot(&self) -> Option<String> {
+        self.error.read().ok().and_then(|guard| guard.clone())
+    }
+
+    pub(super) fn error_arc(&self) -> Arc<RwLock<Option<String>>> {
+        self.error.clone()
+    }
+
     pub(crate) fn set_animations_suppressed(&self, suppressed: bool) {
         self.animations_suppressed.set(suppressed);
     }
@@ -279,7 +435,9 @@ impl AuthModeWidget {
     pub(crate) fn should_suppress_animations(&self) -> bool {
         matches!(
             &*self.sign_in_state.read().unwrap(),
-            SignInState::ChatGptContinueInBrowser(_) | SignInState::ChatGptDeviceCode(_)
+            SignInState::ChatGptContinueInBrowser(_)
+                | SignInState::ChatGptDeviceCode(_)
+                | SignInState::CopilotDeviceCode(_)
         )
     }
 
@@ -293,7 +451,15 @@ impl AuthModeWidget {
                     cancel_login_attempt(&request_handle, login_id).await;
                 });
             }
-            SignInState::ChatGptDeviceCode(state) => {
+            SignInState::ChatGptDeviceCode(state) | SignInState::CopilotDeviceCode(state) => {
+                if let Some(login_id) = state.login_id().map(str::to_owned) {
+                    let request_handle = self.app_server_request_handle.clone();
+                    tokio::spawn(async move {
+                        cancel_login_attempt(&request_handle, login_id).await;
+                    });
+                }
+            }
+            SignInState::ProviderOauthContinueInBrowser(state) => {
                 if let Some(login_id) = state.login_id().map(str::to_owned) {
                     let request_handle = self.app_server_request_handle.clone();
                     tokio::spawn(async move {
@@ -353,8 +519,9 @@ impl AuthModeWidget {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
+            options.push(SignInOption::ConfigureProviders);
         }
+        options.push(SignInOption::AtaAccount);
         options
     }
 
@@ -365,8 +532,9 @@ impl AuthModeWidget {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
-            options.push(SignInOption::ApiKey);
+            options.push(SignInOption::ConfigureProviders);
         }
+        options.push(SignInOption::AtaAccount);
         options
     }
 
@@ -404,12 +572,15 @@ impl AuthModeWidget {
                     self.start_device_code_login();
                 }
             }
-            SignInOption::ApiKey => {
+            SignInOption::ConfigureProviders => {
                 if self.is_api_login_allowed() {
-                    self.start_api_key_entry();
+                    self.start_provider_selection();
                 } else {
                     self.disallow_api_login();
                 }
+            }
+            SignInOption::AtaAccount => {
+                self.start_ata_email_input();
             }
         }
     }
@@ -488,12 +659,20 @@ impl AuthModeWidget {
                         device_code_description,
                     ));
                 }
-                SignInOption::ApiKey => {
+                SignInOption::ConfigureProviders => {
                     lines.extend(create_mode_item(
                         idx,
                         option,
-                        "Provide your own API key",
-                        "Pay for what you use",
+                        "Configure model providers",
+                        "Set up API keys for different providers",
+                    ));
+                }
+                SignInOption::AtaAccount => {
+                    lines.extend(create_mode_item(
+                        idx,
+                        option,
+                        "Sign in with ATA account",
+                        "Use your ATA account credentials",
                     ));
                 }
             }
@@ -625,6 +804,44 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    fn render_copilot_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            "✓ Signed in with GitHub Copilot".fg(Color::Green).into(),
+            "".into(),
+            "  Before you start:".into(),
+            "".into(),
+            "  Decide how much autonomy you want to grant Codex".into(),
+            "".into(),
+            "  Codex can make mistakes".into(),
+            "  Review the code it writes and commands it runs"
+                .dim()
+                .into(),
+            "".into(),
+            "  Powered by your GitHub Copilot subscription".into(),
+            "  Default model is gpt-4o; switch with `-c model=...`."
+                .dim()
+                .into(),
+            "".into(),
+            Line::from(vec![
+                "  Press ".fg(Color::Cyan),
+                self.confirm_binding().into(),
+                " to continue".fg(Color::Cyan),
+            ]),
+        ];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
+    fn render_copilot_success(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec!["✓ Signed in with GitHub Copilot".fg(Color::Green).into()];
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
             "✓ API key configured".fg(Color::Green).into(),
@@ -645,17 +862,23 @@ impl AuthModeWidget {
         ])
         .areas(area);
 
+        let (display_name, env_var) = match state.provider() {
+            Some(provider) => (provider.display_name(), provider.env_var()),
+            None => ("OpenAI", Some("OPENAI_API_KEY")),
+        };
         let mut intro_lines: Vec<Line> = vec![
             Line::from(vec![
                 "> ".into(),
-                "Use your own OpenAI API key for usage-based billing".bold(),
+                format!("Use your own {display_name} API key for usage-based billing").bold(),
             ]),
             "".into(),
             "  Paste or type your API key below. It will be stored locally in auth.json.".into(),
             "".into(),
         ];
         if state.prepopulated_from_env {
-            intro_lines.push("  Detected OPENAI_API_KEY environment variable.".into());
+            if let Some(env_var) = env_var {
+                intro_lines.push(format!("  Detected {env_var} environment variable.").into());
+            }
             intro_lines.push(
                 "  Paste a different key if you prefer to use another account."
                     .dim()
@@ -790,59 +1013,51 @@ impl AuthModeWidget {
         true
     }
 
-    fn start_api_key_entry(&mut self) {
-        if !self.is_api_login_allowed() {
-            self.disallow_api_login();
-            return;
-        }
-        self.set_error(/*message*/ None);
-        let prefill_from_env = read_openai_api_key_from_env();
-        let mut guard = self.sign_in_state.write().unwrap();
-        match &mut *guard {
-            SignInState::ApiKeyEntry(state) => {
-                if state.value.is_empty() {
-                    if let Some(prefill) = prefill_from_env {
-                        state.value = prefill;
-                        state.prepopulated_from_env = true;
-                    } else {
-                        state.prepopulated_from_env = false;
-                    }
-                }
-            }
-            _ => {
-                *guard = SignInState::ApiKeyEntry(ApiKeyInputState {
-                    value: prefill_from_env.clone().unwrap_or_default(),
-                    prepopulated_from_env: prefill_from_env.is_some(),
-                });
-            }
-        }
-        drop(guard);
-        self.request_frame.schedule_frame();
-    }
-
     fn save_api_key(&mut self, api_key: String) {
         if !self.is_api_login_allowed() {
             self.disallow_api_login();
             return;
         }
         self.set_error(/*message*/ None);
+        // Pull the provider (if any) out of the active state so the spawned
+        // task can route to the right `LoginAccountParams` variant: a
+        // top-level "Provide your own API key" submit lands as the
+        // legacy `ApiKey` variant (OpenAI-only); a submit from inside
+        // "Configure model providers" carries the provider id and uses
+        // `ProviderApiKey { provider_id, api_key }`.
+        let provider = match &*self.sign_in_state.read().unwrap() {
+            SignInState::ApiKeyEntry(state) => state.provider(),
+            _ => None,
+        };
         let request_handle = self.app_server_request_handle.clone();
         let sign_in_state = self.sign_in_state.clone();
         let error = self.error.clone();
         let request_frame = self.request_frame.clone();
         tokio::spawn(async move {
+            let params = match provider {
+                Some(p) => LoginAccountParams::ProviderApiKey {
+                    provider_id: p.provider_id().to_string(),
+                    api_key: api_key.clone(),
+                },
+                None => LoginAccountParams::ApiKey {
+                    api_key: api_key.clone(),
+                },
+            };
             match request_handle
                 .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
                     request_id: onboarding_request_id(),
-                    params: LoginAccountParams::ApiKey {
-                        api_key: api_key.clone(),
-                    },
+                    params,
                 })
                 .await
             {
-                Ok(LoginAccountResponse::ApiKey {}) => {
+                Ok(LoginAccountResponse::ApiKey {})
+                | Ok(LoginAccountResponse::ProviderApiKey {}) => {
                     *error.write().unwrap() = None;
-                    *sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
+                    *sign_in_state.write().unwrap() = if provider.is_some() {
+                        SignInState::ProviderConfigured
+                    } else {
+                        SignInState::ApiKeyConfigured
+                    };
                 }
                 Ok(other) => {
                     *error.write().unwrap() = Some(format!(
@@ -851,6 +1066,7 @@ impl AuthModeWidget {
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
                         value: api_key,
                         prepopulated_from_env: false,
+                        provider,
                     });
                 }
                 Err(err) => {
@@ -858,6 +1074,7 @@ impl AuthModeWidget {
                     *sign_in_state.write().unwrap() = SignInState::ApiKeyEntry(ApiKeyInputState {
                         value: api_key,
                         prepopulated_from_env: false,
+                        provider,
                     });
                 }
             }
@@ -944,24 +1161,51 @@ impl AuthModeWidget {
             return;
         };
         let guard = self.sign_in_state.read().unwrap();
-        let is_matching_login = matches!(
+        let is_matching_chatgpt_login = matches!(
             &*guard,
             SignInState::ChatGptContinueInBrowser(state) if state.login_id == login_id
         ) || matches!(
             &*guard,
             SignInState::ChatGptDeviceCode(state) if state.login_id() == Some(login_id.as_str())
         );
+        let is_matching_copilot_login = matches!(
+            &*guard,
+            SignInState::CopilotDeviceCode(state) if state.login_id() == Some(login_id.as_str())
+        );
+        // Per-provider OAuth (Gemini Code Assist today): completion fires
+        // with the same `login_id` issued by `GeminiOauthContinueInBrowser`.
+        let provider_oauth_match: Option<ProviderOption> = match &*guard {
+            SignInState::ProviderOauthContinueInBrowser(state)
+                if state.login_id() == Some(login_id.as_str()) =>
+            {
+                Some(state.provider())
+            }
+            _ => None,
+        };
         drop(guard);
-        if !is_matching_login {
+        if !is_matching_chatgpt_login
+            && !is_matching_copilot_login
+            && provider_oauth_match.is_none()
+        {
             return;
         }
 
         if notification.success {
             self.set_error(/*message*/ None);
-            *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
+            *self.sign_in_state.write().unwrap() = if let Some(provider) = provider_oauth_match {
+                SignInState::ProviderOauthSuccessMessage(provider)
+            } else if is_matching_copilot_login {
+                SignInState::CopilotSuccessMessage
+            } else {
+                SignInState::ChatGptSuccessMessage
+            };
         } else {
             self.set_error(notification.error);
-            *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+            *self.sign_in_state.write().unwrap() = if provider_oauth_match.is_some() {
+                SignInState::PickProvider
+            } else {
+                SignInState::PickMode
+            };
         }
         self.request_frame.schedule_frame();
     }
@@ -972,6 +1216,330 @@ impl AuthModeWidget {
             .map(LoginStatus::AuthMode)
             .unwrap_or(LoginStatus::NotAuthenticated);
     }
+
+    // === ATA: email-OTP sign-in flow ===
+
+    pub(super) fn start_ata_email_input(&mut self) {
+        self.set_error(/*message*/ None);
+        *self.sign_in_state.write().unwrap() =
+            SignInState::AtaEmailInput(AtaEmailInputState::default());
+        self.request_frame.schedule_frame();
+    }
+
+    pub(super) fn handle_ata_input_key_event(&mut self, key_event: &KeyEvent) -> bool {
+        // Returns true if the event was consumed.
+        let mut action: AtaInputAction = AtaInputAction::None;
+        {
+            let mut guard = self.sign_in_state.write().unwrap();
+            match &mut *guard {
+                SignInState::AtaEmailInput(state) => match key_event.code {
+                    KeyCode::Esc => {
+                        action = AtaInputAction::BackToPickMode;
+                    }
+                    KeyCode::Enter => {
+                        let trimmed = state.email.trim().to_string();
+                        if trimmed.is_empty() {
+                            state.error = Some("Email cannot be empty".to_string());
+                            action = AtaInputAction::RequestFrame;
+                        } else {
+                            action = AtaInputAction::SubmitEmail(trimmed);
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        state.email.pop();
+                        state.error = None;
+                        action = AtaInputAction::RequestFrame;
+                    }
+                    KeyCode::Char(c)
+                        if key_event.kind == KeyEventKind::Press
+                            && !key_event.modifiers.contains(KeyModifiers::SUPER)
+                            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                            && !key_event.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        state.email.push(c);
+                        state.error = None;
+                        action = AtaInputAction::RequestFrame;
+                    }
+                    _ => {}
+                },
+                SignInState::AtaOtpInput(state) => match key_event.code {
+                    KeyCode::Esc => {
+                        action = AtaInputAction::BackToPickMode;
+                    }
+                    KeyCode::Enter => {
+                        let otp = state.otp.trim().to_string();
+                        if otp.is_empty() {
+                            state.error = Some("Enter the 6-digit code".to_string());
+                            action = AtaInputAction::RequestFrame;
+                        } else {
+                            action = AtaInputAction::SubmitOtp {
+                                email: state.email.clone(),
+                                otp,
+                            };
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        state.otp.pop();
+                        state.error = None;
+                        action = AtaInputAction::RequestFrame;
+                    }
+                    KeyCode::Char(c)
+                        if c.is_ascii_digit()
+                            && key_event.kind == KeyEventKind::Press
+                            && state.otp.chars().count() < 6 =>
+                    {
+                        state.otp.push(c);
+                        state.error = None;
+                        action = AtaInputAction::RequestFrame;
+                    }
+                    _ => {}
+                },
+                _ => return false,
+            }
+        }
+
+        match action {
+            AtaInputAction::None => {}
+            AtaInputAction::RequestFrame => {
+                self.request_frame.schedule_frame();
+            }
+            AtaInputAction::BackToPickMode => {
+                *self.sign_in_state.write().unwrap() = SignInState::PickMode;
+                self.set_error(/*message*/ None);
+                self.request_frame.schedule_frame();
+            }
+            AtaInputAction::SubmitEmail(email) => {
+                self.spawn_ata_send_otp(email);
+            }
+            AtaInputAction::SubmitOtp { email, otp } => {
+                self.spawn_ata_verify_otp(email, otp);
+            }
+        }
+        true
+    }
+
+    fn spawn_ata_send_otp(&mut self, email: String) {
+        *self.sign_in_state.write().unwrap() = SignInState::AtaSendingOtp {
+            email: email.clone(),
+        };
+        self.request_frame.schedule_frame();
+
+        let request_handle = self.app_server_request_handle.clone();
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
+                    request_id: onboarding_request_id(),
+                    params: LoginAccountParams::AtaSendOtp {
+                        email: email.clone(),
+                    },
+                })
+                .await;
+            match result {
+                Ok(LoginAccountResponse::AtaSendOtp {}) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaOtpInput(AtaOtpInputState {
+                        email,
+                        otp: String::new(),
+                        error: None,
+                    });
+                }
+                Ok(other) => {
+                    *sign_in_state.write().unwrap() =
+                        SignInState::AtaEmailInput(AtaEmailInputState {
+                            email,
+                            error: Some(format!("Unexpected response: {other:?}")),
+                        });
+                }
+                Err(err) => {
+                    *sign_in_state.write().unwrap() =
+                        SignInState::AtaEmailInput(AtaEmailInputState {
+                            email,
+                            error: Some(err.to_string()),
+                        });
+                }
+            }
+            request_frame.schedule_frame();
+        });
+    }
+
+    fn spawn_ata_verify_otp(&mut self, email: String, otp: String) {
+        *self.sign_in_state.write().unwrap() = SignInState::AtaVerifyingOtp {
+            _email: email.clone(),
+        };
+        self.request_frame.schedule_frame();
+
+        let request_handle = self.app_server_request_handle.clone();
+        let sign_in_state = self.sign_in_state.clone();
+        let request_frame = self.request_frame.clone();
+        tokio::spawn(async move {
+            let result = request_handle
+                .request_typed::<LoginAccountResponse>(ClientRequest::LoginAccount {
+                    request_id: onboarding_request_id(),
+                    params: LoginAccountParams::AtaVerifyOtp {
+                        email: email.clone(),
+                        otp: otp.clone(),
+                    },
+                })
+                .await;
+            match result {
+                Ok(LoginAccountResponse::AtaVerifyOtp { email: _email }) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaSuccessMessage;
+                }
+                Ok(other) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaOtpInput(AtaOtpInputState {
+                        email,
+                        otp,
+                        error: Some(format!("Unexpected response: {other:?}")),
+                    });
+                }
+                Err(err) => {
+                    *sign_in_state.write().unwrap() = SignInState::AtaOtpInput(AtaOtpInputState {
+                        email,
+                        otp,
+                        error: Some(err.to_string()),
+                    });
+                }
+            }
+            request_frame.schedule_frame();
+        });
+    }
+
+    fn render_ata_email_input(&self, area: Rect, buf: &mut Buffer, state: &AtaEmailInputState) {
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec!["> ".into(), "Sign in with ATA account".bold()]),
+            "".into(),
+            "  Enter your ATA account email; we'll send a one-time code.".into(),
+            "".into(),
+        ];
+        let content: Line = if state.email.is_empty() {
+            vec!["you@example.com".dim()].into()
+        } else {
+            Line::from(state.email.clone())
+        };
+        let block = Block::default()
+            .title("Email")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan));
+        Paragraph::new(content)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+        lines.push("".into());
+        lines.push(Line::from(vec![
+            "  Press ".dim(),
+            self.confirm_binding().into(),
+            " to send a code".dim(),
+        ]));
+        lines.push(Line::from(vec![
+            "  Press ".dim(),
+            self.cancel_binding().into(),
+            " to go back".dim(),
+        ]));
+        if let Some(err) = &state.error {
+            lines.push("".into());
+            lines.push(err.clone().red().into());
+        }
+        // Footer below the input box. We rendered the input above; the
+        // surrounding paragraph stacks under it because Paragraph::render
+        // honors the full area — the duplicate render keeps the snapshot
+        // simple without splitting into nested layouts.
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+
+    fn render_ata_sending_otp(&self, area: Rect, buf: &mut Buffer, email: &str) {
+        let lines = vec![
+            "Sending one-time code…".into(),
+            "".into(),
+            format!("  to {email}").dim().into(),
+        ];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+
+    fn render_ata_otp_input(&self, area: Rect, buf: &mut Buffer, state: &AtaOtpInputState) {
+        let mut lines: Vec<Line> = vec![
+            Line::from(vec!["> ".into(), "Sign in with ATA account".bold()]),
+            "".into(),
+            format!("  We sent a code to {}", state.email).into(),
+            "".into(),
+        ];
+        let content: Line = if state.otp.is_empty() {
+            vec!["6-digit code".dim()].into()
+        } else {
+            Line::from(state.otp.clone())
+        };
+        let block = Block::default()
+            .title("OTP")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(Color::Cyan));
+        Paragraph::new(content)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+        lines.push("".into());
+        lines.push(Line::from(vec![
+            "  Press ".dim(),
+            self.confirm_binding().into(),
+            " to verify".dim(),
+        ]));
+        lines.push(Line::from(vec![
+            "  Press ".dim(),
+            self.cancel_binding().into(),
+            " to go back".dim(),
+        ]));
+        if let Some(err) = &state.error {
+            lines.push("".into());
+            lines.push(err.clone().red().into());
+        }
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+
+    fn render_ata_verifying_otp(&self, area: Rect, buf: &mut Buffer, _email: &str) {
+        let lines = vec!["Verifying one-time code…".into(), "".into()];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+
+    fn render_ata_success_message(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec![
+            "✓ Signed in to your ATA account".fg(Color::Green).into(),
+            "".into(),
+            Line::from(vec![
+                "  Press ".fg(Color::Cyan),
+                self.confirm_binding().into(),
+                " to continue".fg(Color::Cyan),
+            ]),
+        ];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+
+    fn render_ata_success(&self, area: Rect, buf: &mut Buffer) {
+        let lines = vec!["✓ Signed in to your ATA account".fg(Color::Green).into()];
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render_ref(area, buf);
+    }
+}
+
+// Internal action the ATA input key handler asks the outer method to perform
+// after the state-lock is dropped.
+enum AtaInputAction {
+    None,
+    RequestFrame,
+    BackToPickMode,
+    SubmitEmail(String),
+    SubmitOtp { email: String, otp: String },
 }
 
 impl StepStateProvider for AuthModeWidget {
@@ -982,8 +1550,26 @@ impl StepStateProvider for AuthModeWidget {
             | SignInState::ApiKeyEntry(_)
             | SignInState::ChatGptContinueInBrowser(_)
             | SignInState::ChatGptDeviceCode(_)
-            | SignInState::ChatGptSuccessMessage => StepState::InProgress,
-            SignInState::ChatGptSuccess | SignInState::ApiKeyConfigured => StepState::Complete,
+            | SignInState::ChatGptSuccessMessage
+            | SignInState::CopilotDeviceCode(_)
+            | SignInState::CopilotSuccessMessage
+            // === ATA: in-progress states ===
+            | SignInState::PickProvider
+            | SignInState::PickProviderAuthMethod(_)
+            | SignInState::ProviderList
+            | SignInState::ProviderOauthContinueInBrowser(_)
+            | SignInState::ProviderOauthSuccessMessage(_)
+            | SignInState::AtaEmailInput(_)
+            | SignInState::AtaSendingOtp { .. }
+            | SignInState::AtaOtpInput(_)
+            | SignInState::AtaVerifyingOtp { .. }
+            | SignInState::AtaSuccessMessage => StepState::InProgress,
+            SignInState::ChatGptSuccess
+            | SignInState::CopilotSuccess
+            | SignInState::ApiKeyConfigured
+            // === ATA: terminal states ===
+            | SignInState::ProviderConfigured
+            | SignInState::AtaSuccess => StepState::Complete,
         }
     }
 }
@@ -1007,8 +1593,57 @@ impl WidgetRef for AuthModeWidget {
             SignInState::ChatGptSuccess => {
                 self.render_chatgpt_success(area, buf);
             }
+            SignInState::CopilotDeviceCode(state) => {
+                headless_chatgpt_login::render_device_code_login(self, area, buf, state);
+            }
+            SignInState::CopilotSuccessMessage => {
+                self.render_copilot_success_message(area, buf);
+            }
+            SignInState::CopilotSuccess => {
+                self.render_copilot_success(area, buf);
+            }
             SignInState::ApiKeyEntry(state) => {
                 self.render_api_key_entry(area, buf, state);
+            }
+            // === ATA: provider-picker + ATA-account render arms ===
+            SignInState::PickProvider => {
+                self.render_pick_provider(area, buf);
+            }
+            SignInState::PickProviderAuthMethod(provider) => {
+                self.render_pick_provider_auth_method(area, buf, *provider);
+            }
+            SignInState::ProviderList => {
+                // Treat the L-shortcut "list configured providers" view as a
+                // soft no-op for now — falling back to PickProvider rendering
+                // keeps the state machine non-blocking.
+                self.render_pick_provider(area, buf);
+            }
+            SignInState::ProviderOauthContinueInBrowser(state) => {
+                self.render_provider_oauth_continue_in_browser(area, buf, state);
+            }
+            SignInState::ProviderOauthSuccessMessage(provider) => {
+                self.render_provider_oauth_success_message(area, buf, *provider);
+            }
+            SignInState::ProviderConfigured => {
+                self.render_provider_configured(area, buf);
+            }
+            SignInState::AtaEmailInput(state) => {
+                self.render_ata_email_input(area, buf, state);
+            }
+            SignInState::AtaSendingOtp { email } => {
+                self.render_ata_sending_otp(area, buf, email);
+            }
+            SignInState::AtaOtpInput(state) => {
+                self.render_ata_otp_input(area, buf, state);
+            }
+            SignInState::AtaVerifyingOtp { _email } => {
+                self.render_ata_verifying_otp(area, buf, _email);
+            }
+            SignInState::AtaSuccessMessage => {
+                self.render_ata_success_message(area, buf);
+            }
+            SignInState::AtaSuccess => {
+                self.render_ata_success(area, buf);
             }
             SignInState::ApiKeyConfigured => {
                 self.render_api_key_configured(area, buf);
@@ -1043,6 +1678,75 @@ mod tests {
     use std::sync::Arc;
     use tempfile::TempDir;
 
+    async fn widget_default() -> (AuthModeWidget, TempDir) {
+        let (mut widget, dir) = widget_forced_chatgpt().await;
+        widget.forced_login_method = None;
+        (widget, dir)
+    }
+
+    #[tokio::test]
+    async fn provider_picker_lists_openai_anthropic_gemini_copilot() {
+        // The "Configure model providers" sub-screen must surface these four
+        // providers in this order — matches locus's `provider_picker.rs`
+        // registry. Anthropic + Gemini are API-key only / API-key+OAuth
+        // respectively; Copilot is OAuth-only (device code).
+        let (mut widget, _tmp) = widget_default().await;
+        widget.start_provider_selection();
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickProvider
+        ));
+        // Highlight defaults to OpenAI (first registry entry).
+        pretty_assertions::assert_eq!(widget.highlighted_provider, ProviderOption::OpenAI);
+        // Sanity-check the registry exposes Anthropic + Gemini + Copilot.
+        for expected in [
+            ProviderOption::OpenAI,
+            ProviderOption::Anthropic,
+            ProviderOption::Gemini,
+            ProviderOption::Copilot,
+        ] {
+            assert!(
+                !expected.display_name().is_empty(),
+                "{expected:?} display_name must not be empty"
+            );
+            assert!(
+                !expected.provider_id().is_empty(),
+                "{expected:?} provider_id must not be empty"
+            );
+        }
+        // Gemini supports both API key + OAuth; Copilot only OAuth.
+        assert!(ProviderOption::Gemini.supports_api_key());
+        assert!(ProviderOption::Gemini.supports_oauth());
+        assert!(!ProviderOption::Copilot.supports_api_key());
+        assert!(ProviderOption::Copilot.supports_oauth());
+    }
+
+    #[tokio::test]
+    async fn pick_mode_renders_four_options() {
+        // Regression: the onboarding picker must surface four entries —
+        // ChatGPT / Device Code / Configure model providers / Sign in with
+        // ATA account — once neither forced-login mode is active. This
+        // matches the locus / ata-main layout and replaces the legacy
+        // top-level Copilot + ApiKey entries that snuck in during the
+        // upstream merge.
+        let (widget, _tmp) = widget_default().await;
+        let displayed = widget.displayed_sign_in_options();
+        pretty_assertions::assert_eq!(
+            displayed,
+            vec![
+                SignInOption::ChatGpt,
+                SignInOption::DeviceCode,
+                SignInOption::ConfigureProviders,
+                SignInOption::AtaAccount,
+            ],
+            "top-level picker must show exactly four entries in this order"
+        );
+        // SignInOption::Copilot is not part of the enum any more — it lives
+        // inside the provider picker (via ProviderOption::Copilot).
+        // SignInOption::ApiKey is similarly gone; OpenAI's API key is
+        // configured under "Configure model providers".
+    }
+
     async fn widget_forced_chatgpt() -> (AuthModeWidget, TempDir) {
         let codex_home = TempDir::new().unwrap();
         let codex_home_path = codex_home.path().to_path_buf();
@@ -1056,7 +1760,6 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: Default::default(),
-            strict_config: false,
             cloud_requirements: cloud_requirements_loader_for_storage(
                 codex_home_path.clone(),
                 /*enable_codex_api_key_env*/ false,
@@ -1092,15 +1795,22 @@ mod tests {
             forced_login_method: Some(ForcedLoginMethod::Chatgpt),
             animations_enabled: true,
             animations_suppressed: std::cell::Cell::new(false),
+            highlighted_provider: ProviderOption::first(),
+            highlighted_provider_auth_method: ProviderAuthMethod::ApiKey,
         };
         (widget, codex_home)
     }
 
     #[tokio::test]
     async fn api_key_flow_disabled_when_chatgpt_forced() {
+        // When the workspace forces ChatGPT login, picking "Configure model
+        // providers" from the top-level menu must surface the
+        // "API key login is disabled" error and leave the picker in
+        // `PickMode`, regardless of which provider would have been chosen
+        // inside the sub-screen.
         let (mut widget, _tmp) = widget_forced_chatgpt().await;
 
-        widget.start_api_key_entry();
+        widget.handle_sign_in_option(SignInOption::ConfigureProviders);
 
         assert_eq!(
             widget.error_message().as_deref(),
