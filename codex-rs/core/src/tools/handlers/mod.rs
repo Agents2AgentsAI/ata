@@ -4,8 +4,12 @@ pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod cron_session_spec;
 pub(crate) mod cron_spec;
+pub(crate) mod cron;
+pub(crate) mod cron_session;
 pub(crate) mod data;
+pub(crate) mod document_reader;
 mod dynamic;
+pub(crate) mod monitor;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp_workspace_edit;
 pub(crate) mod research;

@@ -36,6 +36,27 @@ pub(crate) struct Session {
     pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
+    /// Per-session reading view document cache. Populated by
+    /// `tools::handlers::document_reader::DocumentReaderHandler` when the
+    /// model presents a document; consumed by subsequent reading-view tool
+    /// calls so the model can refer to a document by id without re-sending
+    /// its full body.
+    pub(crate) document_cache: crate::tools::handlers::document_reader::DocumentCache,
+    /// Session-scoped registry of active cron jobs. `None` when the
+    /// scheduling feature is not enabled — tool handlers surface a clear
+    /// "feature not enabled" error in that case rather than silently
+    /// no-opping.
+    pub(crate) cron_registry: Option<Arc<codex_scheduling::CronRegistry>>,
+    /// Session-scoped Monitor runtime (registry + per-monitor abort handles).
+    /// `None` when scheduling is disabled.
+    pub(crate) monitor_runtime: Option<Arc<crate::scheduling_runtime::MonitorRuntime>>,
+    /// Sidecar path where this session's cron/monitor state is persisted so
+    /// it survives `/quit` + `ata resume`. `None` when scheduling is
+    /// disabled.
+    pub(crate) scheduling_state_path: Option<std::path::PathBuf>,
+    /// Submission channel used by scheduling handlers to inject `Op::UserInput`
+    /// back into the running session.
+    pub(crate) submission_tx: Sender<codex_protocol::protocol::Submission>,
     pub(super) next_internal_sub_id: AtomicU64,
 }
 
@@ -470,6 +491,57 @@ impl Session {
     /// Returns the identity shared by the root thread and all descendant threads.
     pub(crate) fn session_id(&self) -> SessionId {
         self.services.agent_control.session_id()
+    }
+
+    /// Returns the cron registry when scheduling is enabled for this session.
+    pub(crate) fn cron_registry(&self) -> Option<&Arc<codex_scheduling::CronRegistry>> {
+        self.cron_registry.as_ref()
+    }
+
+    /// Returns the Monitor runtime when scheduling is enabled.
+    pub(crate) fn monitor_runtime(
+        &self,
+    ) -> Option<&Arc<crate::scheduling_runtime::MonitorRuntime>> {
+        self.monitor_runtime.as_ref()
+    }
+
+    /// Persist the current cron/monitor state to the session's sidecar file.
+    /// No-op when scheduling is disabled (current build). Errors are logged
+    /// but not propagated.
+    pub(crate) fn persist_scheduling_state(&self) {
+        let Some(path) = self.scheduling_state_path.as_ref() else {
+            return;
+        };
+        let cron_jobs = self
+            .cron_registry
+            .as_ref()
+            .map(|r| r.list())
+            .unwrap_or_default();
+        let monitors = self
+            .monitor_runtime
+            .as_ref()
+            .map(|r| r.registry.list())
+            .unwrap_or_default();
+        let snap = codex_scheduling::SchedulingSnapshot::new(cron_jobs, monitors);
+        if let Err(err) = codex_scheduling::save_scheduling_state(path, &snap) {
+            tracing::warn!(
+                target: "codex_scheduling::persist",
+                error = %err,
+                path = %path.display(),
+                "scheduling.persist.save_failed"
+            );
+        }
+    }
+
+    /// Event channel for scheduling streaming events (monitor lines, etc.).
+    pub(crate) fn scheduling_event_tx(&self) -> Sender<Event> {
+        self.tx_event.clone()
+    }
+
+    /// Clone of the session submission sender, for handlers that need to
+    /// inject `Op::UserInput` back into the running session.
+    pub(crate) fn submission_tx(&self) -> Sender<codex_protocol::protocol::Submission> {
+        self.submission_tx.clone()
     }
 
     #[instrument(name = "session_init", level = "info", skip_all)]
@@ -1054,6 +1126,20 @@ impl Session {
                 goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
+                document_cache: crate::tools::handlers::document_reader::DocumentCache::with_display_mode(
+                    crate::tools::handlers::document_reader::reading_view_display_mode_from_config(
+                        config.as_ref(),
+                    ),
+                ),
+                // Scheduling is disabled in this build — handlers surface a
+                // "feature not enabled" error when they observe `None`.
+                cron_registry: None,
+                monitor_runtime: None,
+                scheduling_state_path: None,
+                // Dead channel: scheduling handlers only consult this after
+                // first checking `monitor_runtime()`/`cron_registry()`, which
+                // are both `None`, so this is never actually exercised.
+                submission_tx: async_channel::bounded(1).0,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {

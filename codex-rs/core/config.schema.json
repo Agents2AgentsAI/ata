@@ -515,6 +515,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "reading_view": {
+              "type": "boolean"
+            },
             "realtime_conversation": {
               "type": "boolean"
             },
@@ -758,6 +761,34 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        }
+      },
+      "type": "object"
+    },
+    "ElevenLabsToml": {
+      "additionalProperties": false,
+      "description": "ATA: [elevenlabs] config section. Captures API key, voice, model, etc. so future voice integrations can pick it up without a config-file migration. The actual realtime-audio swap (using ElevenLabs as the TTS backend instead of OpenAI realtime) is a follow-up — populating these fields today does not yet change runtime behavior.",
+      "properties": {
+        "api_key": {
+          "description": "ElevenLabs API key. Read directly from config.toml; if you prefer to avoid storing the key on disk, leave this unset and rely on a future env-var fallback (`ELEVENLABS_API_KEY`).",
+          "type": "string"
+        },
+        "language_code": {
+          "description": "ISO 639-1 language code. None = auto-detect.",
+          "type": "string"
+        },
+        "model_id": {
+          "description": "TTS model ID. Defaults to `eleven_flash_v2_5` when unset.",
+          "type": "string"
+        },
+        "speed": {
+          "description": "Speech speed (0.7–1.2). None = 1.0.",
+          "format": "double",
+          "type": "number"
+        },
+        "voice_id": {
+          "description": "Voice ID to use for TTS. Defaults to ElevenLabs' built-in \"Sarah\" when unset.",
+          "type": "string"
         }
       },
       "type": "object"
@@ -4295,6 +4326,15 @@
       "description": "When true, disables burst-paste detection for typed input entirely. All characters are inserted as they are received, and no buffering or placeholder replacement will occur for fast keypress bursts.",
       "type": "boolean"
     },
+    "elevenlabs": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ElevenLabsToml"
+        }
+      ],
+      "default": null,
+      "description": "ATA: configuration for the ElevenLabs TTS/STT API. Surfaced today as a config-only entry so users can populate the key/voice ahead of the realtime audio backend swap landing in a follow-up."
+    },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
     },
@@ -4477,6 +4517,9 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
+          "type": "boolean"
+        },
+        "reading_view": {
           "type": "boolean"
         },
         "realtime_conversation": {

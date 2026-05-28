@@ -374,6 +374,52 @@ impl ModelProviderInfo {
         }
     }
 
+    /// Test/helper constructor for an Anthropic Messages provider.
+    pub fn create_anthropic_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "Anthropic".into(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::AnthropicMessages,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
+    /// Test/helper constructor for a Google Gemini `generateContent` provider.
+    pub fn create_gemini_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "Gemini".into(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::GeminiGenerate,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     pub fn create_amazon_bedrock_provider(
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
