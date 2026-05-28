@@ -3,8 +3,9 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 use codex_features::Feature;
 use codex_protocol::document_reader::AddDocumentSectionArgs;
 use codex_protocol::document_reader::AddDocumentSectionEvent;
@@ -487,11 +488,12 @@ pub(crate) fn reading_view_tools_enabled(config: &Config) -> bool {
 
 pub struct DocumentReaderHandler {
     pub tool_name: ToolName,
+    pub(crate) spec: ToolSpec,
 }
 
 impl DocumentReaderHandler {
-    pub fn new(tool_name: ToolName) -> Self {
-        Self { tool_name }
+    pub fn new(tool_name: ToolName, spec: ToolSpec) -> Self {
+        Self { tool_name, spec }
     }
 }
 
@@ -877,18 +879,20 @@ pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 // ToolHandler impl
 // ---------------------------------------------------------------------------
 
-impl ToolHandler for DocumentReaderHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for DocumentReaderHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -1484,9 +1488,11 @@ impl ToolHandler for DocumentReaderHandler {
             }
         };
 
-        Ok(FunctionToolOutput::from_text(content, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(content, Some(true))))
     }
 }
+
+impl CoreToolRuntime for DocumentReaderHandler {}
 
 #[cfg(test)]
 mod tests {

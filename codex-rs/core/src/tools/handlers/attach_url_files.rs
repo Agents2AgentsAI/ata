@@ -6,9 +6,10 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::file_injection::FileInjectionContext;
 use crate::tools::file_injection::resolve_and_prepare_local_files_for_injection;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 use crate::tools::url_downloader::DEFAULT_MAX_DOWNLOAD_CONCURRENCY;
 use crate::tools::url_downloader::UrlDownloadOutcome;
 use crate::tools::url_downloader::UrlDownloadRequest;
@@ -76,8 +77,15 @@ pub(crate) static ATTACH_URL_FILES_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     })
 });
 
-#[derive(Default)]
-pub struct AttachUrlFilesHandler;
+pub struct AttachUrlFilesHandler {
+    pub(crate) spec: ToolSpec,
+}
+
+impl AttachUrlFilesHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct AttachUrlFilesArgs {
@@ -103,22 +111,24 @@ struct AttachmentFailure {
     reason: String,
 }
 
-impl ToolHandler for AttachUrlFilesHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for AttachUrlFilesHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "active_turn lock is intentionally held across the inner turn_state lock"
     )]
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -341,12 +351,14 @@ impl ToolHandler for AttachUrlFilesHandler {
         }
 
         let summary = render_summary(success_count, &failures, &warnings);
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             summary,
             Some(success_count > 0),
-        ))
+        )))
     }
 }
+
+impl CoreToolRuntime for AttachUrlFilesHandler {}
 
 async fn validate_and_dedup(
     files: Vec<AttachUrlFileArg>,
@@ -484,6 +496,21 @@ mod tests {
 
     const VALID_PDF_BYTES: &[u8] = b"%PDF-1.4\ntest content";
 
+    fn placeholder_spec() -> ToolSpec {
+        ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: TOOL_NAME.to_string(),
+            description: String::new(),
+            strict: false,
+            parameters: codex_tools::JsonSchema::object(
+                Default::default(),
+                None,
+                Some(codex_tools::AdditionalProperties::Boolean(false)),
+            ),
+            output_schema: None,
+            defer_loading: None,
+        })
+    }
+
     #[tokio::test]
     async fn provider_path_injects_url_files() {
         let (session, mut turn_context) = make_session_and_context().await;
@@ -495,7 +522,7 @@ mod tests {
         let url = validated_url_for_test("https://example.com/doc.pdf");
         prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let output = handler
             .handle(ToolInvocation {
                 session: Arc::clone(&session),
@@ -534,7 +561,7 @@ mod tests {
             .join(",");
         let args = format!(r#"{{"files":[{files}]}}"#);
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let result = handler
             .handle(ToolInvocation {
                 session,
@@ -562,7 +589,7 @@ mod tests {
         let url = validated_url_for_test("https://example.com/doc.pdf");
         prepopulate_pdf_cache(&turn_context.config.codex_home, &url, VALID_PDF_BYTES).await;
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let output = handler
             .handle(ToolInvocation {
                 session,
@@ -605,7 +632,7 @@ mod tests {
                 .expect("seed budget");
         }
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let result = handler
             .handle(ToolInvocation {
                 session,
@@ -635,7 +662,7 @@ mod tests {
         let session = Arc::new(session);
         *session.active_turn.lock().await = Some(ActiveTurn::default());
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let result = handler
             .handle(ToolInvocation {
                 session: Arc::clone(&session),
@@ -684,7 +711,7 @@ mod tests {
         )
         .await;
 
-        let handler = AttachUrlFilesHandler;
+        let handler = AttachUrlFilesHandler::new(placeholder_spec());
         let result = handler
             .handle(ToolInvocation {
                 session: Arc::clone(&session),

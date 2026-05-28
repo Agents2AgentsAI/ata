@@ -1,6 +1,8 @@
 use codex_scheduling::TaskId;
 use codex_scheduling::TaskStatus;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -8,30 +10,40 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::monitor_spec::MONITOR_WAIT_TOOL_NAME;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
 
 use super::MonitorWaitArgs;
 use super::MonitorWaitResponse;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-pub struct MonitorWaitHandler;
+pub struct MonitorWaitHandler {
+    pub(crate) spec: ToolSpec,
+}
 
-impl ToolHandler for MonitorWaitHandler {
-    type Output = FunctionToolOutput;
+impl MonitorWaitHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MonitorWaitHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(MONITOR_WAIT_TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session, payload, ..
         } = invocation;
@@ -106,6 +118,8 @@ impl ToolHandler for MonitorWaitHandler {
                 "monitor_wait response serialization failed: {err}"
             ))
         })?;
-        Ok(FunctionToolOutput::from_text(body, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(body, Some(true))))
     }
 }
+
+impl CoreToolRuntime for MonitorWaitHandler {}

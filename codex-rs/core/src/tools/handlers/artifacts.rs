@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use codex_artifacts::ArtifactBuildRequest;
 use codex_artifacts::ArtifactCommandOutput;
 use codex_artifacts::ArtifactRuntimeManager;
@@ -19,19 +18,30 @@ use crate::protocol::ExecCommandSource;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
 pub(crate) const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct ArtifactsHandler;
+pub struct ArtifactsHandler {
+    pub(crate) spec: ToolSpec,
+}
+
+impl ArtifactsHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArtifactsToolArgs {
@@ -39,23 +49,20 @@ struct ArtifactsToolArgs {
     timeout_ms: Option<u64>,
 }
 
-#[async_trait]
-impl ToolHandler for ArtifactsHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ArtifactsHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(ARTIFACTS_TOOL_NAME)
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Custom { .. })
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -113,10 +120,16 @@ impl ToolHandler for ArtifactsHandler {
         )
         .await;
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             format_artifact_output(&output),
             Some(success),
-        ))
+        )))
+    }
+}
+
+impl CoreToolRuntime for ArtifactsHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Custom { .. })
     }
 }
 

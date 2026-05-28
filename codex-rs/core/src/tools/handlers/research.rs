@@ -44,23 +44,28 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub(crate) struct ResearchBridgeHandler {
     tool_name: ToolName,
+    spec: ToolSpec,
     toolkit: Arc<codex_research_tools::ResearchToolkit>,
 }
 
 impl ResearchBridgeHandler {
     pub(crate) fn new(
         tool_name: impl Into<String>,
+        spec: ToolSpec,
         toolkit: Arc<codex_research_tools::ResearchToolkit>,
     ) -> Self {
         Self {
             tool_name: ToolName::plain(tool_name.into()),
+            spec,
             toolkit,
         }
     }
@@ -238,18 +243,20 @@ impl ResearchBridgeHandler {
     }
 }
 
-impl ToolHandler for ResearchBridgeHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ResearchBridgeHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             tool_name, payload, ..
         } = invocation;
@@ -263,10 +270,14 @@ impl ToolHandler for ResearchBridgeHandler {
             }
         };
 
-        self.execute_native_tool(tool_name.name.as_str(), arguments.as_str())
-            .await
+        let output = self
+            .execute_native_tool(tool_name.name.as_str(), arguments.as_str())
+            .await?;
+        Ok(boxed_tool_output(output))
     }
 }
+
+impl CoreToolRuntime for ResearchBridgeHandler {}
 
 pub fn build_research_config(
     toml: Option<&ResearchToolsToml>,
@@ -439,6 +450,21 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
+    fn placeholder_spec(name: &str) -> ToolSpec {
+        ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: name.to_string(),
+            description: String::new(),
+            strict: false,
+            parameters: codex_tools::JsonSchema::object(
+                Default::default(),
+                None,
+                Some(codex_tools::AdditionalProperties::Boolean(false)),
+            ),
+            output_schema: None,
+            defer_loading: None,
+        })
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn paper_get_handler_uses_toolkit_and_returns_serialized_json() {
         let semantic_server = MockServer::start().await;
@@ -491,6 +517,7 @@ mod tests {
 
         let handler = ResearchBridgeHandler::new(
             "paper_get",
+            placeholder_spec("paper_get"),
             Arc::new(codex_research_tools::ResearchToolkit::new(
                 build_reqwest_client(),
                 config,
@@ -607,6 +634,7 @@ mod tests {
 
         let handler = ResearchBridgeHandler::new(
             "paper_get",
+            placeholder_spec("paper_get"),
             Arc::new(codex_research_tools::ResearchToolkit::new(
                 build_reqwest_client(),
                 config,
