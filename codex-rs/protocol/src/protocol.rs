@@ -5458,4 +5458,3 @@ pub struct SchedulingTasksSnapshotEvent {
     /// TUI distinguish "scheduling off" from "scheduling on but no tasks".
     pub scheduling_enabled: bool,
 }
-

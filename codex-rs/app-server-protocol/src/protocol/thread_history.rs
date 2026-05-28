@@ -1513,6 +1513,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                background: None,
                 items_view: TurnItemsView::Full,
                 items: vec![
                     ThreadItem::UserMessage {
@@ -2838,6 +2839,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                background: None,
                 items_view: TurnItemsView::Full,
                 items: Vec::new(),
             }]
@@ -3104,6 +3106,7 @@ mod tests {
                 started_at: None,
                 completed_at: None,
                 duration_ms: None,
+                background: None,
                 items_view: TurnItemsView::Full,
                 items: vec![ThreadItem::UserMessage {
                     id: "item-1".into(),

@@ -196,6 +196,7 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
+        version: None,
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
         openai_api_key: None,
         tokens: Some(TokenData {
@@ -211,6 +212,7 @@ c2ln",
         }),
         last_refresh: Some(Utc::now()),
         agent_identity: None,
+        providers: std::collections::HashMap::new(),
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(

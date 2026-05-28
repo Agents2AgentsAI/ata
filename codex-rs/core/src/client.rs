@@ -1617,6 +1617,16 @@ impl ModelClientSession {
                 )
                 .await
             }
+            // TODO(ata-upstream-merge): the ATA-specific wire APIs are
+            // dispatched via codex-api's provider adapters, not via this
+            // upstream Responses-only path. For now, error so callers fall
+            // back; wire up provider routing in a follow-up.
+            WireApi::AnthropicMessages | WireApi::GeminiGenerate | WireApi::CopilotInline => {
+                Err(codex_protocol::error::CodexErr::Stream(
+                    format!("non-Responses WireApi ({wire_api}) not yet wired in upstream client"),
+                    None,
+                ))
+            }
         }
     }
 

@@ -53,12 +53,23 @@ pub enum WireApi {
     /// The Responses API exposed by OpenAI at `/v1/responses`.
     #[default]
     Responses,
+    /// The Anthropic Messages API at `/v1/messages`.
+    AnthropicMessages,
+    /// The Google Gemini `generateContent` API.
+    GeminiGenerate,
+    /// GitHub Copilot's Chat Completions endpoint at
+    /// `https://api.githubcopilot.com/chat/completions`. Despite the legacy
+    /// "inline" suffix, this is the streamed Chat Completions wire format.
+    CopilotInline,
 }
 
 impl fmt::Display for WireApi {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
             Self::Responses => "responses",
+            Self::AnthropicMessages => "anthropic_messages",
+            Self::GeminiGenerate => "gemini_generate",
+            Self::CopilotInline => "copilot_inline",
         };
         f.write_str(value)
     }
@@ -72,8 +83,19 @@ impl<'de> Deserialize<'de> for WireApi {
         let value = String::deserialize(deserializer)?;
         match value.as_str() {
             "responses" => Ok(Self::Responses),
+            "anthropic_messages" => Ok(Self::AnthropicMessages),
+            "gemini_generate" => Ok(Self::GeminiGenerate),
+            "copilot_inline" => Ok(Self::CopilotInline),
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+            _ => Err(serde::de::Error::unknown_variant(
+                &value,
+                &[
+                    "responses",
+                    "anthropic_messages",
+                    "gemini_generate",
+                    "copilot_inline",
+                ],
+            )),
         }
     }
 }
