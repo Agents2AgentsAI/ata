@@ -28,8 +28,14 @@ members = [
     "cloud-tasks-mock-client",
     "cli",
     "codex-data-tools",
+    "codex-elevenlabs",
     "codex-research-tools",
     "codex-workspace",
+    "artifacts",
+    "lsp-client",
+    "treesitter",
+    "package-manager",
+    "reading-view-server",
     "collaboration-mode-templates",
     "connectors",
     "config",
@@ -155,9 +161,15 @@ codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
+codex-artifacts = { path = "artifacts" }
 codex-data-tools = { path = "codex-data-tools" }
+codex-elevenlabs = { path = "codex-elevenlabs" }
+codex-lsp-client = { path = "lsp-client" }
+codex-package-manager = { path = "package-manager" }
+codex-reading-view-server = { path = "reading-view-server" }
 codex-research-tools = { path = "codex-research-tools" }
 codex-scheduling = { path = "scheduling" }
+codex-treesitter = { path = "treesitter" }
 codex-workspace = { path = "codex-workspace" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-requirements = { path = "cloud-requirements" }
@@ -299,6 +311,7 @@ encoding_rs = "0.8.35"
 env-flags = "0.1.1"
 env_logger = "0.11.9"
 eventsource-stream = "0.2.3"
+fd-lock = "4"
 flate2 = "1.1.8"
 futures = { version = "0.3", default-features = false }
 gethostname = "1.1.0"
@@ -413,6 +426,7 @@ tokio-tungstenite = { version = "0.28.0", features = [
 ] }
 tokio-util = "0.7.18"
 toml = "0.9.5"
+tower-http = "0.6"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
