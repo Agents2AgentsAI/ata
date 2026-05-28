@@ -29,6 +29,7 @@ pub enum Account {
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {},
 
+    /// Authenticated via the GitHub Copilot device-code OAuth flow.
     #[serde(rename = "copilot", rename_all = "camelCase")]
     #[ts(rename = "copilot", rename_all = "camelCase")]
     Copilot {},
@@ -66,6 +67,12 @@ pub enum LoginAccountParams {
     #[serde(rename = "chatgptDeviceCode")]
     #[ts(rename = "chatgptDeviceCode")]
     ChatgptDeviceCode,
+    /// Start the GitHub Copilot device-code OAuth flow. The response carries
+    /// the user_code + verification URI the client should display; the
+    /// completion notification arrives once the user authorizes.
+    #[serde(rename = "copilotDeviceCode")]
+    #[ts(rename = "copilotDeviceCode")]
+    CopilotDeviceCode,
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
@@ -84,6 +91,40 @@ pub enum LoginAccountParams {
         #[ts(optional = nullable)]
         chatgpt_plan_type: Option<String>,
     },
+    // === ATA: provider-specific login flows ===
+    // Variants below are ATA additions appended at the end of the enum on
+    // purpose: any future upstream variant lands ahead of them, so a
+    // three-way merge stays clean.
+    /// Persist an API key for a specific provider. Generalizes the legacy
+    /// OpenAI-only `apiKey` variant by carrying the provider id so the
+    /// processor can route to the right credential store (OpenAI, Anthropic,
+    /// Gemini, etc.).
+    #[serde(rename = "providerApiKey", rename_all = "camelCase")]
+    #[ts(rename = "providerApiKey", rename_all = "camelCase")]
+    ProviderApiKey {
+        provider_id: String,
+        #[serde(rename = "apiKey")]
+        #[ts(rename = "apiKey")]
+        api_key: String,
+    },
+    /// Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The
+    /// response carries a browser URL the client should open; the completion
+    /// notification fires once the OAuth callback exchanges tokens.
+    #[serde(rename = "geminiOauth")]
+    #[ts(rename = "geminiOauth")]
+    GeminiOauth,
+    /// Send the Supabase OTP for an ATA account email.
+    #[serde(rename = "ataSendOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataSendOtp", rename_all = "camelCase")]
+    AtaSendOtp { email: String },
+    /// Verify a Supabase OTP and persist the ATA session.
+    #[serde(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    AtaVerifyOtp { email: String, otp: String },
+    /// Sign out of the active ATA account session.
+    #[serde(rename = "ataLogout")]
+    #[ts(rename = "ataLogout")]
+    AtaLogout,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -114,9 +155,53 @@ pub enum LoginAccountResponse {
         /// One-time code the user must enter after signing in.
         user_code: String,
     },
+    /// Initial response for the GitHub Copilot device-code OAuth flow. The
+    /// `AccountLoginCompletedNotification` (with the same `login_id`) fires
+    /// once the user authorizes and the Copilot bearer token is exchanged.
+    #[serde(rename = "copilotDeviceCode", rename_all = "camelCase")]
+    #[ts(rename = "copilotDeviceCode", rename_all = "camelCase")]
+    CopilotDeviceCode {
+        login_id: String,
+        /// URL the client should open in a browser to authorize the device.
+        verification_uri: String,
+        /// One-time code the user must enter on the verification page.
+        user_code: String,
+    },
     #[serde(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     #[ts(rename = "chatgptAuthTokens", rename_all = "camelCase")]
     ChatgptAuthTokens {},
+    // === ATA: provider-specific login flows ===
+    /// Response for `LoginAccountParams::ProviderApiKey`. The key is persisted
+    /// synchronously, so no follow-up `AccountLoginCompletedNotification` is
+    /// emitted — the empty body means "stored successfully".
+    #[serde(rename = "providerApiKey", rename_all = "camelCase")]
+    #[ts(rename = "providerApiKey", rename_all = "camelCase")]
+    ProviderApiKey {},
+    /// Initial response for the Gemini OAuth flow. The follow-up
+    /// `AccountLoginCompletedNotification` arrives once the OAuth callback
+    /// completes.
+    #[serde(rename = "geminiOauthContinueInBrowser", rename_all = "camelCase")]
+    #[ts(rename = "geminiOauthContinueInBrowser", rename_all = "camelCase")]
+    GeminiOauthContinueInBrowser {
+        login_id: String,
+        /// URL the client should open in a browser to authorize Gemini Code
+        /// Assist access.
+        auth_url: String,
+    },
+    /// Response for `LoginAccountParams::AtaSendOtp`. Empty body — success
+    /// means the OTP email was dispatched.
+    #[serde(rename = "ataSendOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataSendOtp", rename_all = "camelCase")]
+    AtaSendOtp {},
+    /// Response for `LoginAccountParams::AtaVerifyOtp`. Carries the
+    /// authenticated email so the TUI can surface it on the success screen.
+    #[serde(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    #[ts(rename = "ataVerifyOtp", rename_all = "camelCase")]
+    AtaVerifyOtp { email: String },
+    /// Response for `LoginAccountParams::AtaLogout`. Empty body.
+    #[serde(rename = "ataLogout", rename_all = "camelCase")]
+    #[ts(rename = "ataLogout", rename_all = "camelCase")]
+    AtaLogout {},
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

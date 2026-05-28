@@ -238,6 +238,21 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
+            // TODO(ata-upstream-merge): wire ATA-specific login flows back in.
+            // ATA's account_processor.rs adds +521 lines of handlers for these
+            // (Copilot device flow, provider API keys, Gemini OAuth, ATA OTP).
+            // They depend on Supabase/AtaAccountConfig/models_manager which
+            // aren't wired on this branch yet.
+            LoginAccountParams::CopilotDeviceCode
+            | LoginAccountParams::ProviderApiKey { .. }
+            | LoginAccountParams::GeminiOauth
+            | LoginAccountParams::AtaSendOtp { .. }
+            | LoginAccountParams::AtaVerifyOtp { .. }
+            | LoginAccountParams::AtaLogout => {
+                return Err(invalid_request(
+                    "ATA-specific login flow is temporarily disabled during upstream merge.",
+                ));
+            }
         }
         Ok(())
     }
