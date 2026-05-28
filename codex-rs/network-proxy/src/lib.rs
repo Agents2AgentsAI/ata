@@ -26,6 +26,7 @@ pub use config::NetworkUnixSocketPermissions;
 pub use config::host_and_port_from_network_addr;
 pub use mitm_hook::InjectedHeaderConfig;
 pub use mitm_hook::MitmHookActionsConfig;
+pub use policy::is_non_public_ip;
 pub use mitm_hook::MitmHookBodyConfig;
 pub use mitm_hook::MitmHookConfig;
 pub use mitm_hook::MitmHookMatchConfig;

@@ -55,6 +55,7 @@ codex-data-tools = { workspace = true }
 codex-protocol = { workspace = true }
 codex-workspace = { workspace = true }
 env-flags = { workspace = true }
+flate2 = { workspace = true }
 codex-research-tools = { workspace = true }
 codex-response-debug-context = { workspace = true }
 codex-scheduling = { workspace = true }
@@ -68,6 +69,7 @@ codex-thread-store = { workspace = true }
 codex-tools = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-cache = { workspace = true }
+codex-utils-file = { workspace = true }
 codex-utils-image = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 codex-utils-output-truncation = { workspace = true }
@@ -102,8 +104,10 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
+tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [

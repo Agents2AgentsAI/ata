@@ -8,6 +8,7 @@ pub(crate) mod lifecycle;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
 pub(crate) mod parallel;
+pub(crate) mod pdfium_downloader;
 pub(crate) mod registry;
 pub(crate) mod router;
 pub(crate) mod runtimes;
@@ -15,6 +16,8 @@ pub(crate) mod sandboxing;
 pub(crate) mod spec_plan;
 pub(crate) mod tool_dispatch_trace;
 pub(crate) mod tool_search_entry;
+pub(crate) mod url_downloader;
+pub(crate) mod url_validation;
 
 use std::borrow::Cow;
 
