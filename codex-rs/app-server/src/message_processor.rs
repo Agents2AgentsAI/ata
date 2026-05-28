@@ -1341,6 +1341,12 @@ impl MessageProcessor {
             ClientRequest::FeedbackUpload { params, .. } => {
                 self.feedback_processor.feedback_upload(params).await
             }
+            ClientRequest::SchedulingTasksList { .. } => Err(invalid_request(
+                "ATA scheduling tasks list is temporarily disabled during upstream merge.",
+            )),
+            ClientRequest::SchedulingTaskDelete { .. } => Err(invalid_request(
+                "ATA scheduling task delete is temporarily disabled during upstream merge.",
+            )),
         };
 
         match result {

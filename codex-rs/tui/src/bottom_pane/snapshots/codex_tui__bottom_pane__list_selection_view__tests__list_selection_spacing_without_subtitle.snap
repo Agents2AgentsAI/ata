@@ -1,12 +1,12 @@
 ---
 source: tui/src/bottom_pane/list_selection_view.rs
-assertion_line: 1432
+assertion_line: 1527
 expression: render_lines(&view)
 ---
                                                 
   Select Approval Mode                          
                                                 
-› 1. Read Only (current)  ATA can read files    
-  2. Full Access          ATA can edit files    
+› 1. Read Only (current)  Codex can read files  
+  2. Full Access          Codex can edit files  
                                                 
   Press enter to confirm or esc to go back

@@ -39,7 +39,7 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
             name: "codex_vscode".to_string(),
-            title: Some("Codex VS Code Extension".to_string()),
+            title: Some("Ata VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -74,7 +74,7 @@ async fn initialize_probe_does_not_override_originator() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
             name: "codex_app_server_daemon".to_string(),
-            title: Some("Codex App Server Daemon".to_string()),
+            title: Some("Ata App Server Daemon".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -101,7 +101,7 @@ async fn initialize_codex_backend_does_not_override_originator() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
             name: "codex-backend".to_string(),
-            title: Some("Codex Backend".to_string()),
+            title: Some("Ata Backend".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -136,7 +136,7 @@ async fn initialize_respects_originator_override_env_var() -> Result<()> {
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_client_info(ClientInfo {
             name: "codex_vscode".to_string(),
-            title: Some("Codex VS Code Extension".to_string()),
+            title: Some("Ata VS Code Extension".to_string()),
             version: "0.1.0".to_string(),
         }),
     )
@@ -207,7 +207,7 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
         mcp.initialize_with_capabilities(
             ClientInfo {
                 name: "codex_vscode".to_string(),
-                title: Some("Codex VS Code Extension".to_string()),
+                title: Some("Ata VS Code Extension".to_string()),
                 version: "0.1.0".to_string(),
             },
             Some(InitializeCapabilities {

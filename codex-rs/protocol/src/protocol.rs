@@ -5407,6 +5407,13 @@ mod tests {
 }
 
 // === ATA scheduling Slice 5: types layered on top of upstream protocol ===
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum SchedulingTaskKind {
+    Cron,
+    Monitor,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct SchedulingCronRow {
     pub task_id: String,

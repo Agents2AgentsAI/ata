@@ -548,6 +548,20 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadShellCommandResponse,
     },
+    // ATA scheduling: list cron and monitor tasks for a thread. Triggers a
+    // `SchedulingTasksSnapshot` notification.
+    SchedulingTasksList => "scheduling/tasks/list" {
+        params: v2::SchedulingTasksListParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SchedulingTasksListResponse,
+    },
+    // ATA scheduling: delete one cron or monitor task. Response is empty;
+    // the next `SchedulingTasksSnapshot` notification reflects the removal.
+    SchedulingTaskDelete => "scheduling/tasks/delete" {
+        params: v2::SchedulingTaskDeleteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::SchedulingTaskDeleteResponse,
+    },
     ThreadApproveGuardianDeniedAction => "thread/approveGuardianDeniedAction" {
         params: v2::ThreadApproveGuardianDeniedActionParams,
         serialization: thread_id(params.thread_id),
@@ -1552,6 +1566,19 @@ server_notification_definitions! {
     /// Notifies the user of world-writable directories on Windows, which cannot be protected by the sandbox.
     WindowsWorldWritableWarning => "windows/worldWritableWarning" (v2::WindowsWorldWritableWarningNotification),
     WindowsSandboxSetupCompleted => "windowsSandbox/setupCompleted" (v2::WindowsSandboxSetupCompletedNotification),
+
+    // ATA document reader notifications.
+    PresentDocument => "document/present" (v2::PresentDocumentNotification),
+    UpdateDocumentSection => "document/section/update" (v2::UpdateDocumentSectionNotification),
+    AppendDocumentSection => "document/section/append" (v2::AppendDocumentSectionNotification),
+    AddDocumentSection => "document/section/add" (v2::AddDocumentSectionNotification),
+    PatchDocumentSection => "document/section/patch" (v2::PatchDocumentSectionNotification),
+
+    // ATA scheduling: snapshot response to `Op::ListSchedulingTasks` used by
+    // the `/scheduling` TUI panel.
+    SchedulingTasksSnapshot => "scheduling/tasks/snapshot" (v2::SchedulingTasksSnapshotNotification),
+    // ATA scheduling: per-line streamed output from a running monitor.
+    SchedulingMonitorOutputDelta => "scheduling/monitor/outputDelta" (v2::SchedulingMonitorOutputDeltaNotification),
 
     #[serde(rename = "account/login/completed")]
     #[ts(rename = "account/login/completed")]

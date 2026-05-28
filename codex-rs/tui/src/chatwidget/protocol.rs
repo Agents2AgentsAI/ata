@@ -239,7 +239,14 @@ impl ChatWidget {
             | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
-            | ServerNotification::AccountLoginCompleted(_) => {}
+            | ServerNotification::AccountLoginCompleted(_)
+            | ServerNotification::PresentDocument(_)
+            | ServerNotification::UpdateDocumentSection(_)
+            | ServerNotification::AppendDocumentSection(_)
+            | ServerNotification::AddDocumentSection(_)
+            | ServerNotification::PatchDocumentSection(_)
+            | ServerNotification::SchedulingTasksSnapshot(_)
+            | ServerNotification::SchedulingMonitorOutputDelta(_) => {}
             ServerNotification::ContextCompacted(_) => {}
         }
     }
