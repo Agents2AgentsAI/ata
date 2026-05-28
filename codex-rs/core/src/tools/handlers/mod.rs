@@ -4,6 +4,7 @@ pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod cron_session_spec;
 pub(crate) mod cron_spec;
+pub(crate) mod data;
 mod dynamic;
 pub(crate) mod extension_tools;
 mod goal;

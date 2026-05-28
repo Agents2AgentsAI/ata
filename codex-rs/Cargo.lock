@@ -2549,6 +2549,7 @@ dependencies = [
  "codex-rollout-trace",
  "codex-sandboxing",
  "codex-scheduling",
+ "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
  "codex-state",

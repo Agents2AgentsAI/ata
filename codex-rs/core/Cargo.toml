@@ -59,6 +59,7 @@ env-flags = { workspace = true }
 flate2 = { workspace = true }
 codex-research-tools = { workspace = true }
 codex-response-debug-context = { workspace = true }
+codex-secrets = { workspace = true }
 codex-scheduling = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
