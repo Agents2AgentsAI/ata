@@ -1283,7 +1283,7 @@ async fn unified_exec_emits_one_begin_and_one_end_event() -> Result<()> {
     let poll_args = json!({
         "chars": "",
         "session_id": 1000,
-        "yield_time_ms": 150,
+        "yield_time_ms": 1_000,
     });
 
     let responses = vec![

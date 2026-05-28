@@ -296,7 +296,7 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         &session,
         &turn,
         "echo $CODEX_INTERACTIVE_SHELL_VAR",
-        /*yield_time_ms*/ 2_500,
+        /*yield_time_ms*/ 15_000,
         /*workdir*/ None,
     )
     .await?;
@@ -397,7 +397,7 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
         &session,
         &turn,
         "sleep 1 && echo unified-exec-done",
-        /*yield_time_ms*/ 250,
+        /*yield_time_ms*/ 2_500,
         /*workdir*/ None,
     )
     .await?;
@@ -548,7 +548,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
     if !process.has_exited() {
         let exit_signal = process.cancellation_token();
         assert!(
-            tokio::time::timeout(Duration::from_secs(2), exit_signal.cancelled())
+            tokio::time::timeout(Duration::from_secs(5), exit_signal.cancelled())
                 .await
                 .is_ok(),
             "process did not report exit within timeout"

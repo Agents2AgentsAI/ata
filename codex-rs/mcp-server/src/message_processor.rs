@@ -339,8 +339,8 @@ impl MessageProcessor {
         } = params;
 
         match name.as_ref() {
-            "codex" => self.handle_tool_call_codex(id, arguments).await,
-            "codex-reply" => {
+            "ata" => self.handle_tool_call_codex(id, arguments).await,
+            "ata-reply" => {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }

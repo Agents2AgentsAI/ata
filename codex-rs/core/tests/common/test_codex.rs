@@ -30,6 +30,7 @@ use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -599,6 +600,7 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
     model.slug = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.display_name = TEST_MODEL_WITH_EXPERIMENTAL_TOOLS.to_string();
     model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
+    model.truncation_policy = TruncationPolicyConfig::tokens(20_000);
     config.model_catalog = Some(ModelsResponse {
         models: vec![model],
     });
