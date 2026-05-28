@@ -99,6 +99,10 @@ fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
             ContentItem::OutputText { text } => {
                 warn!("Output text in user message: {}", text);
             }
+            ContentItem::InputFile { .. } | ContentItem::UrlFile { .. } => {
+                // File content items are stripped from event mapping; the
+                // attachment-aware renderer in the TUI handles them directly.
+            }
         }
     }
 

@@ -29,6 +29,14 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::LazyLock;
 
+/// Information about a file attachment that was dropped from history.
+/// `url` is `Some` for `UrlFile` items and `None` for `InputFile` items.
+#[derive(Debug, Clone)]
+pub(crate) struct DroppedUrlFileInfo {
+    pub(crate) url: Option<String>,
+    pub(crate) filename: Option<String>,
+}
+
 /// Transcript of thread history
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextManager {

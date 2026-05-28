@@ -165,6 +165,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     started_at: payload.started_at,
                     completed_at: None,
                     duration_ms: None,
+                    background: None,
                 });
                 turn.items.clear();
                 turn.items_view = TurnItemsView::NotLoaded;
@@ -1305,6 +1306,7 @@ async fn emit_turn_completed_with_status(
             started_at: turn_completion_metadata.started_at,
             completed_at: turn_completion_metadata.completed_at,
             duration_ms: turn_completion_metadata.duration_ms,
+            background: None,
         },
     };
     outgoing

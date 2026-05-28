@@ -138,8 +138,7 @@ mod network_proxy_spec;
 mod otel;
 mod permissions;
 mod resolved_permission_profile;
-#[cfg(test)]
-mod schema;
+pub mod schema;
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
