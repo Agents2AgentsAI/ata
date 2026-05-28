@@ -1130,12 +1130,12 @@ async fn load_research_config(config_overrides: &CliConfigOverrides) -> Result<R
 
     match codex_core::config::Config::load_with_cli_overrides(cli_overrides).await {
         Ok(config) => {
-            let toml: Option<codex_core::config::types::ResearchToolsToml> = config
+            let toml: Option<toml::Value> = config
                 .config_layer_stack
                 .effective_config()
                 .as_table()
                 .and_then(|t| t.get("research"))
-                .and_then(|v| v.clone().try_into().ok());
+                .cloned();
             Ok(codex_core::research::build_research_config(
                 toml.as_ref(),
                 config.codex_home.as_path(),

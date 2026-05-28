@@ -2246,6 +2246,7 @@ dependencies = [
  "codex-models-manager",
  "codex-plugin",
  "codex-protocol",
+ "codex-research-tools",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-rollout-trace",
@@ -2259,6 +2260,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "codex-workspace",
  "crossterm",
  "http 1.4.0",
  "libc",
@@ -2518,6 +2520,7 @@ dependencies = [
  "codex-otel",
  "codex-plugin",
  "codex-protocol",
+ "codex-research-tools",
  "codex-response-debug-context",
  "codex-rmcp-client",
  "codex-rollout",
@@ -3479,6 +3482,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-research-tools"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures",
+ "lru 0.16.3",
+ "md-5",
+ "pretty_assertions",
+ "quick-xml",
+ "rand 0.9.3",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "walkdir",
+ "wiremock",
+]
+
+[[package]]
 name = "codex-response-debug-context"
 version = "0.0.0"
 dependencies = [
@@ -4167,6 +4196,23 @@ dependencies = [
  "tracing-appender",
  "windows 0.58.0",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "codex-workspace"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "libc",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]

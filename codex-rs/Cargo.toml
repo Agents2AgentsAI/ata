@@ -27,6 +27,8 @@ members = [
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
     "cli",
+    "codex-research-tools",
+    "codex-workspace",
     "collaboration-mode-templates",
     "connectors",
     "config",
@@ -151,6 +153,8 @@ codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
+codex-research-tools = { path = "codex-research-tools" }
+codex-workspace = { path = "codex-workspace" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
 codex-cloud-requirements = { path = "cloud-requirements" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }

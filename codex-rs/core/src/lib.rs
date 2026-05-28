@@ -102,6 +102,14 @@ pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
+pub mod research {
+    use codex_research_tools::config::ResearchConfig;
+    use std::path::Path;
+
+    pub fn build_research_config<T>(_toml: Option<&T>, _codex_home: &Path, _cwd: &Path) -> ResearchConfig {
+        ResearchConfig::from_env()
+    }
+}
 pub mod review_format;
 pub mod review_prompts;
 mod thread_manager;

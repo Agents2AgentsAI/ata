@@ -36,6 +36,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::ProfileV2Name;
 use codex_utils_cli::resume_hint;
+use codex_workspace::Cli as WorkspaceCli;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -51,6 +52,8 @@ mod mcp_cmd;
 mod plugin_cmd;
 mod remote_control_cmd;
 mod state_db_recovery;
+mod zotero_cmd;
+use crate::zotero_cmd::ZoteroCli;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -193,6 +196,13 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Manage workspaces (repos, runs, artifacts, audit).
+    #[clap(visible_alias = "ws")]
+    Workspace(WorkspaceCli),
+
+    /// Manage Zotero libraries, collections, items, and attachments.
+    Zotero(ZoteroCli),
 }
 
 #[derive(Debug, Parser)]
@@ -1240,6 +1250,29 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             codex_cloud_tasks::run_main(cloud_cli, arg0_paths.codex_linux_sandbox_exe.clone())
                 .await?;
         }
+        Some(Subcommand::Workspace(workspace_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "workspace",
+            )?;
+            let code = codex_workspace::run_cli(workspace_cli);
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Some(Subcommand::Zotero(mut zotero_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "zotero",
+            )?;
+            prepend_config_flags(
+                &mut zotero_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            zotero_cmd::run_zotero_command(zotero_cli).await?;
+        }
         Some(Subcommand::Sandbox(mut sandbox_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -1866,6 +1899,8 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::ResponsesApiProxy(_)) => Some("responses-api-proxy"),
         Some(Subcommand::StdioToUds(_)) => Some("stdio-to-uds"),
         Some(Subcommand::Features(_)) => Some("features"),
+        Some(Subcommand::Workspace(_)) => Some("workspace"),
+        Some(Subcommand::Zotero(_)) => Some("zotero"),
     }
 }
 
