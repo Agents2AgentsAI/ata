@@ -1,3 +1,9 @@
+# macOS aarch64 defaults Rust test threads to 2 MB which overflows several
+# codex-app-server in_process and tracing tests. Linux defaults to 8 MB so
+# upstream CI passes; bump to 16 MB for all platforms to keep parity.
+[env]
+RUST_MIN_STACK = "16777216"
+
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "target-feature=+crt-static"]
 
