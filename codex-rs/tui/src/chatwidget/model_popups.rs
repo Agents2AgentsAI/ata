@@ -517,6 +517,8 @@ impl ChatWidget {
             ReasoningEffortConfig::Medium => "Medium",
             ReasoningEffortConfig::High => "High",
             ReasoningEffortConfig::XHigh => "Extra high",
+            ReasoningEffortConfig::Adaptive => "Adaptive",
+            ReasoningEffortConfig::Max => "Max",
         }
     }
 

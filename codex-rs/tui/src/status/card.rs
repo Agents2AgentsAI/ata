@@ -706,6 +706,11 @@ impl HistoryCell for StatusHistoryCell {
             StatusAccountDisplay::ApiKey => {
                 "API key configured (run codex login to use ChatGPT)".to_string()
             }
+            StatusAccountDisplay::Ata { email } => match email {
+                Some(email) => format!("ATA ({email})"),
+                None => "ATA".to_string(),
+            },
+            StatusAccountDisplay::Copilot => "GitHub Copilot".to_string(),
         });
 
         let mut labels: Vec<String> = vec!["Model", "Directory", "Permissions", "Agents.md"]

@@ -141,6 +141,8 @@ fn reasoning_effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
             ReasoningEffort::Medium => "Balances speed and reasoning depth for everyday tasks",
             ReasoningEffort::High => "Greater reasoning depth for complex problems",
             ReasoningEffort::XHigh => "Extra high reasoning depth for complex problems",
+            ReasoningEffort::Adaptive => "Model decides reasoning depth per turn",
+            ReasoningEffort::Max => "Maximum reasoning budget (Opus 4.7)",
         }
         .to_string(),
     }

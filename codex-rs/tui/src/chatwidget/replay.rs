@@ -22,6 +22,7 @@ impl ChatWidget {
                 started_at,
                 completed_at,
                 duration_ms,
+                background,
             } = turn;
             if matches!(status, TurnStatus::InProgress) {
                 self.last_non_retry_error = None;
@@ -46,6 +47,7 @@ impl ChatWidget {
                             started_at,
                             completed_at,
                             duration_ms,
+                            background,
                         },
                     },
                     Some(replay_kind),

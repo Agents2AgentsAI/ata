@@ -738,6 +738,8 @@ impl ChatWidget {
                     Some(ReasoningEffortConfig::Medium) => "medium",
                     Some(ReasoningEffortConfig::High) => "high",
                     Some(ReasoningEffortConfig::XHigh) => "xhigh",
+                    Some(ReasoningEffortConfig::Adaptive) => "adaptive",
+                    Some(ReasoningEffortConfig::Max) => "max",
                     None | Some(ReasoningEffortConfig::None) => "default",
                 };
                 message.push(' ');

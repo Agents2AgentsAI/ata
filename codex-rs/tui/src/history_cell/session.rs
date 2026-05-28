@@ -198,7 +198,7 @@ pub(crate) fn new_session_info(
     } else {
         if config.show_tooltips
             && let Some(tooltips) = tooltip_override
-                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status))
+                .or_else(|| tooltips::get_tooltip(auth_plan, show_fast_status, &[]))
                 .map(|tip| TooltipHistoryCell::new(tip, &config.cwd))
         {
             parts.push(Box::new(tooltips));
@@ -324,6 +324,8 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::Medium => "medium",
             ReasoningEffortConfig::High => "high",
             ReasoningEffortConfig::XHigh => "xhigh",
+            ReasoningEffortConfig::Adaptive => "adaptive",
+            ReasoningEffortConfig::Max => "max",
             ReasoningEffortConfig::None => "none",
         })
     }

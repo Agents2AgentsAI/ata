@@ -50,6 +50,10 @@ pub enum ReasoningEffort {
     Medium,
     High,
     XHigh,
+    Adaptive,
+    /// Anthropic Opus 4.7-only: maximum thinking budget. Falls back to
+    /// XHigh on providers that don't expose a dedicated Max tier.
+    Max,
 }
 
 impl FromStr for ReasoningEffort {
@@ -560,6 +564,9 @@ fn effort_rank(effort: ReasoningEffort) -> i32 {
         ReasoningEffort::Medium => 3,
         ReasoningEffort::High => 4,
         ReasoningEffort::XHigh => 5,
+        // ATA additions: Adaptive sits above XHigh; Max is Opus-4.7-only.
+        ReasoningEffort::Adaptive => 6,
+        ReasoningEffort::Max => 7,
     }
 }
 

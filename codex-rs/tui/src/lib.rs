@@ -1821,6 +1821,8 @@ async fn get_login_status(
         Some(AppServerAccount::ApiKey {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         Some(AppServerAccount::Chatgpt { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Chatgpt),
         Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,
+        // Copilot uses an API-key-style bearer token under the hood.
+        Some(AppServerAccount::Copilot {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
         None => LoginStatus::NotAuthenticated,
     })
 }
