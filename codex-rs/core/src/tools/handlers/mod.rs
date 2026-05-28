@@ -6,6 +6,9 @@ pub(crate) mod cron_session_spec;
 pub(crate) mod cron_spec;
 pub(crate) mod data;
 mod dynamic;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp_workspace_edit;
+pub(crate) mod research;
 pub(crate) mod extension_tools;
 mod goal;
 pub(crate) mod goal_spec;

@@ -248,6 +248,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
     ResponsesWebsocketsV2,
+    /// ATA-private: surface the document-reader / reading-view UI overlay.
+    ReadingView,
 }
 
 impl Feature {
@@ -1194,6 +1196,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::WorkspaceDependencies,
         key: "workspace_dependencies",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ReadingView,
+        key: "reading_view",
         stage: Stage::Stable,
         default_enabled: true,
     },
