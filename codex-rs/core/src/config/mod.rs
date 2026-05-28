@@ -26,6 +26,7 @@ use codex_config::ThreadConfigLoader;
 use codex_config::config_toml::ConfigLockfileToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
+use codex_config::config_toml::ElevenLabsToml;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
@@ -139,6 +140,68 @@ mod otel;
 mod permissions;
 mod resolved_permission_profile;
 pub mod schema;
+
+/// ATA-side `crate::config::types::*` re-exports. Upstream's
+/// `codex_config::types::*` items are not affected.
+pub mod ata;
+
+/// Reading view display mode configuration parsed from `[reading_view]` in
+/// config.toml. Drives `crate::tools::handlers::document_reader`'s
+/// display-mode selection (`tui` | `browser` | `disabled`).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ReadingViewToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+/// Research tools configuration parsed from `[research]` in config.toml.
+/// Layered on top of env-var-resolved `ResearchConfig` defaults; any field
+/// left as `None` falls back to the env-var value or codex-home secret.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ResearchToolsToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openalex_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_library_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_group_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zotero_storage_dir: Option<String>,
+}
+
+/// Data tools configuration parsed from `[data]` in config.toml. Layered on
+/// top of env-var-resolved `DataConfig` defaults; any field left as `None`
+/// falls back to the env-var value or codex-home secret.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DataToolsToml {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huggingface_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kaggle_username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kaggle_key: Option<String>,
+}
+
+pub mod types {
+    pub use super::DataToolsToml;
+    pub use super::ReadingViewToml;
+    pub use super::ResearchToolsToml;
+    pub use super::ata::AtaAccountConfig;
+    pub use super::ata::DEFAULT_ATA_SUPABASE_ANON_KEY;
+    pub use super::ata::DEFAULT_ATA_SUPABASE_URL;
+    pub use super::ata::RelayMode;
+    pub use super::ata::TtsBackend;
+    pub use super::ata::VoiceModeToml;
+    pub use super::ata::VoiceOutput;
+    pub use super::ata::VoiceVerbosity;
+}
+
 pub use codex_config::ConfigLoadOptions;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
@@ -895,6 +958,13 @@ pub struct Config {
 
     /// Machine-local realtime audio device preferences used by realtime voice.
     pub realtime_audio: RealtimeAudioConfig,
+
+    /// ATA: optional ElevenLabs TTS/STT credentials and voice selection.
+    /// When `api_key` is set, the TUI streams agent text into ElevenLabs and
+    /// plays the returned PCM through the same speaker pipeline used by
+    /// upstream realtime voice. Disabled (`None`) means the upstream voice
+    /// path stays in control.
+    pub elevenlabs: Option<ElevenLabsToml>,
 
     /// Experimental / do not use. Overrides only the realtime conversation
     /// websocket transport base URL (the `Op::RealtimeConversation`
@@ -3466,6 +3536,7 @@ impl Config {
                     microphone: audio.microphone,
                     speaker: audio.speaker,
                 }),
+            elevenlabs: cfg.elevenlabs.clone(),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
             realtime: cfg
