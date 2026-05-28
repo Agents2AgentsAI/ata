@@ -39,16 +39,16 @@ MANIFEST_FEATURE_EXCEPTIONS = {
         "java": ("dep:tree-sitter-java",),
         "scala": ("dep:tree-sitter-scala",),
     },
-    # ATA: codex-core gates its code-intel surface (LSP + treesitter
-    # integration introduced upstream around v0.130) behind matching
-    # features so a slim build can skip the heavy native deps. Default
-    # build keeps both on; CI also exercises `--all-features` so the
-    # gates do not hide warnings.
-    "codex-rs/core/Cargo.toml": {
-        "default": ("code-intel",),
-        "lsp": ("dep:codex-lsp-client",),
-        "treesitter": ("dep:codex-treesitter",),
-        "code-intel": ("lsp", "treesitter"),
+    # Upstream codex-code-mode (v0.131+) gates the V8 sandbox build behind
+    # a `sandbox` feature so consumers can opt out on platforms where V8's
+    # pointer-compression sandbox isn't supported.
+    "codex-rs/code-mode/Cargo.toml": {
+        "sandbox": ("v8/v8_enable_sandbox",),
+    },
+    # Upstream codex-v8-poc mirrors the same `sandbox` feature gate as
+    # codex-code-mode.
+    "codex-rs/v8-poc/Cargo.toml": {
+        "sandbox": ("v8/v8_enable_sandbox",),
     },
 }
 OPTIONAL_DEPENDENCY_EXCEPTIONS = {
@@ -60,9 +60,6 @@ OPTIONAL_DEPENDENCY_EXCEPTIONS = {
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-rust"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-scala"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-typescript"),
-    # ATA: paired with codex-core's lsp/treesitter feature gates above.
-    ("codex-rs/core/Cargo.toml", "dependencies", "codex-lsp-client"),
-    ("codex-rs/core/Cargo.toml", "dependencies", "codex-treesitter"),
 }
 INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 
