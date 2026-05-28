@@ -24,16 +24,20 @@ pub use codex_thread::ThreadConfigSnapshot;
 pub use session::turn_context::TurnContext;
 mod agent;
 mod attestation;
+pub mod auth;
 mod codex_delegate;
 mod command_canonicalization;
+mod commit_attribution;
 pub mod config;
 pub mod connectors;
 pub mod context;
 mod context_manager;
+mod data;
 mod environment_selection;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
+mod flags;
 #[cfg(test)]
 mod git_info_tests;
 mod goals;
@@ -102,6 +106,7 @@ pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
+mod provider_transport_capabilities;
 pub mod research {
     use codex_research_tools::config::ResearchConfig;
     use std::path::Path;
@@ -112,7 +117,9 @@ pub mod research {
 }
 pub mod review_format;
 pub mod review_prompts;
+mod scheduling_runtime;
 mod thread_manager;
+mod workspace_kb;
 pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
 pub use thread_manager::ForkSnapshot;

@@ -89,6 +89,77 @@ pub fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
+const REDACTED_SECRET: &str = "[REDACTED_SECRET]";
+
+/// ATA: redact secrets from an error-response body before logging. Used by
+/// `crate::auth::*` to keep tokens and API keys out of log output when an
+/// OAuth provider returns a non-2xx response.
+pub(crate) fn redact_error_body(body: &str) -> String {
+    let redacted_json = serde_json::from_str::<serde_json::Value>(body)
+        .map(|mut value| {
+            redact_sensitive_json_fields(&mut value);
+            serde_json::to_string(&value).unwrap_or_else(|_| body.to_string())
+        })
+        .unwrap_or_else(|_| body.to_string());
+
+    redact_secrets_in_text(redacted_json)
+}
+
+fn redact_sensitive_json_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map.iter_mut() {
+                if is_sensitive_error_key(key) {
+                    *nested = serde_json::Value::String(REDACTED_SECRET.to_string());
+                } else {
+                    redact_sensitive_json_fields(nested);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json_fields(item);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
+fn is_sensitive_error_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "access_token"
+            | "refresh_token"
+            | "id_token"
+            | "token"
+            | "authorization"
+            | "authorization_code"
+            | "code_verifier"
+            | "client_secret"
+            | "secret"
+            | "password"
+            | "api_key"
+            | "apikey"
+    ) || lower.ends_with("_token")
+        || lower.ends_with("_api_key")
+}
+
+fn redact_secrets_in_text(text: String) -> String {
+    use regex_lite::Regex;
+    use std::sync::LazyLock;
+    static BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._\-]+")
+            .unwrap_or_else(|e| panic!("BEARER_RE compile failed: {e}"))
+    });
+    BEARER_RE
+        .replace_all(&text, format!("Bearer {REDACTED_SECRET}").as_str())
+        .into_owned()
+}
+
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     if cfg!(debug_assertions) {
         panic!("{}", message.to_string());

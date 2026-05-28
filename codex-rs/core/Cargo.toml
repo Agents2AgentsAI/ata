@@ -51,9 +51,13 @@ codex-network-proxy = { workspace = true }
 codex-otel = { workspace = true }
 codex-plugin = { workspace = true }
 codex-model-provider = { workspace = true }
+codex-data-tools = { workspace = true }
 codex-protocol = { workspace = true }
+codex-workspace = { workspace = true }
+env-flags = { workspace = true }
 codex-research-tools = { workspace = true }
 codex-response-debug-context = { workspace = true }
+codex-scheduling = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
 codex-rmcp-client = { workspace = true }
@@ -115,6 +119,7 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
+urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4", "v5"] }
 which = { workspace = true }
 whoami = { workspace = true }

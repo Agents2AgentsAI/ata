@@ -88,19 +88,19 @@ pub async fn start_device_flow() -> Result<DeviceCodeResponse> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| CodexErr::Api(format!("Failed to request device code: {e}")))?;
+        .map_err(|e| CodexErr::InvalidRequest(format!("Failed to request device code: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = redact_error_body(&resp.text().await.unwrap_or_default());
-        return Err(CodexErr::Api(format!(
+        return Err(CodexErr::InvalidRequest(format!(
             "Device code request failed ({status}): {body}"
         )));
     }
 
     resp.json::<DeviceCodeResponse>()
         .await
-        .map_err(|e| CodexErr::Api(format!("Invalid device code response: {e}")))
+        .map_err(|e| CodexErr::InvalidRequest(format!("Invalid device code response: {e}")))
 }
 
 /// Poll the access-token endpoint until the user authorizes or the device
@@ -117,7 +117,7 @@ pub async fn poll_for_access_token(device: &DeviceCodeResponse) -> Result<String
         if let Some(deadline) = deadline
             && std::time::Instant::now() >= deadline
         {
-            return Err(CodexErr::Api("Device code expired".into()));
+            return Err(CodexErr::InvalidRequest("Device code expired".into()));
         }
 
         sleep(interval).await;
@@ -136,12 +136,12 @@ pub async fn poll_for_access_token(device: &DeviceCodeResponse) -> Result<String
             .json(&body)
             .send()
             .await
-            .map_err(|e| CodexErr::Api(format!("Failed to poll access token: {e}")))?;
+            .map_err(|e| CodexErr::InvalidRequest(format!("Failed to poll access token: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = redact_error_body(&resp.text().await.unwrap_or_default());
-            return Err(CodexErr::Api(format!(
+            return Err(CodexErr::InvalidRequest(format!(
                 "Access token poll failed ({status}): {body}"
             )));
         }
@@ -149,7 +149,7 @@ pub async fn poll_for_access_token(device: &DeviceCodeResponse) -> Result<String
         let parsed: AccessTokenResponse = resp
             .json()
             .await
-            .map_err(|e| CodexErr::Api(format!("Invalid access token response: {e}")))?;
+            .map_err(|e| CodexErr::InvalidRequest(format!("Invalid access token response: {e}")))?;
 
         if let Some(token) = parsed.access_token {
             return Ok(token);
@@ -159,7 +159,7 @@ pub async fn poll_for_access_token(device: &DeviceCodeResponse) -> Result<String
             Some("authorization_pending") | Some("slow_down") | None => continue,
             Some(err) => {
                 let detail = parsed.error_description.unwrap_or_default();
-                return Err(CodexErr::Api(format!(
+                return Err(CodexErr::InvalidRequest(format!(
                     "Authorization failed: {err}{}",
                     if detail.is_empty() {
                         String::new()
@@ -200,7 +200,7 @@ pub fn save_credentials(
     };
 
     login_with_provider_oauth(codex_home, PROVIDER_COPILOT, credential, store_mode)
-        .map_err(|e| CodexErr::Api(format!("Failed to save Copilot credentials: {e}")))
+        .map_err(|e| CodexErr::InvalidRequest(format!("Failed to save Copilot credentials: {e}")))
 }
 
 /// Return the GitHub OAuth access token used as the Copilot bearer.
@@ -210,14 +210,14 @@ pub async fn get_or_refresh_copilot_token(
 ) -> Result<String> {
     let credential = get_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode)
         .ok_or_else(|| {
-            CodexErr::Api(
+            CodexErr::InvalidRequest(
                 "Not signed in to GitHub Copilot. Run `ata login` and choose GitHub Copilot."
                     .into(),
             )
         })?;
 
     if credential.access.is_empty() {
-        return Err(CodexErr::Api(
+        return Err(CodexErr::InvalidRequest(
             "Stored Copilot credentials are empty. Run `ata login` again.".into(),
         ));
     }
@@ -228,7 +228,7 @@ pub async fn get_or_refresh_copilot_token(
 /// Forget all stored Copilot credentials.
 pub fn logout(codex_home: &Path, store_mode: AuthCredentialsStoreMode) -> Result<()> {
     clear_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode)
-        .map_err(|e| CodexErr::Api(format!("Failed to clear Copilot credentials: {e}")))?;
+        .map_err(|e| CodexErr::InvalidRequest(format!("Failed to clear Copilot credentials: {e}")))?;
     Ok(())
 }
 
