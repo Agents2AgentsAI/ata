@@ -1370,7 +1370,14 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::CollabCloseBegin(_)
         | EventMsg::CollabCloseEnd(_)
         | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => None,
+        | EventMsg::CollabResumeEnd(_)
+        | EventMsg::PresentDocument(_)
+        | EventMsg::UpdateDocumentSection(_)
+        | EventMsg::AppendDocumentSection(_)
+        | EventMsg::AddDocumentSection(_)
+        | EventMsg::PatchDocumentSection(_)
+        | EventMsg::SchedulingTasksSnapshot(_)
+        | EventMsg::SchedulingMonitorOutputDelta(_) => None,
     }
 }
 

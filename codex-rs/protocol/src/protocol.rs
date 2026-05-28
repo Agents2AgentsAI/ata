@@ -639,6 +639,20 @@ pub enum Op {
         /// The raw command string after '!'
         command: String,
     },
+
+    /// ATA: request a snapshot of in-session scheduling state (cron jobs,
+    /// monitors) for display in the `/scheduling` TUI panel. Server responds
+    /// with [`EventMsg::SchedulingTasksSnapshot`]. No-op when
+    /// `Feature::Scheduling` is disabled (server emits an empty snapshot).
+    ListSchedulingTasks,
+
+    /// ATA: remove a scheduling task from the registry, aborting it first
+    /// if it's still running. Used by the `/scheduling` TUI panel's `d`
+    /// shortcut to delete a row. No-op when `Feature::Scheduling` is disabled.
+    DeleteSchedulingTask {
+        task_id: String,
+        kind: SchedulingTaskKind,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
@@ -739,6 +753,8 @@ impl Op {
             Self::ApproveGuardianDeniedAction { .. } => "approve_guardian_denied_action",
             Self::Shutdown => "shutdown",
             Self::RunUserShellCommand { .. } => "run_user_shell_command",
+            Self::ListSchedulingTasks => "list_scheduling_tasks",
+            Self::DeleteSchedulingTask { .. } => "delete_scheduling_task",
         }
     }
 }
@@ -1325,6 +1341,29 @@ pub enum EventMsg {
     CollabResumeBegin(CollabResumeBeginEvent),
     /// Collab interaction: resume end.
     CollabResumeEnd(CollabResumeEndEvent),
+
+    /// ATA: open a document in the reading-view pane.
+    PresentDocument(crate::document_reader::PresentDocumentEvent),
+
+    /// ATA: replace the body of a document section in the reading view.
+    UpdateDocumentSection(crate::document_reader::UpdateDocumentSectionEvent),
+
+    /// ATA: append text to the end of a document section.
+    AppendDocumentSection(crate::document_reader::AppendDocumentSectionEvent),
+
+    /// ATA: insert a new section into a document.
+    AddDocumentSection(crate::document_reader::AddDocumentSectionEvent),
+
+    /// ATA: apply a diff-style patch to a document section.
+    PatchDocumentSection(crate::document_reader::PatchDocumentSectionEvent),
+
+    /// ATA: response to [`Op::ListSchedulingTasks`]. Contains the current
+    /// snapshot of cron jobs and monitors for the `/scheduling` TUI panel.
+    SchedulingTasksSnapshot(SchedulingTasksSnapshotEvent),
+
+    /// ATA: incremental stdout/stderr chunk emitted by a running scheduling
+    /// monitor. Consumed by the `/scheduling` TUI panel to render live output.
+    SchedulingMonitorOutputDelta(SchedulingMonitorOutputDeltaEvent),
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
