@@ -512,6 +512,46 @@
         },
         {
           "properties": {
+            "file_data": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "input_file"
+              ],
+              "title": "InputFileContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InputFileContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "text": {
               "type": "string"
             },
@@ -528,6 +568,38 @@
             "type"
           ],
           "title": "OutputTextContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "url_file"
+              ],
+              "title": "UrlFileContentItemType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "UrlFileContentItem",
           "type": "object"
         }
       ]
@@ -1269,6 +1341,23 @@
           "type": "object"
         },
         {
+          "description": "Start the GitHub Copilot device-code OAuth flow. The response carries the user_code + verification URI the client should display; the completion notification arrives once the user authorizes.",
+          "properties": {
+            "type": {
+              "enum": [
+                "copilotDeviceCode"
+              ],
+              "title": "CopilotDeviceCodeLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CopilotDeviceCodeLoginAccountParams",
+          "type": "object"
+        },
+        {
           "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
           "properties": {
             "accessToken": {
@@ -1300,6 +1389,111 @@
             "type"
           ],
           "title": "ChatgptAuthTokensLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "Persist an API key for a specific provider. Generalizes the legacy OpenAI-only `apiKey` variant by carrying the provider id so the processor can route to the right credential store (OpenAI, Anthropic, Gemini, etc.).",
+          "properties": {
+            "apiKey": {
+              "type": "string"
+            },
+            "providerId": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "providerApiKey"
+              ],
+              "title": "ProviderApiKeyLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "apiKey",
+            "providerId",
+            "type"
+          ],
+          "title": "ProviderApiKeyLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The response carries a browser URL the client should open; the completion notification fires once the OAuth callback exchanges tokens.",
+          "properties": {
+            "type": {
+              "enum": [
+                "geminiOauth"
+              ],
+              "title": "GeminiOauthLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "GeminiOauthLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "Send the Supabase OTP for an ATA account email.",
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ataSendOtp"
+              ],
+              "title": "AtaSendOtpLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "type"
+          ],
+          "title": "AtaSendOtpLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "Verify a Supabase OTP and persist the ATA session.",
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "otp": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ataVerifyOtp"
+              ],
+              "title": "AtaVerifyOtpLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "otp",
+            "type"
+          ],
+          "title": "AtaVerifyOtpLoginAccountParams",
+          "type": "object"
+        },
+        {
+          "description": "Sign out of the active ATA account session.",
+          "properties": {
+            "type": {
+              "enum": [
+                "ataLogout"
+              ],
+              "title": "AtaLogoutLoginAccountParamsType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "AtaLogoutLoginAccountParams",
           "type": "object"
         }
       ]
@@ -1942,15 +2136,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ReasoningItemContent": {
       "oneOf": [
@@ -2868,6 +3074,44 @@
           "type": "object"
         }
       ]
+    },
+    "SchedulingTaskDeleteParams": {
+      "description": "ATA: delete one scheduling task (cron job, monitor, or loop) from a thread's registry. Used by the `/scheduling` TUI panel's `d` shortcut. Server aborts the task first if it's still running. Response is empty; the panel observes the removal via the next `SchedulingTasksSnapshot` notification, which the server emits immediately after the delete.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/SchedulingTaskKind"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "taskId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "SchedulingTaskKind": {
+      "enum": [
+        "cron",
+        "monitor"
+      ],
+      "type": "string"
+    },
+    "SchedulingTasksListParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
     },
     "SendAddCreditsNudgeEmailParams": {
       "properties": {
@@ -4534,6 +4778,54 @@
         "params"
       ],
       "title": "Thread/shellCommandRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "scheduling/tasks/list"
+          ],
+          "title": "Scheduling/tasks/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingTasksListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/tasks/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "scheduling/tasks/delete"
+          ],
+          "title": "Scheduling/tasks/deleteRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingTaskDeleteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/tasks/deleteRequest",
       "type": "object"
     },
     {

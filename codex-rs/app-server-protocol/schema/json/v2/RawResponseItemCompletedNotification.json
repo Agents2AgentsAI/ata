@@ -55,6 +55,46 @@
         },
         {
           "properties": {
+            "file_data": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "file_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "input_file"
+              ],
+              "title": "InputFileContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InputFileContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
             "text": {
               "type": "string"
             },
@@ -71,6 +111,38 @@
             "type"
           ],
           "title": "OutputTextContentItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mime_type": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "enum": [
+                "url_file"
+              ],
+              "title": "UrlFileContentItemType",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "title": "UrlFileContentItem",
           "type": "object"
         }
       ]

@@ -547,6 +547,54 @@
             },
             "method": {
               "enum": [
+                "scheduling/tasks/list"
+              ],
+              "title": "Scheduling/tasks/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SchedulingTasksListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "scheduling/tasks/delete"
+              ],
+              "title": "Scheduling/tasks/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SchedulingTaskDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/approveGuardianDeniedAction"
               ],
               "title": "Thread/approveGuardianDeniedActionRequestMethod",
@@ -5198,6 +5246,146 @@
           "properties": {
             "method": {
               "enum": [
+                "document/present"
+              ],
+              "title": "Document/presentNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PresentDocumentNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/presentNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/update"
+              ],
+              "title": "Document/section/updateNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/UpdateDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/updateNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/append"
+              ],
+              "title": "Document/section/appendNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AppendDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/appendNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/add"
+              ],
+              "title": "Document/section/addNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AddDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/addNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "document/section/patch"
+              ],
+              "title": "Document/section/patchNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PatchDocumentSectionNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Document/section/patchNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "scheduling/tasks/snapshot"
+              ],
+              "title": "Scheduling/tasks/snapshotNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SchedulingTasksSnapshotNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/tasks/snapshotNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "scheduling/monitor/outputDelta"
+              ],
+              "title": "Scheduling/monitor/outputDeltaNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SchedulingMonitorOutputDeltaNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Scheduling/monitor/outputDeltaNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "account/login/completed"
               ],
               "title": "Account/login/completedNotificationMethod",
@@ -5666,6 +5854,23 @@
             ],
             "title": "AmazonBedrockAccount",
             "type": "object"
+          },
+          {
+            "description": "Authenticated via the GitHub Copilot device-code OAuth flow.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "copilot"
+                ],
+                "title": "CopilotAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "CopilotAccount",
+            "type": "object"
           }
         ]
       },
@@ -5767,6 +5972,70 @@
           "cooldown_active"
         ],
         "type": "string"
+      },
+      "AddDocumentSectionEvent": {
+        "description": "Event emitted when the agent calls `add_document_section`.",
+        "properties": {
+          "after_section_index": {
+            "description": "Insert the new section AFTER this 0-based index. -1 for beginning.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "foldable": {
+            "default": false,
+            "description": "Whether the new section should be collapsible.",
+            "type": "boolean"
+          },
+          "heading": {
+            "type": "string"
+          },
+          "summary": {
+            "default": null,
+            "description": "Short summary shown when the fold is collapsed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "after_section_index",
+          "call_id",
+          "content",
+          "document_id",
+          "heading",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "AddDocumentSectionNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/AddDocumentSectionEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "AddDocumentSectionNotification",
+        "type": "object"
       },
       "AdditionalFileSystemPermissions": {
         "properties": {
@@ -6244,6 +6513,66 @@
         "type": "object"
       },
       "AppToolsConfig": {
+        "type": "object"
+      },
+      "AppendDocumentSectionEvent": {
+        "description": "Event emitted when the agent calls `append_to_section`.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "foldable": {
+            "default": false,
+            "description": "Whether the appended content should be collapsible.",
+            "type": "boolean"
+          },
+          "section_index": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "summary": {
+            "default": null,
+            "description": "Short summary shown when the fold is collapsed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "content",
+          "document_id",
+          "section_index",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "AppendDocumentSectionNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/AppendDocumentSectionEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "AppendDocumentSectionNotification",
         "type": "object"
       },
       "ApprovalsReviewer": {
@@ -8074,6 +8403,46 @@
           },
           {
             "properties": {
+              "file_data": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "file_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "filename": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mime_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "input_file"
+                ],
+                "title": "InputFileContentItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "InputFileContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
               "text": {
                 "type": "string"
               },
@@ -8090,6 +8459,38 @@
               "type"
             ],
             "title": "OutputTextContentItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "filename": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "mime_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "url_file"
+                ],
+                "title": "UrlFileContentItemType",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url"
+            ],
+            "title": "UrlFileContentItem",
             "type": "object"
           }
         ]
@@ -10494,6 +10895,23 @@
             "type": "object"
           },
           {
+            "description": "Start the GitHub Copilot device-code OAuth flow. The response carries the user_code + verification URI the client should display; the completion notification arrives once the user authorizes.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "copilotDeviceCode"
+                ],
+                "title": "CopilotDeviceCodev2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "CopilotDeviceCodev2::LoginAccountParams",
+            "type": "object"
+          },
+          {
             "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
             "properties": {
               "accessToken": {
@@ -10525,6 +10943,111 @@
               "type"
             ],
             "title": "ChatgptAuthTokensv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
+            "description": "Persist an API key for a specific provider. Generalizes the legacy OpenAI-only `apiKey` variant by carrying the provider id so the processor can route to the right credential store (OpenAI, Anthropic, Gemini, etc.).",
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "providerId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "providerApiKey"
+                ],
+                "title": "ProviderApiKeyv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "apiKey",
+              "providerId",
+              "type"
+            ],
+            "title": "ProviderApiKeyv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
+            "description": "Start the Gemini Code Assist OAuth (Supabase-mediated) flow. The response carries a browser URL the client should open; the completion notification fires once the OAuth callback exchanges tokens.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "geminiOauth"
+                ],
+                "title": "GeminiOauthv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "GeminiOauthv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
+            "description": "Send the Supabase OTP for an ATA account email.",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "ataSendOtp"
+                ],
+                "title": "AtaSendOtpv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "type"
+            ],
+            "title": "AtaSendOtpv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
+            "description": "Verify a Supabase OTP and persist the ATA session.",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "otp": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "ataVerifyOtp"
+                ],
+                "title": "AtaVerifyOtpv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "otp",
+              "type"
+            ],
+            "title": "AtaVerifyOtpv2::LoginAccountParams",
+            "type": "object"
+          },
+          {
+            "description": "Sign out of the active ATA account session.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "ataLogout"
+                ],
+                "title": "AtaLogoutv2::LoginAccountParamsType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AtaLogoutv2::LoginAccountParams",
             "type": "object"
           }
         ],
@@ -10605,6 +11128,37 @@
             "type": "object"
           },
           {
+            "description": "Initial response for the GitHub Copilot device-code OAuth flow. The `AccountLoginCompletedNotification` (with the same `login_id`) fires once the user authorizes and the Copilot bearer token is exchanged.",
+            "properties": {
+              "loginId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "copilotDeviceCode"
+                ],
+                "title": "CopilotDeviceCodev2::LoginAccountResponseType",
+                "type": "string"
+              },
+              "userCode": {
+                "description": "One-time code the user must enter on the verification page.",
+                "type": "string"
+              },
+              "verificationUri": {
+                "description": "URL the client should open in a browser to authorize the device.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "loginId",
+              "type",
+              "userCode",
+              "verificationUri"
+            ],
+            "title": "CopilotDeviceCodev2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
             "properties": {
               "type": {
                 "enum": [
@@ -10618,6 +11172,104 @@
               "type"
             ],
             "title": "ChatgptAuthTokensv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "description": "Response for `LoginAccountParams::ProviderApiKey`. The key is persisted synchronously, so no follow-up `AccountLoginCompletedNotification` is emitted — the empty body means \"stored successfully\".",
+            "properties": {
+              "type": {
+                "enum": [
+                  "providerApiKey"
+                ],
+                "title": "ProviderApiKeyv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "ProviderApiKeyv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "description": "Initial response for the Gemini OAuth flow. The follow-up `AccountLoginCompletedNotification` arrives once the OAuth callback completes.",
+            "properties": {
+              "authUrl": {
+                "description": "URL the client should open in a browser to authorize Gemini Code Assist access.",
+                "type": "string"
+              },
+              "loginId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "geminiOauthContinueInBrowser"
+                ],
+                "title": "GeminiOauthContinueInBrowserv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "authUrl",
+              "loginId",
+              "type"
+            ],
+            "title": "GeminiOauthContinueInBrowserv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "description": "Response for `LoginAccountParams::AtaSendOtp`. Empty body — success means the OTP email was dispatched.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "ataSendOtp"
+                ],
+                "title": "AtaSendOtpv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AtaSendOtpv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "description": "Response for `LoginAccountParams::AtaVerifyOtp`. Carries the authenticated email so the TUI can surface it on the success screen.",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "ataVerifyOtp"
+                ],
+                "title": "AtaVerifyOtpv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "type"
+            ],
+            "title": "AtaVerifyOtpv2::LoginAccountResponse",
+            "type": "object"
+          },
+          {
+            "description": "Response for `LoginAccountParams::AtaLogout`. Empty body.",
+            "properties": {
+              "type": {
+                "enum": [
+                  "ataLogout"
+                ],
+                "title": "AtaLogoutv2::LoginAccountResponseType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "AtaLogoutv2::LoginAccountResponse",
             "type": "object"
           }
         ],
@@ -11859,6 +12511,70 @@
           }
         ]
       },
+      "PatchDocumentSectionEvent": {
+        "description": "Event emitted when the agent calls `patch_document_section`.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "foldable": {
+            "default": false,
+            "description": "Whether the patched content should be collapsible.",
+            "type": "boolean"
+          },
+          "new_text": {
+            "type": "string"
+          },
+          "old_text": {
+            "type": "string"
+          },
+          "section_index": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "summary": {
+            "default": null,
+            "description": "Short summary shown when the fold is collapsed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "document_id",
+          "new_text",
+          "old_text",
+          "section_index",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "PatchDocumentSectionNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/PatchDocumentSectionEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "PatchDocumentSectionNotification",
+        "type": "object"
+      },
       "PermissionProfileListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13047,6 +13763,55 @@
         ],
         "type": "object"
       },
+      "PresentDocumentEvent": {
+        "description": "Event emitted when the agent calls `present_reading_view`.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "is_reopen": {
+            "default": false,
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "content",
+          "document_id",
+          "title",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "PresentDocumentNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/PresentDocumentEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "PresentDocumentNotification",
+        "type": "object"
+      },
       "ProcessExitedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "Final process exit notification for `process/spawn`.",
@@ -13356,15 +14121,27 @@
       },
       "ReasoningEffort": {
         "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-        "enum": [
-          "none",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "adaptive"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+            "enum": [
+              "max"
+            ],
+            "type": "string"
+          }
+        ]
       },
       "ReasoningEffortOption": {
         "properties": {
@@ -14631,6 +15408,244 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "SchedulingCronRow": {
+        "properties": {
+          "cron_expr": {
+            "type": "string"
+          },
+          "fire_count": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "last_fired_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Optional agent-supplied human-readable label. Empty/whitespace strings collapse to `None`; the TUI then falls back to the short id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "next_fire_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "recent_events": {
+            "description": "Pre-formatted history records (newest last) for the `/scheduling` detail view. For in-session crons this is the per-fire ring buffer; for OS-cron rows the host leaves this empty (the TUI reads the log file directly when the user opens the detail view).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cron_expr",
+          "fire_count",
+          "prompt",
+          "status",
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "SchedulingMonitorOutputDeltaEvent": {
+        "properties": {
+          "line": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "line",
+          "stream",
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "SchedulingMonitorOutputDeltaNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "Streamed line of output from a running monitor. The TUI renders this for the user only; the LLM never sees it. See `codex_protocol::protocol::SchedulingMonitorOutputDeltaEvent`.",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/SchedulingMonitorOutputDeltaEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "SchedulingMonitorOutputDeltaNotification",
+        "type": "object"
+      },
+      "SchedulingMonitorRow": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "lines_emitted": {
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "Optional agent-supplied human-readable label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "stopped_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tail": {
+            "description": "Tail of recent output lines (already prefixed with `[stdout]` or `[stderr]`). Used by the detail view.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "task_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "lines_emitted",
+          "status",
+          "task_id"
+        ],
+        "type": "object"
+      },
+      "SchedulingTaskDeleteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "description": "ATA: delete one scheduling task (cron job, monitor, or loop) from a thread's registry. Used by the `/scheduling` TUI panel's `d` shortcut. Server aborts the task first if it's still running. Response is empty; the panel observes the removal via the next `SchedulingTasksSnapshot` notification, which the server emits immediately after the delete.",
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/SchedulingTaskKind"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "taskId",
+          "threadId"
+        ],
+        "title": "SchedulingTaskDeleteParams",
+        "type": "object"
+      },
+      "SchedulingTaskDeleteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SchedulingTaskDeleteResponse",
+        "type": "object"
+      },
+      "SchedulingTaskKind": {
+        "enum": [
+          "cron",
+          "monitor"
+        ],
+        "type": "string"
+      },
+      "SchedulingTasksListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "SchedulingTasksListParams",
+        "type": "object"
+      },
+      "SchedulingTasksListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SchedulingTasksListResponse",
+        "type": "object"
+      },
+      "SchedulingTasksSnapshotEvent": {
+        "properties": {
+          "cron_jobs": {
+            "items": {
+              "$ref": "#/definitions/v2/SchedulingCronRow"
+            },
+            "type": "array"
+          },
+          "monitors": {
+            "items": {
+              "$ref": "#/definitions/v2/SchedulingMonitorRow"
+            },
+            "type": "array"
+          },
+          "scheduling_enabled": {
+            "description": "True iff `Feature::Scheduling` is enabled for the session. Lets the TUI distinguish \"scheduling off\" from \"scheduling on but no tasks\".",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cron_jobs",
+          "monitors",
+          "scheduling_enabled"
+        ],
+        "type": "object"
+      },
+      "SchedulingTasksSnapshotNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/SchedulingTasksSnapshotEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "SchedulingTasksSnapshotNotification",
         "type": "object"
       },
       "SendAddCreditsNudgeEmailParams": {
@@ -18024,6 +19039,13 @@
       },
       "Turn": {
         "properties": {
+          "background": {
+            "description": "ATA scheduling (Slice 5): this turn was started by a background cron/loop firing. The TUI hides the user-prompt and agent-reply items for these turns so periodic scheduled work doesn't flood the chat. Tool call items still render so explicit `echo` alerts come through. `None` for non-scheduling turns.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "completedAt": {
             "description": "Unix timestamp (in seconds) when the turn completed.",
             "format": "int64",
@@ -18456,6 +19478,66 @@
           "turnId"
         ],
         "title": "TurnSteerResponse",
+        "type": "object"
+      },
+      "UpdateDocumentSectionEvent": {
+        "description": "Event emitted when the agent calls `update_document_section`.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "foldable": {
+            "default": false,
+            "description": "Whether the updated section should be collapsible.",
+            "type": "boolean"
+          },
+          "section_index": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "summary": {
+            "default": null,
+            "description": "Short summary shown when the fold is collapsed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "call_id",
+          "content",
+          "document_id",
+          "section_index",
+          "turn_id"
+        ],
+        "type": "object"
+      },
+      "UpdateDocumentSectionNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/v2/UpdateDocumentSectionEvent"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event",
+          "threadId"
+        ],
+        "title": "UpdateDocumentSectionNotification",
         "type": "object"
       },
       "UserInput": {

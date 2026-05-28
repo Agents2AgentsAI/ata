@@ -84,6 +84,68 @@
       ],
       "type": "object"
     },
+    "AddDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `add_document_section`.",
+      "properties": {
+        "after_section_index": {
+          "description": "Insert the new section AFTER this 0-based index. -1 for beginning.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the new section should be collapsible.",
+          "type": "boolean"
+        },
+        "heading": {
+          "type": "string"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "after_section_index",
+        "call_id",
+        "content",
+        "document_id",
+        "heading",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AddDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AddDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {
@@ -432,6 +494,64 @@
       },
       "required": [
         "userPrompt"
+      ],
+      "type": "object"
+    },
+    "AppendDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `append_to_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the appended content should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "AppendDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/AppendDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
       ],
       "type": "object"
     },
@@ -2513,6 +2633,68 @@
         }
       ]
     },
+    "PatchDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `patch_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the patched content should be collapsible.",
+          "type": "boolean"
+        },
+        "new_text": {
+          "type": "string"
+        },
+        "old_text": {
+          "type": "string"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "document_id",
+        "new_text",
+        "old_text",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PatchDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PatchDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "Personality": {
       "enum": [
         "none",
@@ -2561,6 +2743,53 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "PresentDocumentEvent": {
+      "description": "Event emitted when the agent calls `present_reading_view`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "is_reopen": {
+          "default": false,
+          "type": "boolean"
+        },
+        "title": {
+          "type": "string"
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "title",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "PresentDocumentNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/PresentDocumentEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
     },
     "ProcessExitedNotification": {
       "description": "Final process exit notification for `process/spawn`.",
@@ -2764,15 +2993,27 @@
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "adaptive"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Anthropic Opus 4.7-only: maximum thinking budget. Falls back to XHigh on providers that don't expose a dedicated Max tier.",
+          "enum": [
+            "max"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ReasoningSummary": {
       "description": "A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
@@ -3044,6 +3285,188 @@
           "type": "object"
         }
       ]
+    },
+    "SchedulingCronRow": {
+      "properties": {
+        "cron_expr": {
+          "type": "string"
+        },
+        "fire_count": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "last_fired_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Optional agent-supplied human-readable label. Empty/whitespace strings collapse to `None`; the TUI then falls back to the short id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_fire_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "recent_events": {
+          "description": "Pre-formatted history records (newest last) for the `/scheduling` detail view. For in-session crons this is the per-fire ring buffer; for OS-cron rows the host leaves this empty (the TUI reads the log file directly when the user opens the detail view).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cron_expr",
+        "fire_count",
+        "prompt",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorOutputDeltaEvent": {
+      "properties": {
+        "line": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "line",
+        "stream",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorOutputDeltaNotification": {
+      "description": "Streamed line of output from a running monitor. The TUI renders this for the user only; the LLM never sees it. See `codex_protocol::protocol::SchedulingMonitorOutputDeltaEvent`.",
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/SchedulingMonitorOutputDeltaEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "SchedulingMonitorRow": {
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "lines_emitted": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Optional agent-supplied human-readable label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "stopped_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tail": {
+          "description": "Tail of recent output lines (already prefixed with `[stdout]` or `[stderr]`). Used by the detail view.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "command",
+        "lines_emitted",
+        "status",
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "SchedulingTasksSnapshotEvent": {
+      "properties": {
+        "cron_jobs": {
+          "items": {
+            "$ref": "#/definitions/SchedulingCronRow"
+          },
+          "type": "array"
+        },
+        "monitors": {
+          "items": {
+            "$ref": "#/definitions/SchedulingMonitorRow"
+          },
+          "type": "array"
+        },
+        "scheduling_enabled": {
+          "description": "True iff `Feature::Scheduling` is enabled for the session. Lets the TUI distinguish \"scheduling off\" from \"scheduling on but no tasks\".",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cron_jobs",
+        "monitors",
+        "scheduling_enabled"
+      ],
+      "type": "object"
+    },
+    "SchedulingTasksSnapshotNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/SchedulingTasksSnapshotEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
     },
     "ServerRequestResolvedNotification": {
       "properties": {
@@ -4711,6 +5134,13 @@
     },
     "Turn": {
       "properties": {
+        "background": {
+          "description": "ATA scheduling (Slice 5): this turn was started by a background cron/loop firing. The TUI hides the user-prompt and agent-reply items for these turns so periodic scheduled work doesn't flood the chat. Tool call items still render so explicit `echo` alerts come through. `None` for non-scheduling turns.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "completedAt": {
           "description": "Unix timestamp (in seconds) when the turn completed.",
           "format": "int64",
@@ -4938,6 +5368,64 @@
         "inProgress"
       ],
       "type": "string"
+    },
+    "UpdateDocumentSectionEvent": {
+      "description": "Event emitted when the agent calls `update_document_section`.",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "foldable": {
+          "default": false,
+          "description": "Whether the updated section should be collapsible.",
+          "type": "boolean"
+        },
+        "section_index": {
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "summary": {
+          "default": null,
+          "description": "Short summary shown when the fold is collapsed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "turn_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "call_id",
+        "content",
+        "document_id",
+        "section_index",
+        "turn_id"
+      ],
+      "type": "object"
+    },
+    "UpdateDocumentSectionNotification": {
+      "properties": {
+        "event": {
+          "$ref": "#/definitions/UpdateDocumentSectionEvent"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "threadId"
+      ],
+      "type": "object"
     },
     "UserInput": {
       "oneOf": [
@@ -6522,6 +7010,146 @@
         "params"
       ],
       "title": "WindowsSandbox/setupCompletedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/present"
+          ],
+          "title": "Document/presentNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PresentDocumentNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/presentNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/update"
+          ],
+          "title": "Document/section/updateNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/UpdateDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/updateNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/append"
+          ],
+          "title": "Document/section/appendNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AppendDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/appendNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/add"
+          ],
+          "title": "Document/section/addNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AddDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/addNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "document/section/patch"
+          ],
+          "title": "Document/section/patchNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PatchDocumentSectionNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Document/section/patchNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "scheduling/tasks/snapshot"
+          ],
+          "title": "Scheduling/tasks/snapshotNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingTasksSnapshotNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/tasks/snapshotNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "scheduling/monitor/outputDelta"
+          ],
+          "title": "Scheduling/monitor/outputDeltaNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SchedulingMonitorOutputDeltaNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Scheduling/monitor/outputDeltaNotification",
       "type": "object"
     },
     {
