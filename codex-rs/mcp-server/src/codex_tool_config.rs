@@ -117,7 +117,7 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
     let input_schema = create_tool_input_schema(schema, "Ata tool schema should serialize");
 
     Tool {
-        name: "codex".into(),
+        name: "ata".into(),
         title: Some("Ata".to_string()),
         input_schema,
         output_schema: Some(codex_tool_output_schema()),
@@ -243,7 +243,7 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     let input_schema = create_tool_input_schema(schema, "Ata reply tool schema should serialize");
 
     Tool {
-        name: "codex-reply".into(),
+        name: "ata-reply".into(),
         title: Some("Ata Reply".to_string()),
         input_schema,
         output_schema: Some(codex_tool_output_schema()),
@@ -367,7 +367,7 @@ mod tests {
             ],
             "type": "object"
           },
-          "name": "codex",
+          "name": "ata",
           "outputSchema": {
             "properties": {
               "content": {
@@ -428,7 +428,7 @@ mod tests {
             ],
             "type": "object",
           },
-          "name": "codex-reply",
+          "name": "ata-reply",
           "outputSchema": {
             "properties": {
               "content": {
