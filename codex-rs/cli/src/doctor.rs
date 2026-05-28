@@ -3274,6 +3274,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            version: None,
+            providers: std::collections::HashMap::new(),
         };
 
         assert_eq!(
@@ -3291,6 +3293,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            version: None,
+            providers: std::collections::HashMap::new(),
         };
 
         assert_eq!(
@@ -3310,6 +3314,8 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            version: None,
+            providers: std::collections::HashMap::new(),
         };
 
         assert_eq!(

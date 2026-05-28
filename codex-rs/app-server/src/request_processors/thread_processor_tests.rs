@@ -235,6 +235,7 @@ mod thread_processor_behavior_tests {
             started_at: None,
             completed_at: None,
             duration_ms: None,
+            background: None,
         };
 
         let turns = reconstruct_thread_turns_for_turns_list(

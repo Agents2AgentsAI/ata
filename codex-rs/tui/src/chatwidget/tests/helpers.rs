@@ -968,6 +968,7 @@ pub(super) fn app_server_turn(
         started_at: None,
         completed_at: None,
         duration_ms,
+        background: None,
     }
 }
 

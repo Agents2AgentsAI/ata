@@ -109,6 +109,8 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            version: None,
+            providers: std::collections::HashMap::new(),
         };
         save_auth(codex_home, &auth, AuthCredentialsStoreMode::File)
             .expect("chatgpt auth should save");
@@ -156,6 +158,8 @@ mod tests {
                 tokens: None,
                 last_refresh: None,
                 agent_identity: None,
+                version: None,
+                providers: std::collections::HashMap::new(),
             },
             AuthCredentialsStoreMode::File,
         )

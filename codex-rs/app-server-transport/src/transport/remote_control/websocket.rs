@@ -1422,6 +1422,8 @@ mod tests {
             }),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            version: None,
+            providers: std::collections::HashMap::new(),
         }
     }
 
