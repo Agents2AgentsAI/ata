@@ -184,6 +184,8 @@ impl MemoryStartupContext {
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
             /*attestation_provider*/ None,
+            config.codex_home.to_path_buf(),
+            config.cli_auth_credentials_store_mode,
         );
 
         let mut client_session = model_client.new_session();

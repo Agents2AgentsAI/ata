@@ -106,6 +106,10 @@ pub enum CodexErr {
     /// Invalid request.
     #[error("{0}")]
     InvalidRequest(String),
+    /// Generic provider/API failure (used by non-Responses providers
+    /// such as Anthropic, Gemini, and Copilot Chat Completions).
+    #[error("{0}")]
+    Api(String),
     /// Invalid image.
     #[error("Image poisoning")]
     InvalidImageRequest(),
@@ -180,6 +184,7 @@ impl CodexErr {
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()
             | CodexErr::InvalidRequest(_)
+            | CodexErr::Api(_)
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)

@@ -75,6 +75,8 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        /*codex_home*/ std::path::PathBuf::from("/tmp/codex-test"),
+        /*cli_auth_credentials_store_mode*/ Default::default(),
     )
 }
 
@@ -527,6 +529,8 @@ fn model_client_with_counting_attestation(
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),
+        /*codex_home*/ std::path::PathBuf::from("/tmp/codex-test"),
+        /*cli_auth_credentials_store_mode*/ Default::default(),
     );
     (model_client, attestation_calls)
 }

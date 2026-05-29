@@ -202,7 +202,9 @@ pub(super) async fn stream_copilot_responses_api(
         summary,
         service_tier,
     )?;
-    let options = session.build_responses_options(turn_metadata_header, Compression::None);
+    let options = session
+        .build_responses_options(turn_metadata_header, Compression::None)
+        .await;
 
     let transport = ReqwestTransport::new(build_reqwest_client());
     let client = ApiResponsesClient::new(transport, api_provider, api_auth);

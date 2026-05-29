@@ -1104,6 +1104,8 @@ impl Session {
                     config.features.enabled(Feature::RuntimeMetrics),
                     Self::build_model_client_beta_features_header(config.as_ref()),
                     attestation_provider,
+                    config.codex_home.to_path_buf(),
+                    config.cli_auth_credentials_store_mode,
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,

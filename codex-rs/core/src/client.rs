@@ -165,12 +165,12 @@ pub(crate) struct CompactConversationRequestSettings {
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
 /// configuration is per turn and is passed explicitly to streaming/unary methods.
 #[derive(Debug)]
-struct ModelClientState {
+pub(super) struct ModelClientState {
     session_id: SessionId,
     thread_id: ThreadId,
     window_generation: AtomicU64,
     installation_id: String,
-    provider: SharedModelProvider,
+    pub(super) provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     model_verbosity: Option<VerbosityConfig>,
@@ -181,6 +181,12 @@ struct ModelClientState {
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    /// `codex_home` directory for resolving cached auth credentials from the
+    /// `client/*` sub-modules.
+    pub(super) codex_home: std::path::PathBuf,
+    /// Where to load cached credentials from when adapters resolve auth.
+    pub(super) cli_auth_credentials_store_mode:
+        codex_config::types::AuthCredentialsStoreMode,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -325,6 +331,8 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        codex_home: std::path::PathBuf,
+        cli_auth_credentials_store_mode: codex_config::types::AuthCredentialsStoreMode,
     ) -> Self {
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
@@ -351,6 +359,8 @@ impl ModelClient {
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                codex_home,
+                cli_auth_credentials_store_mode,
             }),
         }
     }
@@ -369,6 +379,14 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
+    }
+
+    /// Visible to client/* sub-modules so they can read provider info,
+    /// codex_home, and credential-store mode without the public surface
+    /// growing.
+    #[allow(dead_code)]
+    pub(super) fn state(&self) -> &Arc<ModelClientState> {
+        &self.state
     }
 
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
@@ -938,6 +956,13 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    /// Sub-modules in `client/*` use this to read provider info, codex_home,
+    /// and credential-store mode without exposing `ModelClient`'s state field.
+    #[allow(dead_code)]
+    pub(super) fn client(&self) -> &ModelClient {
+        &self.client
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -2249,6 +2274,11 @@ impl WebsocketTelemetry for ApiTelemetry {
             .record_websocket_event(result, duration);
     }
 }
+
+#[allow(dead_code)]
+pub(crate) mod copilot;
+#[allow(dead_code)]
+pub(crate) mod provider_streaming;
 
 #[cfg(test)]
 #[path = "client_tests.rs"]
