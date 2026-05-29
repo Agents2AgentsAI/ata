@@ -200,7 +200,12 @@ pub(crate) struct ThreadManagerState {
     threads: Arc<RwLock<HashMap<ThreadId, Arc<CodexThread>>>>,
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
-    models_manager: SharedModelsManager,
+    // Wrapped in a `std::sync::RwLock` so post-startup logins (Copilot
+    // device flow, non-OpenAI API key) can swap in a fresh
+    // models_manager built against the just-edited config.toml without
+    // waiting for the next launch. Reads clone the inner Arc and drop
+    // the lock immediately; contention is negligible.
+    models_manager: std::sync::RwLock<SharedModelsManager>,
     environment_manager: Arc<EnvironmentManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
@@ -271,7 +276,10 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: build_models_manager(config, auth_manager.clone()),
+                models_manager: std::sync::RwLock::new(build_models_manager(
+                    config,
+                    auth_manager.clone(),
+                )),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -371,8 +379,10 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                models_manager: std::sync::RwLock::new(
+                    create_model_provider(provider, Some(auth_manager.clone()))
+                        .models_manager(codex_home, /*config_model_catalog*/ None),
+                ),
                 environment_manager,
                 skills_manager,
                 plugins_manager,
@@ -432,18 +442,31 @@ impl ThreadManager {
     }
 
     pub fn get_models_manager(&self) -> SharedModelsManager {
-        self.state.models_manager.clone()
+        self.state.read_models_manager()
+    }
+
+    /// Replace the in-memory models_manager. Lets post-startup logins
+    /// (Copilot device flow, non-OpenAI API key) refresh the `/model`
+    /// picker this session instead of waiting for the next launch.
+    /// Silently no-ops if the lock is poisoned — the picker will
+    /// catch up on relaunch.
+    pub fn set_models_manager(&self, new_manager: SharedModelsManager) {
+        if let Ok(mut guard) = self.state.models_manager.write() {
+            *guard = new_manager;
+        }
     }
 
     pub async fn list_models(&self, refresh_strategy: RefreshStrategy) -> Vec<ModelPreset> {
         self.state
-            .models_manager
+            .read_models_manager()
             .list_models(refresh_strategy)
             .await
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state.models_manager.list_collaboration_modes()
+        self.state
+            .read_models_manager()
+            .list_collaboration_modes()
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {
@@ -917,6 +940,16 @@ impl ThreadManagerState {
         self.state_db.clone()
     }
 
+    /// Clone the inner `SharedModelsManager` out of the RwLock. Recovers
+    /// from poison by reading the inner value — a runtime swap of the
+    /// models_manager should never panic the next reader.
+    pub(crate) fn read_models_manager(&self) -> SharedModelsManager {
+        self.models_manager
+            .read()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poison| poison.into_inner().clone())
+    }
+
     pub(crate) async fn list_thread_ids(&self) -> Vec<ThreadId> {
         self.threads
             .read()
@@ -1221,7 +1254,7 @@ impl ThreadManagerState {
             config,
             installation_id: self.installation_id.clone(),
             auth_manager,
-            models_manager: Arc::clone(&self.models_manager),
+            models_manager: self.read_models_manager(),
             environment_manager: Arc::clone(&self.environment_manager),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),

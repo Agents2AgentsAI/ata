@@ -1017,6 +1017,13 @@ impl AccountRequestProcessor {
         let store_mode = self.config.cli_auth_credentials_store_mode;
         let active_login = self.active_login.clone();
         let device_for_task = device.clone();
+        // Captured so the spawned completion task can rebuild the
+        // models_manager once `model_provider = "copilot"` lands in
+        // config.toml. Without this, the picker keeps showing the
+        // OpenAI catalog this session — only the next launch picks up
+        // Copilot.
+        let thread_manager_for_task = Arc::clone(&self.thread_manager);
+        let config_manager_for_task = self.config_manager.clone();
 
         tokio::spawn(async move {
             let (mut success, mut error_msg) = tokio::select! {
@@ -1065,7 +1072,37 @@ impl AccountRequestProcessor {
                         "Signed in to GitHub Copilot but could not update config: {err}. Please retry."
                     ));
                 }
+
+                // Reload regardless: on success the manager picks up new
+                // creds; on rollback it picks up the now-empty auth.json.
                 auth_manager.reload().await;
+
+                // === ATA: rebuild the in-memory models catalog so the
+                // `/model` picker shows Copilot models *this* session,
+                // instead of waiting for the next ata launch. Re-reads
+                // config.toml (now `model_provider = "copilot"`) and
+                // installs a fresh `models_manager` on the live
+                // `ThreadManager`. Best-effort: failures here are
+                // non-fatal (the picker will catch up on relaunch).
+                if success {
+                    match config_manager_for_task
+                        .load_latest_config(/*fallback_cwd*/ None)
+                        .await
+                    {
+                        Ok(fresh_config) => {
+                            let new_manager = codex_core::build_models_manager(
+                                &fresh_config,
+                                Arc::clone(&auth_manager),
+                            );
+                            thread_manager_for_task.set_models_manager(new_manager);
+                        }
+                        Err(err) => {
+                            warn!(
+                                "failed to reload config for models_manager refresh: {err}"
+                            );
+                        }
+                    }
+                }
             }
 
             outgoing_clone
@@ -1154,6 +1191,29 @@ impl AccountRequestProcessor {
                 Err(join_err) => {
                     warn!(
                         "config edit task panicked while setting model_provider={provider_id}: {join_err}"
+                    );
+                }
+            }
+
+            // Rebuild the live models_manager from the freshly-edited
+            // config so the `/model` picker shows the new provider's
+            // catalog this session — mirrors what the Copilot login path
+            // does after writing model_provider=copilot.
+            match self
+                .config_manager
+                .load_latest_config(/*fallback_cwd*/ None)
+                .await
+            {
+                Ok(fresh_config) => {
+                    let new_manager = codex_core::build_models_manager(
+                        &fresh_config,
+                        Arc::clone(&self.auth_manager),
+                    );
+                    self.thread_manager.set_models_manager(new_manager);
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to reload config for models_manager refresh after {provider_id} login: {err}"
                     );
                 }
             }
