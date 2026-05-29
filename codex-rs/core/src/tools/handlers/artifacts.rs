@@ -8,13 +8,13 @@ use serde_json::Value as JsonValue;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
-use crate::features::Feature;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
+use codex_features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::ExecCommandSource;
+use codex_protocol::protocol::ExecCommandSource;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -87,7 +87,7 @@ impl ToolExecutor<ToolInvocation> for ArtifactsHandler {
         };
 
         let client = ArtifactsClient::from_runtime_manager(default_runtime_manager(
-            turn.config.codex_home.clone(),
+            turn.config.codex_home.to_path_buf(),
         ));
 
         let started_at = Instant::now();
@@ -96,7 +96,7 @@ impl ToolExecutor<ToolInvocation> for ArtifactsHandler {
         let result = client
             .execute_build(ArtifactBuildRequest {
                 source: args.source,
-                cwd: turn.cwd.clone(),
+                cwd: turn.cwd.to_path_buf(),
                 timeout: Some(Duration::from_millis(
                     args.timeout_ms
                         .unwrap_or(DEFAULT_EXECUTION_TIMEOUT.as_millis() as u64),
@@ -238,7 +238,6 @@ async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
         vec![ARTIFACTS_TOOL_NAME.to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        true,
     );
     let ctx = ToolEventCtx::new(session, turn, call_id, None);
     emitter.emit(ctx, ToolEventStage::Begin).await;
@@ -264,11 +263,13 @@ async fn emit_exec_end(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        true,
     );
     let ctx = ToolEventCtx::new(session, turn, call_id, None);
     let stage = if success {
-        ToolEventStage::Success(exec_output)
+        ToolEventStage::Success {
+            output: exec_output,
+            applied_patch_delta: None,
+        }
     } else {
         ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
     };
