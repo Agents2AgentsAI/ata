@@ -156,7 +156,7 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// ID shared by the whole agent control session. This means every sub-agents from a common
     /// root share the same session ID.
@@ -166,6 +166,28 @@ pub(crate) struct AgentControl {
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
+    /// Shared install tracker for LSP server binaries. One per root-thread tree
+    /// so subagents reuse install attempts across the session.
+    #[cfg(feature = "lsp")]
+    lsp_install_tracker: Arc<codex_lsp_client::InstallTracker>,
+    /// Shared pool of LSP registries for this root thread and its subagents.
+    /// Lets sibling agents share a single live LSP process per project root.
+    #[cfg(feature = "lsp")]
+    lsp_registry_cache: SharedLspRegistryCache,
+}
+
+impl Default for AgentControl {
+    fn default() -> Self {
+        Self {
+            session_id: SessionId::default(),
+            manager: Weak::new(),
+            state: Arc::new(AgentRegistry::default()),
+            #[cfg(feature = "lsp")]
+            lsp_install_tracker: Arc::new(codex_lsp_client::InstallTracker::new()),
+            #[cfg(feature = "lsp")]
+            lsp_registry_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        }
+    }
 }
 
 impl AgentControl {
@@ -173,8 +195,22 @@ impl AgentControl {
     pub(crate) fn new(manager: Weak<ThreadManagerState>) -> Self {
         Self {
             manager,
+            #[cfg(feature = "lsp")]
+            lsp_install_tracker: Arc::new(codex_lsp_client::InstallTracker::new()),
+            #[cfg(feature = "lsp")]
+            lsp_registry_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             ..Default::default()
         }
+    }
+
+    #[cfg(feature = "lsp")]
+    pub(crate) fn lsp_install_tracker(&self) -> Arc<codex_lsp_client::InstallTracker> {
+        Arc::clone(&self.lsp_install_tracker)
+    }
+
+    #[cfg(feature = "lsp")]
+    pub(crate) fn lsp_registry_cache(&self) -> SharedLspRegistryCache {
+        Arc::clone(&self.lsp_registry_cache)
     }
 
     pub(crate) fn with_session_id(mut self, session_id: SessionId) -> Self {

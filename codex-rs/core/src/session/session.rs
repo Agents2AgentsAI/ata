@@ -718,7 +718,54 @@ impl Session {
             otel.name = "session_init.plugin_skill_warmup",
         ));
 
+        // ATA: Initialize the per-session MultiRootState for code-intel
+        // (treesitter + LSP). Cfg-gated so non-code-intel builds skip the
+        // whole branch. The future returns `Option<Arc<MultiRootState>>` —
+        // `None` when both `Feature::Lsp` and `Feature::TreeSitter` resolve
+        // to no-op, e.g. when no LSP servers are configured and treesitter
+        // is disabled.
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let multi_root_fut = {
+            let cwd = config.cwd.to_path_buf();
+            let config_for_multi_root = Arc::clone(&config);
+            #[cfg(feature = "lsp")]
+            let install_tracker = agent_control.lsp_install_tracker();
+            #[cfg(feature = "lsp")]
+            let registry_cache = agent_control.lsp_registry_cache();
+            async move {
+                super::code_intel::init_multi_root_state(
+                    cwd,
+                    config_for_multi_root.as_ref(),
+                    #[cfg(feature = "lsp")]
+                    install_tracker,
+                    #[cfg(feature = "lsp")]
+                    registry_cache,
+                )
+                .await
+            }
+            .instrument(info_span!(
+                "session_init.multi_root_state",
+                otel.name = "session_init.multi_root_state",
+            ))
+        };
+
         // Join all independent futures.
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        let (
+            thread_persistence_result,
+            state_db_ctx,
+            (auth, mcp_servers, auth_statuses),
+            plugin_skill_errors,
+            multi_root_state,
+        ) = tokio::join!(
+            thread_persistence_fut,
+            state_db_fut,
+            auth_and_mcp_fut,
+            plugin_and_skill_warmup_fut,
+            multi_root_fut
+        );
+
+        #[cfg(not(any(feature = "lsp", feature = "treesitter")))]
         let (
             thread_persistence_result,
             state_db_ctx,
@@ -1110,7 +1157,7 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
                 #[cfg(any(feature = "lsp", feature = "treesitter"))]
-                multi_root_state: None,
+                multi_root_state,
             };
             services
                 .model_client
