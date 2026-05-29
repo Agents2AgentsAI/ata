@@ -799,19 +799,92 @@ impl App {
                     "reading-view mode change received; persistence pending Wave 9C"
                 );
             }
+            // ── Voice-mode TTS controls (reading-view producers) ─────
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeInterruptTts => {
+                self.chat_widget.on_voice_interrupt_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePauseTts => {
+                self.chat_widget.on_voice_pause_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeResumeTts => {
+                self.chat_widget.on_voice_resume_tts();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePlaybackSpeedChange { delta } => {
+                self.chat_widget.on_voice_playback_speed_change(delta);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeNarrateSection {
+                document_id,
+                section_index,
+                text,
+                selection_word_offset,
+                manual,
+            } => {
+                self.chat_widget.on_voice_narrate_section(
+                    document_id,
+                    section_index,
+                    text,
+                    selection_word_offset,
+                    manual,
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePrefetchSection {
+                document_id,
+                section_index,
+                text,
+            } => {
+                self.chat_widget
+                    .on_voice_prefetch_section(document_id, section_index, text);
+            }
+            #[cfg(target_os = "linux")]
             AppEvent::VoiceModeInterruptTts
             | AppEvent::VoiceModePauseTts
             | AppEvent::VoiceModeResumeTts
             | AppEvent::VoiceModePlaybackSpeedChange { .. }
             | AppEvent::VoiceModeNarrateSection { .. }
             | AppEvent::VoiceModePrefetchSection { .. } => {
-                // Voice-mode TTS controls — producers wired in Wave 9B (doc
-                // reader). Consumer dispatch into `voice_mode` lands in the
-                // follow-up to Wave 9D (full reader → voice control wiring).
-                tracing::debug!(
-                    "voice-mode TTS control received; full dispatch pending follow-up"
-                );
+                // Voice mode is unavailable on linux — drop the event.
             }
+
+            // ── Voice-mode internal events (state machine ticks/results) ─
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeMeterTick { text } => {
+                self.chat_widget.on_voice_meter_tick(text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModePttTimeoutCheck => {
+                self.chat_widget.check_ptt_timeout();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeHighlightTick => {
+                self.chat_widget.on_voice_highlight_tick();
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionComplete { text } => {
+                self.chat_widget.on_voice_transcription_complete(text);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTranscriptionFailed { error } => {
+                self.chat_widget.on_voice_transcription_failed(error);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsAudioChunk { pcm, alignment } => {
+                self.chat_widget.on_voice_tts_audio_chunk(pcm, alignment);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsError { error } => {
+                self.chat_widget.on_voice_tts_error(&error);
+            }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::VoiceModeTtsFinished => {
+                self.chat_widget.on_voice_tts_finished();
+            }
+            #[cfg(target_os = "linux")]
             AppEvent::VoiceModeMeterTick { .. }
             | AppEvent::VoiceModePttTimeoutCheck
             | AppEvent::VoiceModeHighlightTick
@@ -820,12 +893,7 @@ impl App {
             | AppEvent::VoiceModeTtsAudioChunk { .. }
             | AppEvent::VoiceModeTtsError { .. }
             | AppEvent::VoiceModeTtsFinished => {
-                // Voice-mode internal ticks/results. The full dispatch into
-                // ChatWidget voice handlers (on_voice_meter_tick,
-                // on_voice_transcription_complete, on_voice_tts_*) lands
-                // in the follow-up to Wave 9D — for now the module compiles
-                // and emits these events; consumers are stubs.
-                tracing::debug!("voice-mode internal event received; consumer pending follow-up");
+                // Voice mode is unavailable on linux — drop the event.
             }
             AppEvent::UpdateVoiceSettings {
                 startup_enabled,
