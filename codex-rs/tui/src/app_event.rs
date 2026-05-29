@@ -136,6 +136,51 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+/// Per-thread reading-view routing mode. `Tui` renders the document inside the
+/// bottom-pane reader; `Browser` hands it off to the in-process browser viewer;
+/// `Disabled` suppresses both and falls back to the inline transcript cell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ReadingViewMode {
+    #[default]
+    Disabled,
+    Tui,
+    Browser,
+}
+
+impl ReadingViewMode {
+    /// Canonical config value written to `[reading_view].mode` in
+    /// `~/.ata/config.toml`.
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    /// Display label used in the research tools picker.
+    /// Diverges from `config_value` so the picker can show "off" — friendlier
+    /// than "disabled" in a single-row UI — while configs stay canonical.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "off",
+        }
+    }
+
+    /// Parse a raw config string (case-insensitive). Treats unknown values as
+    /// `Tui` (the legacy default), and accepts the "off" alias for backward
+    /// compatibility with earlier ATA builds.
+    pub(crate) fn from_config_value(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("browser") => Self::Browser,
+            Some("disabled" | "off") => Self::Disabled,
+            _ => Self::Tui,
+        }
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -1005,6 +1050,40 @@ pub(crate) enum AppEvent {
     KeymapCleared {
         context: String,
         action: String,
+    },
+
+    /// Submit a free-form user text to the active thread as if the user
+    /// typed it into the composer. Used by overlay views (e.g. document
+    /// reader Tab-to-ask) that synthesise prompts on the user's behalf.
+    SubmitUserText {
+        text: String,
+    },
+
+    /// Reading-view mode toggle emitted by the ResearchToolsView.
+    /// Tracked separately from feature flags so the BrowserViewer wrapper
+    /// can decide whether to route to the in-TUI reader or the browser.
+    ReadingViewModeChanged(ReadingViewMode),
+
+    /// Voice-mode TTS controls emitted by the document reader. The Wave 9D
+    /// `voice_mode` module owns the consumer side; defining the variants
+    /// here unblocks the producer (Wave 9B reader views).
+    VoiceModeInterruptTts,
+    VoiceModePauseTts,
+    VoiceModeResumeTts,
+    VoiceModePlaybackSpeedChange {
+        delta: f64,
+    },
+    VoiceModeNarrateSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
+        selection_word_offset: Option<usize>,
+        manual: bool,
+    },
+    VoiceModePrefetchSection {
+        document_id: String,
+        section_index: usize,
+        text: String,
     },
 
     /// Apply voice-mode settings produced by `VoiceSetupView` to the runtime

@@ -194,6 +194,19 @@ impl ChatWidget {
         }
     }
 
+    /// Submit a synthesised user message (e.g. from the document reader's
+    /// Tab-to-ask flow) using whatever collaboration mask is currently
+    /// active. When no mask is active, this is a no-op rather than an
+    /// implicit downgrade to "default" — the caller's invariant is that
+    /// they're inside an active session.
+    pub(crate) fn submit_user_text(&mut self, text: String) {
+        let Some(mask) = self.active_collaboration_mask.clone() else {
+            tracing::warn!("submit_user_text called with no active collaboration mask");
+            return;
+        };
+        self.submit_user_message_with_mode(text, mask);
+    }
+
     #[cfg(test)]
     pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
         self.input_queue

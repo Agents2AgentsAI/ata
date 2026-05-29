@@ -775,6 +775,34 @@ impl App {
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
             }
+            AppEvent::SubmitUserText { text } => {
+                // Producer: document reader Tab-to-ask + feedback paths.
+                // The chatwidget picks the currently-active collaboration
+                // mask so synthesised prompts honour the user's mode
+                // selection just like typed prompts.
+                self.chat_widget.submit_user_text(text);
+            }
+            AppEvent::ReadingViewModeChanged(mode) => {
+                // Full plumbing (persist to ~/.ata/config.toml + propagate to
+                // DocumentCache.set_display_mode + browser/tui routing) lands
+                // in Wave 9C once chatwidget_document_reader is back in the
+                // build. Stub now just logs the change.
+                let _ = mode;
+                tracing::info!(
+                    "reading-view mode change received; persistence pending Wave 9C"
+                );
+            }
+            AppEvent::VoiceModeInterruptTts
+            | AppEvent::VoiceModePauseTts
+            | AppEvent::VoiceModeResumeTts
+            | AppEvent::VoiceModePlaybackSpeedChange { .. }
+            | AppEvent::VoiceModeNarrateSection { .. }
+            | AppEvent::VoiceModePrefetchSection { .. } => {
+                // Voice-mode TTS controls — producers wired in Wave 9B (doc
+                // reader). Consumer (voice_mode.rs apply/playback path)
+                // lights up in Wave 9D.
+                tracing::debug!("voice-mode TTS control received; consumer pending Wave 9D");
+            }
             AppEvent::UpdateVoiceSettings {
                 startup_enabled,
                 tts_enabled,

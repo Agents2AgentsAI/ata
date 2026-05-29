@@ -262,4 +262,19 @@ pub(crate) trait BottomPaneView: Renderable {
         _heading_words_to_skip: usize,
     ) {
     }
+
+    /// Query whether the active reading view is currently paused mid-TTS.
+    /// Non-reading views default to "not paused" — they are not voice-aware.
+    #[cfg(not(target_os = "linux"))]
+    fn voice_tts_paused(&self) -> bool {
+        false
+    }
+
+    /// Current voice status label (e.g. "Reading…") for the active reading
+    /// view. Only the document reader sets this; everything else returns
+    /// `None`.
+    #[cfg(all(test, not(target_os = "linux")))]
+    fn voice_status(&self) -> Option<String> {
+        None
+    }
 }

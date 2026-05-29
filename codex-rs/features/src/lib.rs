@@ -254,6 +254,18 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// ATA-private: surface the document-reader / reading-view UI overlay.
     ReadingView,
+    /// ATA-private: master research toggle, gates the `/research` popup.
+    Research,
+    /// ATA-private: research paper search tools (Semantic Scholar, arXiv, OpenAlex).
+    ResearchPaperSearch,
+    /// ATA-private: Zotero library search, notes, annotations, citations.
+    ResearchZotero,
+    /// ATA-private: Hacker News search and browsing tools.
+    ResearchHackerNews,
+    /// ATA-private: worldwide patent search via the EPO Open Patent Services API.
+    ResearchPatents,
+    /// ATA-private: clone/summarize/analyze code repositories from search results.
+    ResearchRepoAnalysis,
     /// ATA-private: enable the workspace knowledge base. When on, every turn
     /// exports `CODEX_KB_PATH` to the shell environment and grants a
     /// sandbox-writable root at that path so the agent can write under
@@ -570,6 +582,24 @@ fn legacy_usage_notice(alias: &str, feature: Feature) -> (String, Option<String>
 
 fn web_search_details() -> &'static str {
     "Set `web_search` to `\"live\"`, `\"cached\"`, or `\"disabled\"` at the top level (or under a profile) in config.toml if you want to override it."
+}
+
+/// ATA: research features are intentionally `Stage::UnderDevelopment` so they
+/// are off-by-default and managed via `/research`. The under-development
+/// warning is noisy for users who deliberately enabled them, so the warning
+/// emitter skips this carve-out.
+fn is_research_feature(feature: Feature) -> bool {
+    matches!(
+        feature,
+        Feature::Research
+            | Feature::ResearchPaperSearch
+            | Feature::ResearchZotero
+            | Feature::ResearchHackerNews
+            | Feature::ResearchPatents
+            | Feature::ResearchRepoAnalysis
+            | Feature::ResearchKnowledgeBase
+            | Feature::ReadingView
+    )
 }
 
 /// Keys accepted in `[features]` tables.
@@ -1227,6 +1257,42 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::Research,
+        key: "research",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPaperSearch,
+        key: "research_paper_search",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ResearchZotero,
+        key: "research_zotero",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchHackerNews,
+        key: "research_hacker_news",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ResearchPatents,
+        key: "research_patents",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ResearchRepoAnalysis,
+        key: "research_repo_analysis",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::ResearchKnowledgeBase,
         key: "research_knowledge_base",
         stage: Stage::Stable,
@@ -1256,7 +1322,9 @@ pub fn unstable_features_warning_event(
             if !features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment) {
+            if matches!(spec.stage, Stage::UnderDevelopment)
+                && !is_research_feature(spec.id)
+            {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }

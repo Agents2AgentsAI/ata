@@ -137,6 +137,11 @@ pub(crate) use title_setup::TerminalTitleSetupView;
 pub(crate) use title_setup::preview_line_for_title_items;
 mod voice_setup_view;
 pub(crate) use voice_setup_view::VoiceSetupView;
+mod document_reader;
+mod research_tools_view;
+pub(crate) use research_tools_view::ResearchToolItem;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_reading_view_tool_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
@@ -237,6 +242,11 @@ pub(crate) struct BottomPane {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     keymap: RuntimeKeymap,
+    /// Document IDs the user has closed in this session. The document
+    /// reader uses this to suppress replayed `PresentDocumentEvent`s after
+    /// an agent switch — a live re-presentation always opens and clears
+    /// the marker (see `show_document_reader`).
+    closed_document_ids: std::collections::HashSet<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -294,6 +304,7 @@ impl BottomPane {
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
+            closed_document_ids: std::collections::HashSet::new(),
         }
     }
 
@@ -1698,6 +1709,8 @@ impl BottomPane {
         }
     }
 }
+
+include!("document_reader_ext.rs");
 
 struct ChatComposerRightReserveRenderable<'a> {
     composer: &'a chat_composer::ChatComposer,
