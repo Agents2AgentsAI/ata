@@ -539,7 +539,7 @@ mod tests {
             .await
             .expect("tool call should succeed");
 
-        let text = output.into_text();
+        let text = output.to_text();
         assert!(text.contains("Attached 1 URL file(s)."));
 
         let pending = session.get_pending_input().await;
@@ -606,7 +606,7 @@ mod tests {
             .await
             .expect("tool call should succeed");
 
-        let text = output.into_text();
+        let text = output.to_text();
         assert!(text.contains("Attached 1 URL file(s)."));
         assert!(text.contains("Skipped duplicate URL: https://example.com/doc.pdf"));
     }

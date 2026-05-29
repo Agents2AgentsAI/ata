@@ -397,6 +397,29 @@ impl ModelProviderInfo {
         }
     }
 
+    /// Test/helper constructor for a GitHub Copilot Chat Completions provider.
+    pub fn create_copilot_provider() -> ModelProviderInfo {
+        ModelProviderInfo {
+            name: "Copilot".into(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            experimental_bearer_token: None,
+            auth: None,
+            aws: None,
+            wire_api: WireApi::CopilotInline,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            websocket_connect_timeout_ms: None,
+            requires_openai_auth: false,
+            supports_websockets: false,
+        }
+    }
+
     /// Test/helper constructor for a Google Gemini `generateContent` provider.
     pub fn create_gemini_provider() -> ModelProviderInfo {
         ModelProviderInfo {

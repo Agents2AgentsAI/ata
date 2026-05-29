@@ -21,6 +21,17 @@ pub(crate) struct TurnInputQueue {
     items: Vec<TurnInput>,
 }
 
+impl TurnInputQueue {
+    /// Push a `ResponseInputItem` into the queue as a `TurnInput`.
+    ///
+    /// Lets callers outside the input-queue module (e.g. `file_attachments`)
+    /// enqueue model-facing items without needing access to the private
+    /// `items` vec.
+    pub(crate) fn push_response_input(&mut self, input: ResponseInputItem) {
+        self.items.push(TurnInput::ResponseInputItem(input));
+    }
+}
+
 /// Session-scoped pending input storage and active-turn mailbox delivery coordination.
 pub(crate) struct InputQueue {
     mailbox_tx: watch::Sender<()>,

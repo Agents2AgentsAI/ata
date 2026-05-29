@@ -3,8 +3,10 @@ pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod artifacts;
+pub(crate) mod attach_url_files;
 #[cfg(feature = "treesitter")]
 pub(crate) mod code_intel;
+pub(crate) mod crop_figure;
 pub(crate) mod cron_session_spec;
 pub(crate) mod cron_spec;
 pub(crate) mod cron;

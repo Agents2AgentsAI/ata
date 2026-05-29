@@ -88,7 +88,10 @@ pub(super) async fn rasterize_pdfs_for_copilot_chat_completions(
         let replacements: Vec<UserInput> = raster
             .page_paths
             .iter()
-            .map(|p| UserInput::LocalImage { path: p.clone() })
+            .map(|p| UserInput::LocalImage {
+                path: p.clone(),
+                detail: None,
+            })
             .collect();
         input.splice(*drop_idx..=*drop_idx, replacements);
     }

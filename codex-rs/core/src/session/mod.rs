@@ -192,6 +192,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
+pub(crate) mod file_attachments;
 mod handlers;
 mod input_queue;
 mod mcp;
@@ -3217,6 +3218,25 @@ impl Session {
         self.input_queue
             .inject_response_items(&self.active_turn, input)
             .await
+    }
+
+    /// Drains the current turn's pending input and returns only the
+    /// `ResponseInputItem` entries.
+    ///
+    /// Test helper for `file_attachments` / `attach_url_files`: those flows
+    /// only ever enqueue `TurnInput::ResponseInputItem`, so dropping any
+    /// `TurnInput::UserInput` entries here keeps the surface scoped to the
+    /// model-facing items the tests care about.
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        self.input_queue
+            .get_pending_input(&self.active_turn)
+            .await
+            .into_iter()
+            .filter_map(|input| match input {
+                TurnInput::ResponseInputItem(item) => Some(item),
+                TurnInput::UserInput(_) => None,
+            })
+            .collect()
     }
 
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {

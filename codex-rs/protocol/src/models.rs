@@ -761,6 +761,14 @@ impl ContentItem {
             filename,
         }
     }
+
+    pub fn url_file(url: String, mime_type: Option<String>, filename: Option<String>) -> Self {
+        Self::UrlFile {
+            url,
+            mime_type,
+            filename,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]

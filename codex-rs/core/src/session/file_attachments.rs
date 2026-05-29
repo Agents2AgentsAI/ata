@@ -599,7 +599,7 @@ impl Session {
         }
 
         for item in input {
-            turn_state.push_pending_input(item);
+            turn_state.pending_input.push_response_input(item);
         }
         Ok(())
     }

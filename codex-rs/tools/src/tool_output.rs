@@ -44,6 +44,15 @@ pub trait ToolOutput: Send {
     fn code_mode_result(&self, payload: &ToolPayload) -> JsonValue {
         response_input_to_code_mode_result(self.to_response_item("", payload))
     }
+
+    /// Returns the full text contents of this tool output, if applicable.
+    ///
+    /// Default impl returns `log_preview()` which may be truncated.
+    /// Concrete output types with a richer body (e.g. `FunctionToolOutput`)
+    /// should override this to return the un-truncated text.
+    fn to_text(&self) -> String {
+        self.log_preview()
+    }
 }
 
 impl<T> ToolOutput for Box<T>
