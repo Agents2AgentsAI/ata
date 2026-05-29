@@ -39,6 +39,7 @@ codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }
 codex-features = { workspace = true }
 codex-feedback = { workspace = true }
+codex-file-watcher = { workspace = true, optional = true }
 codex-login = { workspace = true }
 codex-lsp-client = { workspace = true, optional = true }
 codex-memories-read = { workspace = true }
@@ -136,8 +137,8 @@ whoami = { workspace = true }
 
 [features]
 default = ["code-intel"]
-lsp = ["dep:codex-lsp-client"]
-treesitter = ["dep:codex-treesitter"]
+lsp = ["dep:codex-lsp-client", "dep:codex-file-watcher"]
+treesitter = ["dep:codex-treesitter", "dep:codex-file-watcher"]
 code-intel = ["lsp", "treesitter"]
 
 # Build OpenSSL from source for musl builds.

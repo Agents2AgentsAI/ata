@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[cfg(feature = "treesitter")]
-use crate::file_watcher::FileWatcher;
+use codex_file_watcher::FileWatcher;
 #[cfg(feature = "treesitter")]
-use crate::file_watcher::Receiver as FileWatcherReceiver;
+use codex_file_watcher::Receiver as FileWatcherReceiver;
 #[cfg(feature = "treesitter")]
-use crate::file_watcher::WatchRegistration;
+use codex_file_watcher::WatchRegistration;
 #[cfg(feature = "treesitter")]
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
@@ -54,7 +54,7 @@ pub(crate) struct MultiRootState {
     #[cfg(feature = "treesitter")]
     file_watcher: Arc<FileWatcher>,
     #[cfg(feature = "treesitter")]
-    watch_subscriber: crate::file_watcher::FileWatcherSubscriber,
+    watch_subscriber: codex_file_watcher::FileWatcherSubscriber,
     #[cfg(feature = "treesitter")]
     watch_registrations: RwLock<HashMap<String, WatchRegistration>>,
 }
@@ -343,7 +343,7 @@ impl MultiRootState {
                 .insert(root.name.clone(), index);
             let registration =
                 self.watch_subscriber
-                    .register_paths(vec![crate::file_watcher::WatchPath {
+                    .register_paths(vec![codex_file_watcher::WatchPath {
                         path: root.path.clone(),
                         recursive: true,
                     }]);

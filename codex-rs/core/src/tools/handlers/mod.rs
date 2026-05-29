@@ -3,6 +3,8 @@ pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 pub(crate) mod artifacts;
+#[cfg(feature = "treesitter")]
+pub(crate) mod code_intel;
 pub(crate) mod cron_session_spec;
 pub(crate) mod cron_spec;
 pub(crate) mod cron;
@@ -12,6 +14,8 @@ pub(crate) mod document_reader;
 mod dynamic;
 pub(crate) mod js_repl;
 pub(crate) mod monitor;
+#[cfg(feature = "lsp")]
+pub(crate) mod lsp;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp_workspace_edit;
 pub(crate) mod research;

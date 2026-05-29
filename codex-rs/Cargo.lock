@@ -2530,6 +2530,7 @@ dependencies = [
  "codex-extension-api",
  "codex-features",
  "codex-feedback",
+ "codex-file-watcher",
  "codex-git-utils",
  "codex-hooks",
  "codex-login",

@@ -36,10 +36,16 @@ use codex_thread_store::ReadThreadParams;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+#[cfg(feature = "lsp")]
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
+
+#[cfg(feature = "lsp")]
+pub(crate) type SharedLspRegistryCache =
+    Arc<tokio::sync::RwLock<HashMap<PathBuf, Arc<codex_lsp_client::ServerRegistry>>>>;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
