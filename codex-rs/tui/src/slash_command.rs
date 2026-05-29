@@ -31,6 +31,8 @@ pub enum SlashCommand {
     Rename,
     New,
     Resume,
+    Research,
+    Scheduling,
     Fork,
     Init,
     Compact,
@@ -134,6 +136,8 @@ impl SlashCommand {
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
+            SlashCommand::Research => "configure research tool integrations",
+            SlashCommand::Scheduling => "view active cron / monitor tasks",
         }
     }
 
@@ -228,6 +232,7 @@ impl SlashCommand {
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
+            SlashCommand::Research | SlashCommand::Scheduling => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

@@ -185,6 +185,8 @@ mod theme_picker;
 mod token_usage;
 mod tooltips;
 mod transcript_reflow;
+#[allow(dead_code)]
+mod tts;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
@@ -195,6 +197,8 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
+#[allow(dead_code)]
+mod vad;
 mod version;
 #[cfg(not(target_os = "linux"))]
 mod voice;

@@ -468,6 +468,26 @@ impl ChatWidget {
                     },
                 );
             }
+            SlashCommand::Research => {
+                self.add_info_message(
+                    "The /research panel is not yet wired in this build (TUI Wave 8 \
+                     follow-up). Configure research tools via `~/.ata/config.toml` \
+                     `[research]` for now."
+                        .to_string(),
+                    /*hint*/ None,
+                );
+            }
+            SlashCommand::Scheduling => {
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(AppCommand::ListSchedulingTasks));
+                self.add_info_message(
+                    "Requested scheduling snapshot. The /scheduling panel UI is not \
+                     yet wired in this build; the snapshot will arrive as a \
+                     `SchedulingTasksSnapshot` event."
+                        .to_string(),
+                    /*hint*/ None,
+                );
+            }
         }
     }
 
@@ -981,6 +1001,8 @@ impl ChatWidget {
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::Theme
+            | SlashCommand::Research
+            | SlashCommand::Scheduling
             | SlashCommand::Pets => QueueDrain::Stop,
         }
     }

@@ -89,6 +89,8 @@ pub(crate) struct MentionBinding {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+#[allow(dead_code)]
+mod scheduling_view;
 pub(crate) mod custom_prompt_view;
 mod experimental_features_view;
 mod file_search_popup;

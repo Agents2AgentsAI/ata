@@ -7,5 +7,5 @@ expression: terminal.backend()
 "› /res                                                      "
 "                                                            "
 "                                                            "
-"                                                            "
-"  /resume  resume a saved chat                              "
+"  /resume    resume a saved chat                            "
+"  /research  configure research tool integrations           "

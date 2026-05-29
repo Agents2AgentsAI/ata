@@ -4009,6 +4009,7 @@ dependencies = [
  "codex-connectors",
  "codex-core-plugins",
  "codex-core-skills",
+ "codex-elevenlabs",
  "codex-exec-server",
  "codex-features",
  "codex-feedback",
