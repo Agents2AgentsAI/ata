@@ -122,6 +122,9 @@ pub(crate) struct TurnState {
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
+    /// Number of URL file attachments injected into this turn via
+    /// `attach_url_files`. Used to enforce a per-turn quota.
+    url_attachments_injected: usize,
 }
 
 pub(crate) struct PendingRequestPermissions {
@@ -221,6 +224,30 @@ impl TurnState {
 
     pub(crate) fn accept_mailbox_delivery_for_current_turn(&mut self) {
         self.set_mailbox_delivery_phase(MailboxDeliveryPhase::CurrentTurn);
+    }
+
+    /// Returns the number of URL file attachments injected into this turn so
+    /// far.
+    #[allow(dead_code)]
+    pub(crate) fn url_attachments_injected(&self) -> usize {
+        self.url_attachments_injected
+    }
+
+    /// Atomically reserves capacity for `additional` URL file attachments in
+    /// this turn, enforcing `per_turn_limit`. Returns `Ok(())` on success, or
+    /// `Err(current_count)` if the reservation would exceed the limit.
+    #[allow(dead_code)]
+    pub(crate) fn reserve_url_attachments(
+        &mut self,
+        additional: usize,
+        per_turn_limit: usize,
+    ) -> Result<(), usize> {
+        let current = self.url_attachments_injected;
+        if current.saturating_add(additional) > per_turn_limit {
+            return Err(current);
+        }
+        self.url_attachments_injected = current + additional;
+        Ok(())
     }
 
     pub(crate) fn accepts_mailbox_delivery_for_current_turn(&self) -> bool {
