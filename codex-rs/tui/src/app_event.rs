@@ -32,6 +32,9 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::legacy_core::config::types::TtsBackend;
+use crate::legacy_core::config::types::VoiceVerbosity;
+
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
@@ -1002,6 +1005,23 @@ pub(crate) enum AppEvent {
     KeymapCleared {
         context: String,
         action: String,
+    },
+
+    /// Apply voice-mode settings produced by `VoiceSetupView` to the runtime
+    /// chatwidget state and persist them to `~/.ata/config.toml`.
+    /// The outer `Option`s on `language_code` / `speed` distinguish "user
+    /// touched this field" (Some) from "leave the existing config value
+    /// alone" (None); the inner `Option<String>` on `language_code` further
+    /// distinguishes "explicit language" from "auto-detect".
+    UpdateVoiceSettings {
+        startup_enabled: bool,
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        language_code: Option<Option<String>>,
+        speed: Option<f64>,
+        verbosity: VoiceVerbosity,
+        tts_backend: TtsBackend,
     },
 }
 

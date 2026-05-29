@@ -135,6 +135,8 @@ pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
+mod voice_setup_view;
+pub(crate) use voice_setup_view::VoiceSetupView;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;

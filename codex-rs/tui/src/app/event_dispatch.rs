@@ -775,6 +775,35 @@ impl App {
                 self.sync_active_thread_personality_setting(app_server, personality)
                     .await;
             }
+            AppEvent::UpdateVoiceSettings {
+                startup_enabled,
+                tts_enabled,
+                stt_enabled,
+                elevenlabs_api_key,
+                language_code,
+                speed,
+                verbosity,
+                tts_backend,
+            } => {
+                // Wave 9A wires the producer (VoiceSetupView). The consumer
+                // side (chat_widget.apply_voice_settings + config.toml
+                // persistence) lights up in Wave 9D when the voice_mode
+                // module is brought back into the build.
+                let _ = (
+                    startup_enabled,
+                    tts_enabled,
+                    stt_enabled,
+                    elevenlabs_api_key,
+                    language_code,
+                    speed,
+                    verbosity,
+                    tts_backend,
+                );
+                tracing::info!(
+                    "voice settings update received from VoiceSetupView; \
+                     full apply pending Wave 9D"
+                );
+            }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
             }
