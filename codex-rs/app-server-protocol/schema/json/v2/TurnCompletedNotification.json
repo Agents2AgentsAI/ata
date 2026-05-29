@@ -1591,6 +1591,60 @@
           ],
           "title": "MentionUserInput",
           "type": "object"
+        },
+        {
+          "description": "Local PDF or other file the user attached, either explicitly via the composer or implicitly via the proactive-injection pipeline that detects PDF mentions in turn text. Sent through to the model as a `ContentItem::InputFile` block once the file is read or uploaded.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "localFile"
+              ],
+              "title": "LocalFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "type"
+          ],
+          "title": "LocalFileUserInput",
+          "type": "object"
+        },
+        {
+          "description": "File previously uploaded to the provider's file API and reused by `file_id` (avoids re-uploading on subsequent turns).",
+          "properties": {
+            "file_id": {
+              "type": "string"
+            },
+            "filename": {
+              "type": "string"
+            },
+            "mime_type": {
+              "type": "string"
+            },
+            "source_path": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "uploadedFile"
+              ],
+              "title": "UploadedFileUserInputType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file_id",
+            "filename",
+            "mime_type",
+            "source_path",
+            "type"
+          ],
+          "title": "UploadedFileUserInput",
+          "type": "object"
         }
       ]
     },

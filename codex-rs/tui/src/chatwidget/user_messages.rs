@@ -557,7 +557,10 @@ impl ChatWidget {
             match item {
                 UserInput::Text { text, .. } => message.push_str(text),
                 UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Skill { .. }
+                | UserInput::Mention { .. }
+                | UserInput::LocalFile { .. }
+                | UserInput::UploadedFile { .. } => {}
             }
         }
 
@@ -595,7 +598,10 @@ impl ChatWidget {
                 ),
                 UserInput::Image { url, .. } => remote_image_urls.push(url.clone()),
                 UserInput::LocalImage { path, .. } => local_images.push(path.clone()),
-                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                UserInput::Skill { .. }
+                | UserInput::Mention { .. }
+                | UserInput::LocalFile { .. }
+                | UserInput::UploadedFile { .. } => {}
             }
         }
 

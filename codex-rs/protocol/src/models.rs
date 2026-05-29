@@ -3,6 +3,8 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::path::Path;
 
+use codex_utils_file::encode_inline_cached;
+use codex_utils_file::into_owned_processed_file;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
@@ -741,6 +743,26 @@ pub enum ContentItem {
     },
 }
 
+impl ContentItem {
+    pub fn inline_file(base64_data: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: Some(base64_data),
+            file_id: None,
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
+
+    pub fn file_ref(file_id: String, mime_type: String, filename: Option<String>) -> Self {
+        Self::InputFile {
+            file_data: None,
+            file_id: Some(file_id),
+            mime_type: Some(mime_type),
+            filename,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
@@ -1023,6 +1045,18 @@ const IMAGE_CLOSE_TAG: &str = "</image>";
 const LOCAL_IMAGE_OPEN_TAG_PREFIX: &str = "<image name=";
 const LOCAL_IMAGE_OPEN_TAG_SUFFIX: &str = ">";
 const LOCAL_IMAGE_CLOSE_TAG: &str = IMAGE_CLOSE_TAG;
+const FILE_OPEN_TAG_BARE: &str = "<file_start>";
+const FILE_OPEN_TAG_PREFIX: &str = "<file_start";
+const FILE_OPEN_TAG_SUFFIX: &str = "</file_start>";
+const FILE_CLOSE_TAG: &str = "<file_end></file_end>";
+
+fn escape_tag_attribute_value(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
 
 pub fn image_open_tag_text() -> String {
     IMAGE_OPEN_TAG.to_string()
@@ -1034,6 +1068,26 @@ pub fn image_close_tag_text() -> String {
 
 pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
+}
+
+pub fn local_file_label_text(label_number: usize) -> String {
+    format!("[File #{label_number}]")
+}
+
+pub fn local_file_open_tag_text_with_filename(
+    label_number: usize,
+    filename: Option<&str>,
+) -> String {
+    let label = local_file_label_text(label_number);
+    match filename.filter(|name| !name.is_empty()) {
+        Some(filename) => {
+            let escaped_filename = escape_tag_attribute_value(filename);
+            format!(
+                r#"{FILE_OPEN_TAG_PREFIX} name="{escaped_filename}">{label}{FILE_OPEN_TAG_SUFFIX}"#
+            )
+        }
+        None => format!("{FILE_OPEN_TAG_BARE}{label}{FILE_OPEN_TAG_SUFFIX}"),
+    }
 }
 
 pub fn local_image_open_tag_text(label_number: usize) -> String {
@@ -1126,6 +1180,54 @@ pub fn local_image_content_items_with_label_number(
             }
         },
     }
+}
+
+pub fn local_file_content_items(path: &Path, label_number: Option<usize>) -> Vec<ContentItem> {
+    match encode_inline_cached(path) {
+        Ok(processed) => {
+            let processed = into_owned_processed_file(processed);
+            let filename = processed.filename.clone();
+            let file_item = ContentItem::inline_file(
+                processed.base64,
+                processed.mime_type,
+                Some(filename.clone()),
+            );
+            wrap_file_content_items(file_item, label_number, Some(filename.as_str()))
+        }
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "local file encoding failed; inserting error placeholder"
+            );
+            vec![ContentItem::InputText {
+                text: format!(
+                    "ATA could not read the local file at `{}`: {error}",
+                    path.display()
+                ),
+            }]
+        }
+    }
+}
+
+fn wrap_file_content_items(
+    file_item: ContentItem,
+    label_number: Option<usize>,
+    filename: Option<&str>,
+) -> Vec<ContentItem> {
+    let mut items = Vec::with_capacity(if label_number.is_some() { 3 } else { 1 });
+    if let Some(label_number) = label_number {
+        items.push(ContentItem::InputText {
+            text: local_file_open_tag_text_with_filename(label_number, filename),
+        });
+    }
+    items.push(file_item);
+    if label_number.is_some() {
+        items.push(ContentItem::InputText {
+            text: FILE_CLOSE_TAG.to_string(),
+        });
+    }
+    items
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -1275,6 +1377,25 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             ),
                             Err(err) => vec![local_image_error_placeholder(&path, err)],
                         }
+                    }
+                    UserInput::LocalFile { path } => {
+                        image_index += 1;
+                        local_file_content_items(&path, Some(image_index))
+                    }
+                    UserInput::UploadedFile {
+                        file_id,
+                        mime_type,
+                        filename,
+                        ..
+                    } => {
+                        image_index += 1;
+                        let file_item =
+                            ContentItem::file_ref(file_id, mime_type, Some(filename.clone()));
+                        wrap_file_content_items(
+                            file_item,
+                            Some(image_index),
+                            Some(filename.as_str()),
+                        )
                     }
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
