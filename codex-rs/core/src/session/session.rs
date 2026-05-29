@@ -558,6 +558,7 @@ impl Session {
         models_manager: SharedModelsManager,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
+        tx_sub: Sender<codex_protocol::protocol::Submission>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
         session_source: SessionSource,
@@ -1186,15 +1187,21 @@ impl Session {
                         config.as_ref(),
                     ),
                 ),
-                // Scheduling is disabled in this build — handlers surface a
-                // "feature not enabled" error when they observe `None`.
-                cron_registry: None,
-                monitor_runtime: None,
-                scheduling_state_path: None,
-                // Dead channel: scheduling handlers only consult this after
-                // first checking `monitor_runtime()`/`cron_registry()`, which
-                // are both `None`, so this is never actually exercised.
-                submission_tx: async_channel::bounded(1).0,
+                // Scheduling runtime — one CronRegistry + one MonitorRuntime
+                // per session, plus a sidecar path under
+                // `<codex_home>/scheduling/<thread_id>.json` for persistence.
+                // Existing snapshots are hydrated below (line ~1240) after
+                // the Session arc exists, so the registries are already in
+                // the Arc-shared state by the time hydration writes to them.
+                cron_registry: Some(Arc::new(codex_scheduling::CronRegistry::new())),
+                monitor_runtime: Some(Arc::new(
+                    crate::scheduling_runtime::MonitorRuntime::new(),
+                )),
+                scheduling_state_path: Some(codex_scheduling::scheduling_state_path(
+                    config.codex_home.as_path(),
+                    thread_id.to_string().as_str(),
+                )),
+                submission_tx: tx_sub,
                 next_internal_sub_id: AtomicU64::new(0),
             });
             if let Some(network_policy_decider_session) = network_policy_decider_session {
@@ -1351,6 +1358,31 @@ impl Session {
                 }
                 InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
             };
+
+            // Hydrate scheduling state from disk if a prior session for this
+            // thread persisted any cron jobs or monitors. Fresh sessions hit
+            // `Ok(None)` and skip the work; genuine I/O / parse failures are
+            // logged but non-fatal so a corrupt sidecar can't block startup.
+            if let (Some(path), Some(cron), Some(runtime)) = (
+                sess.scheduling_state_path.as_ref(),
+                sess.cron_registry.as_ref(),
+                sess.monitor_runtime.as_ref(),
+            ) {
+                match codex_scheduling::load_scheduling_state(path) {
+                    Ok(Some(snapshot)) => {
+                        cron.hydrate(snapshot.cron_jobs);
+                        runtime.registry.hydrate(snapshot.monitors);
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            path = %path.display(),
+                            "failed to load scheduling state sidecar; starting fresh"
+                        );
+                    }
+                }
+            }
 
             // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
             Box::pin(sess.record_initial_history(initial_history)).await;
