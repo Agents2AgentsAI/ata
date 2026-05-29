@@ -2386,7 +2386,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
-        file_reference_cache: Mutex::new(codex_api::file_support::FileReferenceCache::default()),
+        file_reference_cache: Arc::new(Mutex::new(
+            codex_api::file_support::FileReferenceCache::default(),
+        )),
         file_upload_http_client: reqwest::Client::new(),
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
@@ -3190,7 +3192,9 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         unified_exec_manager: UnifiedExecProcessManager::new(
             config.background_terminal_max_timeout,
         ),
-        file_reference_cache: Mutex::new(codex_api::file_support::FileReferenceCache::default()),
+        file_reference_cache: Arc::new(Mutex::new(
+            codex_api::file_support::FileReferenceCache::default(),
+        )),
         file_upload_http_client: reqwest::Client::new(),
         shell_zsh_path: None,
         main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
