@@ -10,6 +10,7 @@ pub(crate) mod cron_session;
 pub(crate) mod data;
 pub(crate) mod document_reader;
 mod dynamic;
+pub(crate) mod js_repl;
 pub(crate) mod monitor;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp_workspace_edit;
