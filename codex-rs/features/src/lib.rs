@@ -254,6 +254,11 @@ pub enum Feature {
     ResponsesWebsocketsV2,
     /// ATA-private: surface the document-reader / reading-view UI overlay.
     ReadingView,
+    /// ATA-private: enable the workspace knowledge base. When on, every turn
+    /// exports `CODEX_KB_PATH` to the shell environment and grants a
+    /// sandbox-writable root at that path so the agent can write under
+    /// `~/.ata/<workspace_id>/knowledge-base/...` without approval prompts.
+    ResearchKnowledgeBase,
 }
 
 impl Feature {
@@ -1218,6 +1223,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ReadingView,
         key: "reading_view",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ResearchKnowledgeBase,
+        key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
     },

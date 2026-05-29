@@ -68,6 +68,12 @@ pub struct SandboxCommand {
     pub cwd: AbsolutePathBuf,
     pub env: HashMap<String, String>,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    /// ATA-private: sandbox-writable root for the per-workspace KB
+    /// directory. When `Some`, the transform path appends this to the
+    /// effective `FileSystemSandboxPolicy`'s writable roots so commands
+    /// can write under `CODEX_KB_PATH` without approval prompts. `None`
+    /// outside ATA / when `Feature::ResearchKnowledgeBase` is off.
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
 }
 
 #[derive(Debug)]
@@ -182,10 +188,35 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
+        let workspace_kb_root = command.workspace_kb_root.take();
         let effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
-        let (effective_file_system_policy, effective_network_policy) =
+        let (mut effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
+        // ATA: append the per-workspace knowledge-base directory to the
+        // effective writable roots when the caller resolved one for this
+        // command (`Feature::ResearchKnowledgeBase` on, `CODEX_KB_PATH`
+        // resolved to a usable absolute path). Mirrors the original ATA
+        // wiring so writes under `~/.ata/<workspace_id>/knowledge-base/`
+        // don't need an approval prompt.
+        if let Some(kb_root) = workspace_kb_root {
+            let already_present = effective_file_system_policy.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    codex_protocol::permissions::FileSystemPath::Path { path } if path == &kb_root
+                )
+            });
+            if !already_present {
+                effective_file_system_policy.entries.push(
+                    codex_protocol::permissions::FileSystemSandboxEntry {
+                        path: codex_protocol::permissions::FileSystemPath::Path {
+                            path: kb_root,
+                        },
+                        access: codex_protocol::permissions::FileSystemAccessMode::Write,
+                    },
+                );
+            }
+        }
         let mut argv = Vec::with_capacity(1 + command.args.len());
         argv.push(command.program);
         argv.extend(command.args.into_iter().map(OsString::from));

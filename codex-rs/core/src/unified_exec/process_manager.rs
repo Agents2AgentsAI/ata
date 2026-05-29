@@ -1050,6 +1050,7 @@ impl UnifiedExecProcessManager {
             env,
             exec_server_env_config: Some(exec_server_env_config),
             explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            workspace_kb_root: context.turn.workspace_kb_root.clone(),
             network: request.network.clone(),
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,

@@ -54,6 +54,12 @@ pub struct ShellRequest {
     pub timeout_ms: Option<u64>,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    /// Sandbox-writable root for the per-workspace knowledge-base
+    /// directory (when `Feature::ResearchKnowledgeBase` is on). Threaded
+    /// down to `SandboxCommand` so the sandbox transform can grant a
+    /// writable root at that path, letting the agent write under
+    /// `~/.ata/<workspace_id>/knowledge-base/...` without approval.
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<AdditionalPermissionProfile>,
@@ -262,8 +268,13 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
         }
 
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())?;
+        let command = build_sandbox_command(
+            &command,
+            &req.cwd,
+            &env,
+            req.additional_permissions.clone(),
+            req.workspace_kb_root.clone(),
+        )?;
         let mut expiration: crate::exec::ExecExpiration = req.timeout_ms.into();
         if let Some(cancellation) = attempt.network_denial_cancellation_token.clone() {
             expiration = expiration.with_cancellation(cancellation);

@@ -2158,6 +2158,8 @@ async fn websocket_harness_with_provider_options(
         runtime_metrics_enabled,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        config.codex_home.to_path_buf(),
+        config.cli_auth_credentials_store_mode,
     );
 
     WebsocketTestHarness {

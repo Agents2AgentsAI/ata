@@ -110,6 +110,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        config.codex_home.to_path_buf(),
+        config.cli_auth_credentials_store_mode,
     );
     let mut client_session = client.new_session();
 
@@ -238,6 +240,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        config.codex_home.to_path_buf(),
+        config.cli_auth_credentials_store_mode,
     );
     let mut client_session = client.new_session();
 
@@ -355,6 +359,8 @@ async fn responses_respects_model_info_overrides_from_config() {
         /*include_timing_metrics*/ false,
         /*beta_features_header*/ None,
         /*attestation_provider*/ None,
+        config.codex_home.to_path_buf(),
+        config.cli_auth_credentials_store_mode,
     );
     let mut client_session = client.new_session();
 

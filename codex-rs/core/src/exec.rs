@@ -366,6 +366,7 @@ pub fn build_exec_request(
         cwd,
         env,
         additional_permissions: None,
+        workspace_kb_root: None,
     };
     let options = ExecOptions {
         expiration,

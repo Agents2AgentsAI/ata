@@ -66,6 +66,7 @@ pub struct UnifiedExecRequest {
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub workspace_kb_root: Option<AbsolutePathBuf>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -286,9 +287,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         };
 
         if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
-            let command =
-                build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                    .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+            let command = build_sandbox_command(
+                &command,
+                &req.cwd,
+                &env,
+                req.additional_permissions.clone(),
+                req.workspace_kb_root.clone(),
+            )
+            .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
             let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
             let mut exec_env = attempt
                 .env_for(command, options, managed_network)
@@ -337,9 +343,14 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
             }
         }
-        let command =
-            build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
-                .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let command = build_sandbox_command(
+            &command,
+            &req.cwd,
+            &env,
+            req.additional_permissions.clone(),
+            req.workspace_kb_root.clone(),
+        )
+        .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
@@ -418,6 +429,7 @@ mod tests {
             env: HashMap::new(),
             exec_server_env_config: None,
             explicit_env_overrides: HashMap::new(),
+            workspace_kb_root: None,
             network: None,
             tty: false,
             sandbox_permissions: SandboxPermissions::UseDefault,

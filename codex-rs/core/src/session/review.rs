@@ -121,6 +121,7 @@ pub(super) async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
+        workspace_kb_root: parent_turn_context.workspace_kb_root.clone(),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,

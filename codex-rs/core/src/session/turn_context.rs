@@ -88,6 +88,13 @@ pub struct TurnContext {
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
+    /// Sandbox-writable root resolved from the per-turn `CODEX_KB_PATH`
+    /// env var when `Feature::ResearchKnowledgeBase` is on. Threaded into
+    /// every ShellRequest so writes under
+    /// `~/.ata/<workspace_id>/knowledge-base/...` don't need an approval
+    /// prompt. `None` when the feature is off or the env var doesn't
+    /// resolve to a usable absolute path.
+    pub(crate) workspace_kb_root: Option<AbsolutePathBuf>,
     pub(crate) truncation_policy: TruncationPolicy,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
@@ -245,6 +252,7 @@ impl TurnContext {
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
+            workspace_kb_root: self.workspace_kb_root.clone(),
             truncation_policy,
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
@@ -478,7 +486,49 @@ impl Session {
             per_turn_config.features.enabled(Feature::FastMode),
             &model_info,
         );
+        // ATA: when the workspace KB feature is on, export CODEX_KB_PATH
+        // into the per-turn shell environment so LLM tool calls,
+        // subagent shells, and `/shell` all see the same dir. The same
+        // env var also drives the sandbox writable-root grant below
+        // (no approval prompts when writing under that path).
+        if per_turn_config
+            .features
+            .enabled(Feature::ResearchKnowledgeBase)
+        {
+            let kb_env = crate::workspace_kb::resolve_kb_env(
+                per_turn_config.codex_home.as_path(),
+                per_turn_config.cwd.as_path(),
+                /*kb_path_override*/ None,
+                /*session_id*/ Some(session_id.to_string().as_str()),
+                /*thread_id*/ Some(thread_id.to_string().as_str()),
+            );
+            per_turn_config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert(
+                    crate::workspace_kb::CODEX_KB_PATH_ENV_VAR.to_string(),
+                    kb_env.kb_path,
+                );
+            if let Some(workspace_kb_root) = kb_env.workspace_kb_root.as_ref() {
+                tracing::debug!(
+                    path = %workspace_kb_root.as_path().display(),
+                    "resolved workspace KB sandbox root"
+                );
+            }
+        }
         let per_turn_config = Arc::new(per_turn_config);
+        // Resolve a sandbox-writable KB root from the per-turn shell
+        // environment (`CODEX_KB_PATH`). Mirrors the codex-locus wiring
+        // so writes under `~/.ata/<workspace_id>/knowledge-base/...`
+        // don't require approval.
+        let workspace_kb_root = per_turn_config
+            .permissions
+            .shell_environment_policy
+            .r#set
+            .get(crate::workspace_kb::CODEX_KB_PATH_ENV_VAR)
+            .map(std::path::Path::new)
+            .and_then(crate::workspace_kb::kb_writable_root);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
             thread_id.to_string(),
@@ -528,6 +578,7 @@ impl Session {
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
+            workspace_kb_root,
             truncation_policy: model_info.truncation_policy.into(),
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,

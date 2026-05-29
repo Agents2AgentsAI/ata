@@ -117,10 +117,13 @@ pub(super) async fn try_run_zsh_fork(
     }
 
     let env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
-    // TODO(ata-upstream-merge): re-wire workspace_kb_root once the field is
-    // restored on ShellRequest and threaded through build_sandbox_command.
-    let command =
-        build_sandbox_command(command, &req.cwd, &env, req.additional_permissions.clone())?;
+    let command = build_sandbox_command(
+        command,
+        &req.cwd,
+        &env,
+        req.additional_permissions.clone(),
+        req.workspace_kb_root.clone(),
+    )?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
@@ -913,6 +916,7 @@ impl CoreShellCommandExecutor {
             cwd: workdir.clone(),
             env,
             additional_permissions,
+            workspace_kb_root: None,
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,

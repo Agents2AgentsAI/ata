@@ -34,6 +34,7 @@ pub(crate) fn build_sandbox_command(
     cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
     additional_permissions: Option<AdditionalPermissionProfile>,
+    workspace_kb_root: Option<AbsolutePathBuf>,
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()
@@ -44,6 +45,7 @@ pub(crate) fn build_sandbox_command(
         cwd: cwd.clone(),
         env: env.clone(),
         additional_permissions,
+        workspace_kb_root,
     })
 }
 

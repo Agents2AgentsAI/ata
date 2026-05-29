@@ -545,6 +545,9 @@
             "request_rule": {
               "type": "boolean"
             },
+            "research_knowledge_base": {
+              "type": "boolean"
+            },
             "responses_websocket_response_processed": {
               "type": "boolean"
             },
@@ -4553,6 +4556,9 @@
           "type": "boolean"
         },
         "request_rule": {
+          "type": "boolean"
+        },
+        "research_knowledge_base": {
           "type": "boolean"
         },
         "responses_websocket_response_processed": {
