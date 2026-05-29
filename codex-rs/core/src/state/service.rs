@@ -88,4 +88,10 @@ pub(crate) struct SessionServices {
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.
     pub(crate) environment_manager: Arc<EnvironmentManager>,
+    /// Unified code intelligence state across project roots. `None` until
+    /// `session::code_intel::init_multi_root_state` is wired into session
+    /// bringup; the code_intel and lsp handlers gracefully short-circuit
+    /// when this is absent.
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<Arc<super::MultiRootState>>,
 }

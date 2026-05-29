@@ -1109,6 +1109,8 @@ impl Session {
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
+                #[cfg(any(feature = "lsp", feature = "treesitter"))]
+                multi_root_state: None,
             };
             services
                 .model_client

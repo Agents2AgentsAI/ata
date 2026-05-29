@@ -191,6 +191,9 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+#[allow(dead_code)]
+mod code_intel;
 mod config_lock;
 pub(crate) mod file_attachments;
 mod handlers;

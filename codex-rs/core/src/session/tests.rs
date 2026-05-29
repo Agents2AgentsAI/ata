@@ -4591,6 +4591,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: None,
     };
 
     let plugin_outcome = services
@@ -6431,6 +6433,8 @@ where
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: None,
     };
 
     let plugin_outcome = services
