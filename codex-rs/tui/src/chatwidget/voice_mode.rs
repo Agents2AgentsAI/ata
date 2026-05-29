@@ -1573,6 +1573,114 @@ impl super::ChatWidget {
         self.add_info_message("ElevenLabs API key saved.".to_string(), None);
     }
 
+    /// Apply the full voice-settings payload from `VoiceSetupView` to the
+    /// running session AND persist it to `~/.ata/config.toml`. The startup
+    /// `enabled` toggle and `tts_backend` only take effect on next session
+    /// start; the other six fields apply immediately via
+    /// `apply_voice_settings` + the cached ElevenLabs overrides.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_and_persist_voice_settings(
+        &mut self,
+        startup_enabled: bool,
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        language_code: Option<Option<String>>,
+        speed: Option<f64>,
+        verbosity: VoiceVerbosity,
+        tts_backend: TtsBackend,
+    ) {
+        // Live state — picks up immediately for the running session.
+        self.apply_voice_settings(tts_enabled, stt_enabled, verbosity);
+        self.update_elevenlabs_voice_settings(language_code.clone(), speed);
+        if let Some(key) = elevenlabs_api_key.clone() {
+            self.cached_elevenlabs_api_key = Some(key);
+        }
+
+        // Persist to disk. We build the edit list synchronously so we can
+        // pass it into a spawned task; the apply itself is async.
+        let codex_home = self.config.codex_home.clone();
+        let verbosity_str = match verbosity {
+            VoiceVerbosity::Concise => "concise",
+            VoiceVerbosity::Verbose => "verbose",
+        };
+        let tts_backend_str = match tts_backend {
+            TtsBackend::Elevenlabs => "elevenlabs",
+            TtsBackend::Say => "say",
+        };
+        tokio::spawn(async move {
+            use crate::legacy_core::config::edit::ConfigEdit;
+            let mut edits: Vec<ConfigEdit> = vec![
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "enabled".into()],
+                    value: startup_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "tts_enabled".into()],
+                    value: tts_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "stt_enabled".into()],
+                    value: stt_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "verbosity".into()],
+                    value: verbosity_str.to_string().into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "tts_backend".into()],
+                    value: tts_backend_str.to_string().into(),
+                },
+            ];
+            if let Some(key) = elevenlabs_api_key {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "voice_mode".into(),
+                        "elevenlabs".into(),
+                        "api_key".into(),
+                    ],
+                    value: key.into(),
+                });
+            }
+            // language_code: outer Some = touched. Inner None = explicit
+            // auto-detect (clear the key); inner Some = set the language.
+            if let Some(inner) = language_code {
+                match inner {
+                    Some(lang) => edits.push(ConfigEdit::SetPath {
+                        segments: vec![
+                            "voice_mode".into(),
+                            "elevenlabs".into(),
+                            "language_code".into(),
+                        ],
+                        value: lang.into(),
+                    }),
+                    None => edits.push(ConfigEdit::ClearPath {
+                        segments: vec![
+                            "voice_mode".into(),
+                            "elevenlabs".into(),
+                            "language_code".into(),
+                        ],
+                    }),
+                }
+            }
+            if let Some(s) = speed {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec![
+                        "voice_mode".into(),
+                        "elevenlabs".into(),
+                        "speed".into(),
+                    ],
+                    value: s.into(),
+                });
+            }
+            if let Err(err) =
+                crate::legacy_core::config::edit::apply(codex_home.as_path(), edits).await
+            {
+                tracing::warn!(%err, "failed to persist voice_mode settings to config.toml");
+            }
+        });
+    }
+
     /// Cache the last-saved ElevenLabs language and speed so re-opening
     /// `/voice-setup` reflects the latest values without a config reload.
     pub(crate) fn update_elevenlabs_voice_settings(

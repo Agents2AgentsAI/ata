@@ -790,14 +790,7 @@ impl App {
                 self.chat_widget.set_reading_view_server(server);
             }
             AppEvent::ReadingViewModeChanged(mode) => {
-                // Full plumbing (persist to ~/.ata/config.toml + propagate to
-                // DocumentCache.set_display_mode + browser/tui routing) lands
-                // in Wave 9C once chatwidget_document_reader is back in the
-                // build. Stub now just logs the change.
-                let _ = mode;
-                tracing::info!(
-                    "reading-view mode change received; persistence pending Wave 9C"
-                );
+                self.chat_widget.set_reading_view_mode(mode);
             }
             // ── Voice-mode TTS controls (reading-view producers) ─────
             #[cfg(not(target_os = "linux"))]
@@ -895,6 +888,7 @@ impl App {
             | AppEvent::VoiceModeTtsFinished => {
                 // Voice mode is unavailable on linux — drop the event.
             }
+            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateVoiceSettings {
                 startup_enabled,
                 tts_enabled,
@@ -905,11 +899,7 @@ impl App {
                 verbosity,
                 tts_backend,
             } => {
-                // Wave 9A wires the producer (VoiceSetupView). The consumer
-                // side (chat_widget.apply_voice_settings + config.toml
-                // persistence) lights up in Wave 9D when the voice_mode
-                // module is brought back into the build.
-                let _ = (
+                self.chat_widget.apply_and_persist_voice_settings(
                     startup_enabled,
                     tts_enabled,
                     stt_enabled,
@@ -919,10 +909,10 @@ impl App {
                     verbosity,
                     tts_backend,
                 );
-                tracing::info!(
-                    "voice settings update received from VoiceSetupView; \
-                     full apply pending Wave 9D"
-                );
+            }
+            #[cfg(target_os = "linux")]
+            AppEvent::UpdateVoiceSettings { .. } => {
+                // Voice mode is unavailable on linux.
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);

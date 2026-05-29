@@ -248,6 +248,11 @@ pub(crate) struct BottomPane {
     /// an agent switch — a live re-presentation always opens and clears
     /// the marker (see `show_document_reader`).
     closed_document_ids: std::collections::HashSet<String>,
+    /// When true, the composer cursor is suppressed regardless of focus
+    /// state. Set during voice mode so the recording UI is the only
+    /// visible focus indicator; released by a matching
+    /// `set_force_hide_cursor(false)` call.
+    force_hide_cursor: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -306,6 +311,7 @@ impl BottomPane {
             context_window_used_tokens: None,
             keymap,
             closed_document_ids: std::collections::HashSet::new(),
+            force_hide_cursor: false,
         }
     }
 
@@ -453,16 +459,13 @@ impl BottomPane {
     }
 
     /// Force-hide the composer cursor while voice mode is active so the
-    /// recording UI is the only visible focus indicator. Honoured by
-    /// the composer's render; releasing the lock requires a matching
-    /// `set_force_hide_cursor(false)` call.
+    /// recording UI is the only visible focus indicator. Releasing the
+    /// lock requires a matching `set_force_hide_cursor(false)` call.
     pub(crate) fn set_force_hide_cursor(&mut self, hidden: bool) {
-        // Wave 9D stub: the composer's render currently honours the
-        // `has_input_focus` field directly. Wiring the explicit "force
-        // hide" latch lands once the composer cursor state machine is
-        // refactored — until then this just suppresses focus so the
-        // cursor naturally disappears.
-        self.has_input_focus = !hidden;
+        if self.force_hide_cursor == hidden {
+            return;
+        }
+        self.force_hide_cursor = hidden;
         self.request_redraw();
     }
 
@@ -1677,6 +1680,9 @@ impl BottomPane {
         area: Rect,
         composer_right_reserve: u16,
     ) -> Option<(u16, u16)> {
+        if self.force_hide_cursor {
+            return None;
+        }
         self.as_renderable_with_composer_right_reserve(composer_right_reserve)
             .cursor_pos(area)
     }
