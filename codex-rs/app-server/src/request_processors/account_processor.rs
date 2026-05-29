@@ -238,20 +238,27 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
-            // TODO(ata-upstream-merge): wire ATA-specific login flows back in.
-            // ATA's account_processor.rs adds +521 lines of handlers for these
-            // (Copilot device flow, provider API keys, Gemini OAuth, ATA OTP).
-            // They depend on Supabase/AtaAccountConfig/models_manager which
-            // aren't wired on this branch yet.
-            LoginAccountParams::CopilotDeviceCode
-            | LoginAccountParams::ProviderApiKey { .. }
-            | LoginAccountParams::GeminiOauth
-            | LoginAccountParams::AtaSendOtp { .. }
-            | LoginAccountParams::AtaVerifyOtp { .. }
-            | LoginAccountParams::AtaLogout => {
-                return Err(invalid_request(
-                    "ATA-specific login flow is temporarily disabled during upstream merge.",
-                ));
+            LoginAccountParams::CopilotDeviceCode => {
+                self.login_copilot_device_code_v2(request_id).await;
+            }
+            LoginAccountParams::ProviderApiKey {
+                provider_id,
+                api_key,
+            } => {
+                self.login_provider_api_key_v2(request_id, provider_id, api_key)
+                    .await;
+            }
+            LoginAccountParams::GeminiOauth => {
+                self.login_gemini_oauth_v2(request_id).await;
+            }
+            LoginAccountParams::AtaSendOtp { email } => {
+                self.ata_send_otp_v2(request_id, email).await;
+            }
+            LoginAccountParams::AtaVerifyOtp { email, otp } => {
+                self.ata_verify_otp_v2(request_id, email, otp).await;
+            }
+            LoginAccountParams::AtaLogout => {
+                self.ata_logout_v2(request_id).await;
             }
         }
         Ok(())
@@ -966,4 +973,330 @@ impl AccountRequestProcessor {
 
         Ok((primary, rate_limits_by_limit_id))
     }
+
+    // ─── ATA-specific login flows ────────────────────────────────────────
+    //
+    // Restored after upstream merge: see commit 543b649c1c (supabase mod
+    // wired) and 73e0b9724b (original stubs introduced).
+
+    async fn login_copilot_device_code_v2(&self, request_id: ConnectionRequestId) {
+        let result = self.login_copilot_device_code_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn login_copilot_device_code_response(
+        &self,
+    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(existing) = guard.take() {
+                drop(existing);
+            }
+        }
+
+        let device = start_copilot_device_flow()
+            .await
+            .map_err(|err| internal_error(format!("failed to start GitHub device flow: {err}")))?;
+
+        let login_id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
+        {
+            let mut guard = self.active_login.lock().await;
+            *guard = Some(ActiveLogin::DeviceCode {
+                cancel: cancel.clone(),
+                login_id,
+            });
+        }
+
+        let user_code = device.user_code.clone();
+        let verification_uri = device.verification_uri.clone();
+
+        let outgoing_clone = self.outgoing.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let codex_home = self.config.codex_home.clone();
+        let store_mode = self.config.cli_auth_credentials_store_mode;
+        let active_login = self.active_login.clone();
+        let device_for_task = device.clone();
+
+        tokio::spawn(async move {
+            let (mut success, mut error_msg) = tokio::select! {
+                _ = cancel.cancelled() => {
+                    (false, Some("Login was not completed".to_string()))
+                }
+                result = async {
+                    let token = poll_copilot_access_token(&device_for_task).await?;
+                    complete_copilot_login(&codex_home, store_mode, token).await
+                } => {
+                    match result {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    }
+                }
+            };
+
+            if success {
+                let codex_home_for_edit = codex_home.clone();
+                let edit_result = tokio::task::spawn_blocking(move || {
+                    ConfigEditsBuilder::new(&codex_home_for_edit)
+                        .set_model(Some("gpt-4.1"), None)
+                        .with_edits([ConfigEdit::SetPath {
+                            segments: vec!["model_provider".to_string()],
+                            value: toml_edit::value("copilot"),
+                        }])
+                        .apply_blocking()
+                })
+                .await;
+                let edit_err = match edit_result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(err)) => Some(err.to_string()),
+                    Err(join_err) => Some(format!("config edit task panicked: {join_err}")),
+                };
+                if let Some(err) = edit_err {
+                    warn!(
+                        "failed to persist model_provider=copilot to config.toml after login: {err}"
+                    );
+                    if let Err(rollback_err) = copilot_logout(&codex_home, store_mode) {
+                        warn!(
+                            "failed to roll back Copilot credentials after config write failure: {rollback_err}"
+                        );
+                    }
+                    success = false;
+                    error_msg = Some(format!(
+                        "Signed in to GitHub Copilot but could not update config: {err}. Please retry."
+                    ));
+                }
+                auth_manager.reload().await;
+            }
+
+            outgoing_clone
+                .send_server_notification(ServerNotification::AccountLoginCompleted(
+                    AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    },
+                ))
+                .await;
+
+            let mut guard = active_login.lock().await;
+            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                *guard = None;
+            }
+        });
+
+        Ok(LoginAccountResponse::CopilotDeviceCode {
+            login_id: login_id.to_string(),
+            verification_uri,
+            user_code,
+        })
+    }
+
+    async fn login_provider_api_key_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        provider_id: String,
+        api_key: String,
+    ) {
+        let result = self
+            .login_provider_api_key_common(provider_id.as_str(), api_key.as_str())
+            .await
+            .map(|()| LoginAccountResponse::ProviderApiKey {});
+        let logged_in = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+
+        if logged_in {
+            self.send_login_success_notifications(/*login_id*/ None).await;
+        }
+    }
+
+    async fn login_provider_api_key_common(
+        &self,
+        provider_id: &str,
+        api_key: &str,
+    ) -> std::result::Result<(), JSONRPCErrorError> {
+        if api_key.trim().is_empty() {
+            return Err(invalid_request("API key must not be empty."));
+        }
+        if let Err(err) = login_with_provider_api_key(
+            &self.config.codex_home,
+            provider_id,
+            api_key,
+            self.config.cli_auth_credentials_store_mode,
+        ) {
+            return Err(internal_error(format!(
+                "failed to save {provider_id} api key: {err}"
+            )));
+        }
+        self.auth_manager.reload().await;
+
+        if provider_id != PROVIDER_OPENAI {
+            let codex_home = self.config.codex_home.clone();
+            let provider_for_edit = provider_id.to_string();
+            let edit_result = tokio::task::spawn_blocking(move || {
+                ConfigEditsBuilder::new(&codex_home)
+                    .with_edits([
+                        ConfigEdit::ClearPath {
+                            segments: vec!["model".to_string()],
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["model_provider".to_string()],
+                            value: toml_edit::value(provider_for_edit),
+                        },
+                    ])
+                    .apply_blocking()
+            })
+            .await;
+            match edit_result {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!("failed to set model_provider={provider_id} after API key save: {err}");
+                }
+                Err(join_err) => {
+                    warn!(
+                        "config edit task panicked while setting model_provider={provider_id}: {join_err}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn login_gemini_oauth_v2(&self, request_id: ConnectionRequestId) {
+        let opts = GeminiServerOptions::new(
+            self.config.codex_home.to_path_buf(),
+            self.config.cli_auth_credentials_store_mode,
+        );
+        let server = match run_gemini_login_server(opts) {
+            Ok(server) => server,
+            Err(err) => {
+                let resp: Result<LoginAccountResponse, JSONRPCErrorError> = Err(internal_error(
+                    format!("failed to start Gemini OAuth server: {err}"),
+                ));
+                self.outgoing.send_result(request_id, resp).await;
+                return;
+            }
+        };
+
+        let login_id = Uuid::new_v4();
+        let auth_url = server.auth_url.clone();
+        let response = LoginAccountResponse::GeminiOauthContinueInBrowser {
+            login_id: login_id.to_string(),
+            auth_url: auth_url.clone(),
+        };
+        let result: Result<LoginAccountResponse, JSONRPCErrorError> = Ok(response);
+        self.outgoing.send_result(request_id, result).await;
+
+        let outgoing = self.outgoing.clone();
+        tokio::spawn(async move {
+            let (success, error_msg) = match server.block_until_done().await {
+                Ok(()) => (true, None),
+                Err(err) => (false, Some(err.to_string())),
+            };
+            outgoing
+                .send_server_notification(ServerNotification::AccountLoginCompleted(
+                    AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    },
+                ))
+                .await;
+        });
+    }
+
+    async fn ata_send_otp_v2(&self, request_id: ConnectionRequestId, email: String) {
+        let result = self
+            .ata_send_otp_common(email.as_str())
+            .await
+            .map(|()| LoginAccountResponse::AtaSendOtp {});
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn ata_send_otp_common(&self, email: &str) -> std::result::Result<(), JSONRPCErrorError> {
+        if email.trim().is_empty() {
+            return Err(invalid_request("Email must not be empty."));
+        }
+        let ata_config = ata_account_config_from_env_or_default();
+        let client = SupabaseClient::new(ata_config.supabase_url, ata_config.supabase_anon_key);
+        let auth = SupabaseAuth::new(client);
+        match auth.sign_in_with_otp(email).await {
+            Ok(()) => Ok(()),
+            Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
+                "Supabase rejected OTP request ({status}): {message}"
+            ))),
+            Err(err) => Err(internal_error(format!("failed to send OTP: {err}"))),
+        }
+    }
+
+    async fn ata_verify_otp_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        email: String,
+        otp: String,
+    ) {
+        let result = self
+            .ata_verify_otp_common(email.as_str(), otp.as_str())
+            .await
+            .map(|email| LoginAccountResponse::AtaVerifyOtp { email });
+        let verified = result.is_ok();
+        self.outgoing.send_result(request_id, result).await;
+        if verified {
+            let payload = self.current_account_updated_notification();
+            self.outgoing
+                .send_server_notification(ServerNotification::AccountUpdated(payload))
+                .await;
+        }
+    }
+
+    async fn ata_verify_otp_common(
+        &self,
+        email: &str,
+        otp: &str,
+    ) -> std::result::Result<String, JSONRPCErrorError> {
+        if email.trim().is_empty() {
+            return Err(invalid_request("Email must not be empty."));
+        }
+        if otp.trim().is_empty() {
+            return Err(invalid_request("OTP must not be empty."));
+        }
+        let ata_config = ata_account_config_from_env_or_default();
+        let client = SupabaseClient::new(ata_config.supabase_url, ata_config.supabase_anon_key);
+        let auth = SupabaseAuth::new(client);
+        match auth.exchange_code_for_session(email, otp).await {
+            Ok(session) => {
+                let user_email = session.user.email.clone();
+                if let Err(err) = save_ata_session(&self.config.codex_home, &session) {
+                    return Err(internal_error(format!(
+                        "failed to persist ATA session: {err}"
+                    )));
+                }
+                Ok(user_email)
+            }
+            Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
+                "Supabase rejected OTP ({status}): {message}"
+            ))),
+            Err(err) => Err(internal_error(format!("failed to verify OTP: {err}"))),
+        }
+    }
+
+    async fn ata_logout_v2(&self, request_id: ConnectionRequestId) {
+        let result = match delete_ata_session(&self.config.codex_home) {
+            Ok(_) => Ok(LoginAccountResponse::AtaLogout {}),
+            Err(err) => Err(internal_error(format!(
+                "failed to clear ATA session: {err}"
+            ))),
+        };
+        self.outgoing.send_result(request_id, result).await;
+    }
+}
+
+/// Resolve the active `AtaAccountConfig` for ATA Supabase calls.
+///
+/// `AtaAccountConfig::default()` returns the public supabase project that
+/// ships with the binary. Once we plumb the field through `Config` proper
+/// (it lives under `config.toml` as `[ata_account]`) this helper can read
+/// from `self.config` instead.
+fn ata_account_config_from_env_or_default() -> AtaAccountConfig {
+    AtaAccountConfig::default()
 }
