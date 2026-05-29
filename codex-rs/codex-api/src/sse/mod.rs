@@ -1,4 +1,6 @@
+pub mod anthropic;
 pub(crate) mod chat_completions;
+pub mod gemini;
 pub(crate) mod responses;
 
 pub(crate) use responses::ResponsesStreamEvent;

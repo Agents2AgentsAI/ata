@@ -1642,15 +1642,39 @@ impl ModelClientSession {
                 )
                 .await
             }
-            // TODO(ata-upstream-merge): the ATA-specific wire APIs are
-            // dispatched via codex-api's provider adapters, not via this
-            // upstream Responses-only path. For now, error so callers fall
-            // back; wire up provider routing in a follow-up.
-            WireApi::AnthropicMessages | WireApi::GeminiGenerate | WireApi::CopilotInline => {
-                Err(codex_protocol::error::CodexErr::Stream(
-                    format!("non-Responses WireApi ({wire_api}) not yet wired in upstream client"),
-                    None,
-                ))
+            WireApi::AnthropicMessages => {
+                anthropic::stream_anthropic_api(self, prompt, model_info, effort, summary).await
+            }
+            WireApi::GeminiGenerate => {
+                gemini::stream_gemini_api(self, prompt, model_info, effort, summary).await
+            }
+            WireApi::CopilotInline => {
+                // GitHub Copilot exposes most models via Chat Completions, but
+                // newer reasoning-tier models (`gpt-N` for N>=5, except
+                // `gpt-5-mini`) only work via the Responses API — Chat
+                // Completions returns `unsupported_api_for_model` for them.
+                // Mirrors opencode's per-model dispatch.
+                if copilot::requires_responses_api(&model_info.slug) {
+                    copilot::stream_copilot_responses_api(
+                        self,
+                        prompt,
+                        model_info,
+                        effort,
+                        summary,
+                        service_tier,
+                        turn_metadata_header,
+                        session_telemetry,
+                    )
+                    .await
+                } else {
+                    copilot::stream_copilot_chat_completions(
+                        self,
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                    )
+                    .await
+                }
             }
         }
     }
@@ -2275,8 +2299,9 @@ impl WebsocketTelemetry for ApiTelemetry {
     }
 }
 
-#[allow(dead_code)]
+pub(crate) mod anthropic;
 pub(crate) mod copilot;
+pub(crate) mod gemini;
 #[allow(dead_code)]
 pub(crate) mod provider_streaming;
 
