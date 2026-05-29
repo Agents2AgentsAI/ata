@@ -1064,6 +1064,18 @@ pub(crate) enum AppEvent {
     /// can decide whether to route to the in-TUI reader or the browser.
     ReadingViewModeChanged(ReadingViewMode),
 
+    /// Raw browser → app message forwarded from the
+    /// `codex-reading-view-server` WebSocket. The payload is the
+    /// browser-emitted JSON string; the chatwidget parses it and routes
+    /// to the right handler (follow-up question, read-aloud request,
+    /// karaoke seek, …).
+    ReadingViewBrowserMessage(String),
+
+    /// The `codex-reading-view-server` finished its asynchronous startup
+    /// and is ready to accept pending events. The chatwidget moves the
+    /// server into its own state and flushes any queued payloads.
+    ReadingViewServerStarted(codex_reading_view_server::ReadingViewServer),
+
     /// Voice-mode TTS controls emitted by the document reader. The Wave 9D
     /// `voice_mode` module owns the consumer side; defining the variants
     /// here unblocks the producer (Wave 9B reader views).

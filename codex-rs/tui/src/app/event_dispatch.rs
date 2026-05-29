@@ -782,6 +782,13 @@ impl App {
                 // selection just like typed prompts.
                 self.chat_widget.submit_user_text(text);
             }
+            AppEvent::ReadingViewBrowserMessage(json) => {
+                self.chat_widget
+                    .handle_reading_view_browser_message(&json);
+            }
+            AppEvent::ReadingViewServerStarted(server) => {
+                self.chat_widget.set_reading_view_server(server);
+            }
             AppEvent::ReadingViewModeChanged(mode) => {
                 // Full plumbing (persist to ~/.ata/config.toml + propagate to
                 // DocumentCache.set_display_mode + browser/tui routing) lands

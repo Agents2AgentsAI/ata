@@ -412,6 +412,8 @@ mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
 mod user_messages;
+#[path = "chatwidget/voice_mode_stub.rs"]
+mod voice_mode;
 use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
 use self::user_messages::QueueDrain;
@@ -708,6 +710,47 @@ pub(crate) struct ChatWidget {
     realtime_conversation: RealtimeConversationUiState,
     last_rendered_user_message_display: Option<UserMessageDisplay>,
     last_non_retry_error: Option<(String, String)>,
+
+    // ── Reading view (browser routing) ────────────────────────────────
+    /// Persisted reading-view routing mode. `Tui` keeps documents in the
+    /// bottom-pane reader, `Browser` hands them off to the embedded
+    /// codex-reading-view-server, `Disabled` falls back to the inline
+    /// transcript cell.
+    reading_view_mode: crate::app_event::ReadingViewMode,
+    /// In-process HTTP/WS server hosting the browser-mode reader. `None`
+    /// until the first browser-mode document is presented and the server
+    /// has fully started.
+    reading_view_server: Option<codex_reading_view_server::ReadingViewServer>,
+    /// Browser-mode document state — title, sections, raw markdown, and
+    /// the document id used to deduplicate `PresentDocumentEvent`s
+    /// arriving while the reader is already showing the same document.
+    /// `title`/`doc_id` use `String` (not Option) — empty string is the
+    /// "no document loaded" sentinel, which keeps `.is_empty()` checks
+    /// terse at every call site.
+    reading_view_browser_doc_id: String,
+    reading_view_browser_title: String,
+    /// Voice-stripped (heading, body) pairs used for TTS alignment.
+    reading_view_browser_sections: Vec<(String, String)>,
+    /// Raw markdown bodies (no voice-tag stripping) used for transcript export.
+    reading_view_browser_raw_sections: Vec<String>,
+    /// Whether an "info: reading view opened in browser" message is
+    /// pending — surfaced once the server URL is available so the chat
+    /// transcript reflects the new browser window.
+    reading_view_pending_browser_info: bool,
+    /// JSON payloads emitted before the server finished starting; flushed
+    /// in `set_reading_view_server`.
+    reading_view_pending_events: Vec<String>,
+    /// Section-update payloads (already serialized JSON strings) queued
+    /// for staggered delivery to the browser. Stored as strings to keep
+    /// the spawned dispatcher cheap to clone (no `serde_json::Value`
+    /// reflection across the await boundary).
+    reading_view_pending_section_updates: Vec<String>,
+
+    /// True when the most recent submission originated from this widget
+    /// (the composer or a synthesised browser-mode follow-up) rather than
+    /// from an external app-server client. Used by the browser reader to
+    /// distinguish locally-routed follow-ups from agent-side answers.
+    last_turn_was_local_submit: bool,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1865,7 +1908,24 @@ impl ChatWidget {
         // Ensure the UI redraws to reflect placeholder removal.
         self.request_redraw();
     }
+
+    /// Voice-mode TTS controls invoked from the document reader. The full
+    /// implementations live in the (offline) `voice_mode` module and ship in
+    /// Wave 9D — until then these are no-op stubs so the producer compiles.
+    pub(crate) fn on_voice_interrupt_tts(&mut self) {
+        tracing::debug!("on_voice_interrupt_tts called; full impl pending Wave 9D");
+    }
+
+    pub(crate) fn on_voice_pause_tts(&mut self) {
+        tracing::debug!("on_voice_pause_tts called; full impl pending Wave 9D");
+    }
+
+    pub(crate) fn on_voice_resume_tts(&mut self) {
+        tracing::debug!("on_voice_resume_tts called; full impl pending Wave 9D");
+    }
 }
+
+include!("chatwidget_document_reader.rs");
 
 fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
     summary.responses_api_overhead_ms > 0

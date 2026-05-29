@@ -388,7 +388,7 @@ fn browser_resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>
         return format!("ata --yolo resume {thread_id}");
     }
 
-    crate::legacy_core::util::resume_command(thread_name, None)
+    codex_utils_cli::resume_command(thread_name, None)
         .map(|command| command.replacen("ata ", "ata --yolo ", 1))
         .unwrap_or_else(|| "ata --yolo resume <session-id>".to_string())
 }
@@ -1320,47 +1320,13 @@ impl ChatWidget {
     /// the target word's start time so audio and visual highlight stay in sync.
     #[cfg(not(target_os = "linux"))]
     fn handle_browser_karaoke_seek(&mut self, word_index: usize) {
-        let mut section_index = None;
-        if let Some(ref mut state) = self.voice_mode_state {
-            let offset = state.selection_word_offset.unwrap_or(0);
-
-            // With alignment-driven karaoke, data-wi IS the spoken index.
-            // With heuristic wrapping, data-wi is the visible index and
-            // needs visible→spoken conversion.
-            let spoken = if state.alignment_driven_karaoke {
-                word_index.saturating_sub(offset)
-            } else {
-                let visible = word_index.saturating_sub(offset);
-                let mut eq_offset = 0usize;
-                for &(_, start, end) in &state.equation_word_spans {
-                    let eq_len = end - start;
-                    let eq_visible_start = start.saturating_sub(eq_offset);
-                    if visible < eq_visible_start {
-                        break;
-                    }
-                    eq_offset += eq_len;
-                }
-                visible + eq_offset
-            };
-
-            state.tts_highlight_word_idx = Some(spoken);
-            section_index = state
-                .narrating_section
-                .as_ref()
-                .map(|(_, section_index, _)| *section_index);
-
-            // Seek the audio to the target word's start time.
-            if let Some(entry) = state.tts_alignment_timeline.get(spoken) {
-                let target_ms = entry.start_ms;
-                if let Some(ref player) = state.audio_player {
-                    player.seek_to_ms(target_ms);
-                }
-            }
-        }
-        // Forward the updated word position back to the browser.
+        // Wave 9C stub: voice_mode_state is not yet wired (Wave 9D), so
+        // we cannot translate the click into a TTS-spoken word index or
+        // seek the audio player. Mirror the click back to the browser
+        // anyway so the visible cursor still moves.
         let ws_msg = serde_json::json!({
             "type": "karaokeWord",
-            "sectionIndex": section_index,
+            "sectionIndex": serde_json::Value::Null,
             "wordIndex": word_index,
         });
         self.forward_to_reading_view_server(&ws_msg.to_string());
@@ -1373,22 +1339,12 @@ impl ChatWidget {
     /// words in the currently narrated text.
     #[cfg(not(target_os = "linux"))]
     fn handle_browser_seek_to_progress(&mut self, fraction: f64) {
+        // Wave 9C stub: without voice_mode_state we don't know how many
+        // words are in the active narration. Forward a synthetic
+        // word-index based on the fraction so the UI still echoes the
+        // click; Wave 9D replaces this with the real timeline lookup.
         let fraction = fraction.clamp(0.0, 1.0);
-        let total_words = self
-            .voice_mode_state
-            .as_ref()
-            .and_then(|s| s.narrating_cleaned_text.as_ref())
-            .map(|t| t.split_whitespace().count())
-            .unwrap_or(0);
-        if total_words == 0 {
-            return;
-        }
-        let target_word = ((fraction * total_words as f64).round() as usize).min(total_words.saturating_sub(1));
-        let offset = self
-            .voice_mode_state
-            .as_ref()
-            .and_then(|s| s.selection_word_offset)
-            .unwrap_or(0);
-        self.handle_browser_karaoke_seek(target_word + offset);
+        let synthetic_word = (fraction * 100.0).round() as usize;
+        self.handle_browser_karaoke_seek(synthetic_word);
     }
 }

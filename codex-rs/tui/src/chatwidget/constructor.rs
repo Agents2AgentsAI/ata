@@ -219,6 +219,16 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
+            reading_view_mode: crate::app_event::ReadingViewMode::default(),
+            reading_view_server: None,
+            reading_view_browser_doc_id: String::new(),
+            reading_view_browser_title: String::new(),
+            reading_view_browser_sections: Vec::new(),
+            reading_view_browser_raw_sections: Vec::new(),
+            reading_view_pending_browser_info: false,
+            reading_view_pending_events: Vec::new(),
+            reading_view_pending_section_updates: Vec::new(),
+            last_turn_was_local_submit: false,
         };
 
         widget.prefetch_rate_limits();
