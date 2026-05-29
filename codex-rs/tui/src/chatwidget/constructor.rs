@@ -229,6 +229,24 @@ impl ChatWidget {
             reading_view_pending_events: Vec::new(),
             reading_view_pending_section_updates: Vec::new(),
             last_turn_was_local_submit: false,
+            #[cfg(not(target_os = "linux"))]
+            voice_mode_state: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_api_key: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_language: None,
+            #[cfg(not(target_os = "linux"))]
+            cached_elevenlabs_speed: None,
+            #[cfg(not(target_os = "linux"))]
+            pending_voice_startup_cells: Vec::new(),
+            // Placeholder auth: `build_elevenlabs_proxy` currently returns
+            // None unconditionally, so the held manager is unused at
+            // runtime. Replaced with a real handle once `AuthMode::Ata`
+            // is wired through `codex-login`.
+            #[cfg(not(target_os = "linux"))]
+            auth_manager: codex_login::AuthManager::from_auth_for_testing(
+                codex_login::CodexAuth::from_api_key("placeholder"),
+            ),
         };
 
         widget.prefetch_rate_limits();

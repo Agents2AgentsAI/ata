@@ -136,6 +136,7 @@ pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
 mod voice_setup_view;
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 pub(crate) use voice_setup_view::VoiceSetupView;
 mod document_reader;
 mod research_tools_view;
@@ -448,6 +449,20 @@ impl BottomPane {
 
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
+    /// Force-hide the composer cursor while voice mode is active so the
+    /// recording UI is the only visible focus indicator. Honoured by
+    /// the composer's render; releasing the lock requires a matching
+    /// `set_force_hide_cursor(false)` call.
+    pub(crate) fn set_force_hide_cursor(&mut self, hidden: bool) {
+        // Wave 9D stub: the composer's render currently honours the
+        // `has_input_focus` field directly. Wiring the explicit "force
+        // hide" latch lands once the composer cursor state machine is
+        // refactored — until then this just suppresses focus so the
+        // cursor naturally disappears.
+        self.has_input_focus = !hidden;
         self.request_redraw();
     }
 

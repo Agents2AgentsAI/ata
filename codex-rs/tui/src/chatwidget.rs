@@ -412,7 +412,7 @@ mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
 mod user_messages;
-#[path = "chatwidget/voice_mode_stub.rs"]
+#[cfg(not(target_os = "linux"))]
 mod voice_mode;
 use self::user_messages::PendingSteer;
 use self::user_messages::PendingSteerCompareKey;
@@ -751,6 +751,37 @@ pub(crate) struct ChatWidget {
     /// from an external app-server client. Used by the browser reader to
     /// distinguish locally-routed follow-ups from agent-side answers.
     last_turn_was_local_submit: bool,
+
+    // ── Voice mode (non-linux only) ───────────────────────────────────
+    /// Active voice-mode state machine. `None` when voice mode is off.
+    #[cfg(not(target_os = "linux"))]
+    voice_mode_state: Option<voice_mode::VoiceModeState>,
+    /// In-session override for the ElevenLabs API key — set by
+    /// `/voice-setup` (Save) so the new key takes effect immediately
+    /// without reloading `config.toml`.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_api_key: Option<String>,
+    /// In-session override for the ElevenLabs language code. Outer
+    /// `Option` distinguishes "user touched this field" from "use the
+    /// disk config"; inner `Option<String>` distinguishes "explicit
+    /// language" from "auto-detect".
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_language: Option<Option<String>>,
+    /// In-session override for the ElevenLabs playback speed.
+    #[cfg(not(target_os = "linux"))]
+    cached_elevenlabs_speed: Option<f64>,
+    /// History cells deferred until the session is ready — voice mode
+    /// can be enabled at startup before the agent thread has accepted
+    /// any input, in which case we hold the welcome/warning cells.
+    #[cfg(not(target_os = "linux"))]
+    pending_voice_startup_cells: Vec<Box<dyn crate::history_cell::HistoryCell>>,
+    /// Auth handle used by the (currently-stubbed) ElevenLabs proxy
+    /// builder. Kept as a real `Arc<AuthManager>` rather than `Option<…>`
+    /// so the existing call sites compile unchanged; a placeholder
+    /// in-memory auth is wired in the constructor until `AuthMode::Ata`
+    /// lands in `codex-login`.
+    #[cfg(not(target_os = "linux"))]
+    auth_manager: Arc<codex_login::AuthManager>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1909,19 +1940,19 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    /// Voice-mode TTS controls invoked from the document reader. The full
-    /// implementations live in the (offline) `voice_mode` module and ship in
-    /// Wave 9D — until then these are no-op stubs so the producer compiles.
-    pub(crate) fn on_voice_interrupt_tts(&mut self) {
-        tracing::debug!("on_voice_interrupt_tts called; full impl pending Wave 9D");
-    }
-
-    pub(crate) fn on_voice_pause_tts(&mut self) {
-        tracing::debug!("on_voice_pause_tts called; full impl pending Wave 9D");
-    }
-
-    pub(crate) fn on_voice_resume_tts(&mut self) {
-        tracing::debug!("on_voice_resume_tts called; full impl pending Wave 9D");
+    /// Move any deferred voice startup cells into the live transcript.
+    /// Called when the agent session reaches a state where direct
+    /// `add_to_history` is safe (typically: end of the first
+    /// voice-narrated turn). No-op on linux (voice mode is disabled).
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn flush_deferred_voice_cells(&mut self) {
+        if self.pending_voice_startup_cells.is_empty() {
+            return;
+        }
+        for cell in std::mem::take(&mut self.pending_voice_startup_cells) {
+            self.add_boxed_history(cell);
+        }
+        self.request_redraw();
     }
 }
 

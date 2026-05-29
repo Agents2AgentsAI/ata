@@ -271,6 +271,9 @@ pub enum Feature {
     /// sandbox-writable root at that path so the agent can write under
     /// `~/.ata/<workspace_id>/knowledge-base/...` without approval prompts.
     ResearchKnowledgeBase,
+    /// ATA-private: voice mode (push-to-talk STT, TTS narration, reading-view
+    /// karaoke). Gated off by default — `/voice-setup` flips it on.
+    VoiceMode,
 }
 
 impl Feature {
@@ -1297,6 +1300,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "research_knowledge_base",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
 ];
 

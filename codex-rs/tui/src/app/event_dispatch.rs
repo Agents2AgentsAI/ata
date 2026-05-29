@@ -806,9 +806,26 @@ impl App {
             | AppEvent::VoiceModeNarrateSection { .. }
             | AppEvent::VoiceModePrefetchSection { .. } => {
                 // Voice-mode TTS controls — producers wired in Wave 9B (doc
-                // reader). Consumer (voice_mode.rs apply/playback path)
-                // lights up in Wave 9D.
-                tracing::debug!("voice-mode TTS control received; consumer pending Wave 9D");
+                // reader). Consumer dispatch into `voice_mode` lands in the
+                // follow-up to Wave 9D (full reader → voice control wiring).
+                tracing::debug!(
+                    "voice-mode TTS control received; full dispatch pending follow-up"
+                );
+            }
+            AppEvent::VoiceModeMeterTick { .. }
+            | AppEvent::VoiceModePttTimeoutCheck
+            | AppEvent::VoiceModeHighlightTick
+            | AppEvent::VoiceModeTranscriptionComplete { .. }
+            | AppEvent::VoiceModeTranscriptionFailed { .. }
+            | AppEvent::VoiceModeTtsAudioChunk { .. }
+            | AppEvent::VoiceModeTtsError { .. }
+            | AppEvent::VoiceModeTtsFinished => {
+                // Voice-mode internal ticks/results. The full dispatch into
+                // ChatWidget voice handlers (on_voice_meter_tick,
+                // on_voice_transcription_complete, on_voice_tts_*) lands
+                // in the follow-up to Wave 9D — for now the module compiles
+                // and emits these events; consumers are stubs.
+                tracing::debug!("voice-mode internal event received; consumer pending follow-up");
             }
             AppEvent::UpdateVoiceSettings {
                 startup_enabled,

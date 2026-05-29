@@ -3324,7 +3324,7 @@ impl super::ChatWidget {
             } else {
                 // The `voice_input` flag from main is not yet wired in
                 // v0.129.0; submit as a plain text message for now.
-                let msg = super::UserMessage::from_text(text);
+                let msg = super::UserMessage::from(text);
                 self.submit_user_message(msg);
             }
         } else {

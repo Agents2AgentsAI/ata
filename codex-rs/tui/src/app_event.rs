@@ -1098,6 +1098,41 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Push-to-talk recording meter tick — the meter renders the most
+    /// recently observed audio level (encoded as a unicode meter glyph
+    /// string by `RecordingMeterState`).
+    VoiceModeMeterTick {
+        text: String,
+    },
+    /// The PTT timeout poller fired. Used to detect Space-release in
+    /// terminals that don't emit KeyEventKind::Release.
+    VoiceModePttTimeoutCheck,
+    /// Karaoke highlight tick — drives the per-word highlight cursor for
+    /// the active TTS narration.
+    VoiceModeHighlightTick,
+    /// Successful STT transcription delivered for submission to the agent.
+    VoiceModeTranscriptionComplete {
+        text: String,
+    },
+    /// STT transcription failed (mic error, missing API key, recording
+    /// too short, runtime error). The chatwidget surfaces the message.
+    VoiceModeTranscriptionFailed {
+        error: String,
+    },
+    /// A chunk of TTS audio + optional word-level alignment arrived from
+    /// the ElevenLabs WebSocket worker.
+    VoiceModeTtsAudioChunk {
+        pcm: Vec<i16>,
+        alignment: Option<codex_elevenlabs::TtsAlignment>,
+    },
+    /// TTS pipeline failure (backend missing / connection failure /
+    /// stream error). Surfaced inline so the user knows audio went silent.
+    VoiceModeTtsError {
+        error: String,
+    },
+    /// All in-flight TTS tasks for the current turn finished.
+    VoiceModeTtsFinished,
+
     /// Apply voice-mode settings produced by `VoiceSetupView` to the runtime
     /// chatwidget state and persist them to `~/.ata/config.toml`.
     /// The outer `Option`s on `language_code` / `speed` distinguish "user

@@ -74,6 +74,7 @@ pub mod legacy_core {
     pub use codex_core::LOCAL_AGENTS_MD_FILENAME;
     pub use codex_core::McpManager;
     pub use codex_core::ReadingViewDisplayMode;
+    pub use codex_login::AuthManager;
     pub use codex_core::check_execpolicy_for_warnings;
     pub use codex_core::format_exec_policy_error_with_source;
     pub use codex_core::grant_read_root_non_elevated;
