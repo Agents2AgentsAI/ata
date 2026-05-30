@@ -89,6 +89,7 @@ members = [
     "tui",
     "tools",
     "v8-poc",
+    "v8-shim",
     "utils/absolute-path",
     "utils/cargo-bin",
     "git-utils",
@@ -261,6 +262,7 @@ codex-utils-stream-parser = { path = "utils/stream-parser" }
 codex-utils-string = { path = "utils/string" }
 codex-utils-template = { path = "utils/template" }
 codex-v8-poc = { path = "v8-poc" }
+codex-v8-shim = { path = "v8-shim" }
 codex-windows-sandbox = { path = "windows-sandbox-rs" }
 core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }

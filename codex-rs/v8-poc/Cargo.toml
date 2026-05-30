@@ -16,6 +16,7 @@ sandbox = ["v8/v8_enable_sandbox"]
 workspace = true
 
 [dependencies]
+codex-v8-shim = { workspace = true }
 v8 = { workspace = true }
 
 [dev-dependencies]

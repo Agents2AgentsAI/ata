@@ -4344,9 +4344,14 @@ dependencies = [
 name = "codex-v8-poc"
 version = "0.0.0"
 dependencies = [
+ "codex-v8-shim",
  "pretty_assertions",
  "v8",
 ]
+
+[[package]]
+name = "codex-v8-shim"
+version = "0.0.0"
 
 [[package]]
 name = "codex-windows-sandbox"
