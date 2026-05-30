@@ -275,11 +275,17 @@ fn image_detail_original_is_a_removed_feature_key() {
 }
 
 #[test]
-fn js_repl_features_are_removed_feature_keys() {
-    assert_eq!(Feature::JsRepl.stage(), Stage::Removed);
+fn js_repl_is_under_development_and_default_off() {
+    // ATA Wave 9 cleanup re-registered the js_repl handler under
+    // `Feature::JsRepl` (see commit 58768010ec), so this feature is
+    // intentionally kept alive at `Stage::UnderDevelopment` — not removed.
+    assert_eq!(Feature::JsRepl.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::JsRepl.default_enabled(), false);
     assert_eq!(feature_for_key("js_repl"), Some(Feature::JsRepl));
+}
 
+#[test]
+fn js_repl_tools_only_is_a_removed_feature_key() {
     assert_eq!(Feature::JsReplToolsOnly.stage(), Stage::Removed);
     assert_eq!(Feature::JsReplToolsOnly.default_enabled(), false);
     assert_eq!(
