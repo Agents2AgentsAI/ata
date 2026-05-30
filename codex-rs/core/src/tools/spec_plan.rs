@@ -27,6 +27,12 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::artifacts::ArtifactsHandler;
+use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
+use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
+use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
+use crate::tools::handlers::crop_figure::CropFigureHandler;
 use crate::tools::handlers::cron::CronCreateHandler;
 use crate::tools::handlers::cron::CronDeleteHandler;
 use crate::tools::handlers::cron::CronListHandler;
@@ -39,6 +45,13 @@ use crate::tools::handlers::cron_session_spec::create_cron_session_list_tool;
 use crate::tools::handlers::cron_spec::create_cron_create_tool;
 use crate::tools::handlers::cron_spec::create_cron_delete_tool;
 use crate::tools::handlers::cron_spec::create_cron_list_tool;
+use crate::tools::handlers::document_reader::DocumentReaderHandler;
+use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
+use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
+use crate::tools::handlers::document_reader::PATCH_DOCUMENT_SECTION_TOOL;
+use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
+use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
+use crate::tools::handlers::document_reader::reading_view_tools_enabled;
 use crate::tools::handlers::monitor::MonitorListHandler;
 use crate::tools::handlers::monitor::MonitorStartHandler;
 use crate::tools::handlers::monitor::MonitorStopHandler;
@@ -524,12 +537,61 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_core_utility_tools(context, planned_tools);
     add_collaboration_tools(context, planned_tools);
     add_scheduling_tools(context, planned_tools);
+    add_reading_view_tools(context, planned_tools);
+    add_artifacts_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
     for spec in hosted_model_tool_specs(context.turn_context) {
         planned_tools.add_hosted_spec(spec);
     }
+}
+
+/// Register the ATA reading-view tool family: the five `DocumentReaderHandler`
+/// tools (`present_reading_view`, `update_document_section`, `append_to_section`,
+/// `add_document_section`, `patch_document_section`) plus the two companion
+/// PDF tools (`attach_url_files`, `crop_figure`). All gated together by
+/// `reading_view_tools_enabled` so a single `[reading_view] mode = "disabled"`
+/// hides the whole surface from the model.
+fn add_reading_view_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !reading_view_tools_enabled(&context.turn_context.config) {
+        return;
+    }
+    for (name, spec_lazy) in [
+        ("present_reading_view", &*PRESENT_DOCUMENT_TOOL),
+        ("update_document_section", &*UPDATE_DOCUMENT_SECTION_TOOL),
+        ("append_to_section", &*APPEND_TO_SECTION_TOOL),
+        ("add_document_section", &*ADD_DOCUMENT_SECTION_TOOL),
+        ("patch_document_section", &*PATCH_DOCUMENT_SECTION_TOOL),
+    ] {
+        planned_tools.add(DocumentReaderHandler::new(
+            ToolName::plain(name),
+            spec_lazy.clone(),
+        ));
+    }
+    planned_tools.add(AttachUrlFilesHandler::new(ATTACH_URL_FILES_TOOL.clone()));
+    planned_tools.add(CropFigureHandler::new(CROP_FIGURE_TOOL.clone()));
+}
+
+/// Register the freeform `artifacts` tool when `Feature::Artifact` is on.
+/// The runtime delegates to the preinstalled `@oai/artifact-tool` Node
+/// package (handler dispatches via `ArtifactsHandler`).
+fn add_artifacts_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::Artifact)
+    {
+        return;
+    }
+    planned_tools.add(ArtifactsHandler::new(create_artifacts_tool()));
 }
 
 fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
