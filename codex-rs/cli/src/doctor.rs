@@ -1251,6 +1251,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::Ata => "ata_supabase",
     }
 }
 
@@ -1322,6 +1323,14 @@ fn stored_auth_issues(
             {
                 issues.push("agent identity auth is missing an agent identity token");
             }
+        }
+        codex_app_server_protocol::AuthMode::Ata => {
+            // ATA Supabase auth is sourced from the ATA_SUPABASE_TOKEN env var
+            // or (eventually) an interactive Supabase sign-in. It is not
+            // persisted in auth.json, so reaching this branch means the
+            // auth.json was hand-written with `auth_mode = "ata"`. Surface
+            // that as a hint rather than a hard error.
+            issues.push("ATA Supabase auth is normally sourced from ATA_SUPABASE_TOKEN, not auth.json");
         }
     }
     issues
@@ -2306,6 +2315,7 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::Ata => "ata_supabase",
     }
 }
 
@@ -2435,7 +2445,9 @@ fn provider_auth_reachability_mode_from_auth(
         return ProviderAuthReachabilityMode::Chatgpt;
     }
     match stored_auth.map(stored_auth_mode_value) {
-        Some(codex_app_server_protocol::AuthMode::ApiKey) => ProviderAuthReachabilityMode::ApiKey,
+        Some(
+            codex_app_server_protocol::AuthMode::ApiKey | codex_app_server_protocol::AuthMode::Ata,
+        ) => ProviderAuthReachabilityMode::ApiKey,
         Some(
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens

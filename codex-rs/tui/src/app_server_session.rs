@@ -1151,7 +1151,7 @@ pub(crate) fn status_account_display_from_auth_mode(
     plan_type: Option<codex_protocol::account::PlanType>,
 ) -> Option<StatusAccountDisplay> {
     match auth_mode {
-        Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
+        Some(AuthMode::ApiKey) | Some(AuthMode::Ata) => Some(StatusAccountDisplay::ApiKey),
         Some(AuthMode::Chatgpt)
         | Some(AuthMode::ChatgptAuthTokens)
         | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {

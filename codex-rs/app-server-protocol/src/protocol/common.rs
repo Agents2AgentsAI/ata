@@ -36,6 +36,12 @@ pub enum AuthMode {
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
+    /// ATA Supabase-backed auth. The user signs in to ATA's Supabase
+    /// instance and the resulting access token is used as a bearer for
+    /// ATA-hosted backends (ElevenLabs proxy, future Supabase Edge
+    /// Functions). Token may also be set via the `ATA_SUPABASE_TOKEN`
+    /// env var for testing without a UI sign-in flow.
+    Ata,
 }
 
 macro_rules! experimental_reason_expr {

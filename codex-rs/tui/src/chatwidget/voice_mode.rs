@@ -1277,24 +1277,18 @@ fn resolve_elevenlabs_api_key_from_config(voice_config: &VoiceModeToml) -> Optio
 }
 
 /// Build an `ElevenLabsProxy` for ATA-authenticated users.
-/// Returns `None` if not in ATA mode or if auth is unavailable.
-///
-/// ATA-Supabase-routed proxy is only enabled when the user is authenticated
-/// via the ATA Supabase flow. In the current v0.129.0 baseline the
-/// `AuthMode::Ata` variant is not yet wired through `codex-login`; this helper
-/// therefore short-circuits and falls back to direct ElevenLabs API key auth.
+/// Build the ATA-Supabase-routed ElevenLabs proxy if the user is signed in
+/// via the ATA Supabase flow (`CodexAuth::Ata`). Returns `None` for any other
+/// auth mode so that voice mode falls back to the direct ElevenLabs API key
+/// path documented in `build_elevenlabs_config`.
 fn build_elevenlabs_proxy(
-    _auth_manager: &crate::legacy_core::AuthManager,
+    auth_manager: &crate::legacy_core::AuthManager,
 ) -> Option<codex_elevenlabs::ElevenLabsProxy> {
-    return None;
-    // Restore once `AuthMode::Ata` + `CodexAuth::Ata` land in codex-login:
-    // let auth = _auth_manager.auth_cached()?;
-    // let token = match &auth {
-    //     crate::legacy_core::auth::CodexAuth::Ata(ata) => ata.access_token.clone(),
-    //     _ => return None,
-    // };
-    #[allow(unreachable_code)]
-    let token = String::new();
+    let auth = auth_manager.auth_cached()?;
+    let token = match &auth {
+        codex_login::CodexAuth::Ata(ata) => ata.access_token().to_string(),
+        _ => return None,
+    };
 
     let base_url = std::env::var("ATA_ELEVENLABS_PROXY_URL")
         .ok()

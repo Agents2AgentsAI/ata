@@ -2008,7 +2008,7 @@ impl AuthRequestTelemetryContext {
         let auth_telemetry = auth_header_telemetry(api_auth);
         Self {
             auth_mode: auth_mode.map(|mode| match mode {
-                AuthMode::ApiKey => "ApiKey",
+                AuthMode::ApiKey | AuthMode::Ata => "ApiKey",
                 AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity => {
                     "Chatgpt"
                 }

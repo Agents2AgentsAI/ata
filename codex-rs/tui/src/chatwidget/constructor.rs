@@ -239,14 +239,21 @@ impl ChatWidget {
             cached_elevenlabs_speed: None,
             #[cfg(not(target_os = "linux"))]
             pending_voice_startup_cells: Vec::new(),
-            // Placeholder auth: `build_elevenlabs_proxy` currently returns
-            // None unconditionally, so the held manager is unused at
-            // runtime. Replaced with a real handle once `AuthMode::Ata`
-            // is wired through `codex-login`.
+            // Auth handle used by `build_elevenlabs_proxy`. When the
+            // `ATA_SUPABASE_TOKEN` env var is set, seed the manager with
+            // a `CodexAuth::Ata` so the proxy can issue Supabase-bearer
+            // requests; otherwise fall back to the inert placeholder so
+            // the proxy path short-circuits and direct ElevenLabs API
+            // key auth is used.
             #[cfg(not(target_os = "linux"))]
-            auth_manager: codex_login::AuthManager::from_auth_for_testing(
-                codex_login::CodexAuth::from_api_key("placeholder"),
-            ),
+            auth_manager: match codex_login::read_ata_supabase_token_from_env() {
+                Some(token) => codex_login::AuthManager::from_auth_for_testing(
+                    codex_login::CodexAuth::from_ata_token(&token),
+                ),
+                None => codex_login::AuthManager::from_auth_for_testing(
+                    codex_login::CodexAuth::from_api_key("placeholder"),
+                ),
+            },
         };
 
         widget.prefetch_rate_limits();
