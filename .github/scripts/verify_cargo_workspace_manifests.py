@@ -50,6 +50,18 @@ MANIFEST_FEATURE_EXCEPTIONS = {
     "codex-rs/v8-poc/Cargo.toml": {
         "sandbox": ("v8/v8_enable_sandbox",),
     },
+    # ATA: codex-core gates its code-intel surface (LSP + treesitter
+    # integration introduced upstream around v0.130) behind matching
+    # features so a slim build can skip the heavy native deps. Default
+    # build keeps both on; CI also exercises `--all-features` so the
+    # gates do not hide warnings. v0.134 added codex-file-watcher as a
+    # shared dep behind both gates.
+    "codex-rs/core/Cargo.toml": {
+        "default": ("code-intel",),
+        "lsp": ("dep:codex-lsp-client", "dep:codex-file-watcher"),
+        "treesitter": ("dep:codex-treesitter", "dep:codex-file-watcher"),
+        "code-intel": ("lsp", "treesitter"),
+    },
 }
 OPTIONAL_DEPENDENCY_EXCEPTIONS = {
     # ATA: paired with the per-language feature gates above.
@@ -60,6 +72,10 @@ OPTIONAL_DEPENDENCY_EXCEPTIONS = {
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-rust"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-scala"),
     ("codex-rs/treesitter/Cargo.toml", "dependencies", "tree-sitter-typescript"),
+    # ATA: paired with codex-core's lsp/treesitter/code-intel feature gates above.
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-file-watcher"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-lsp-client"),
+    ("codex-rs/core/Cargo.toml", "dependencies", "codex-treesitter"),
 }
 INTERNAL_DEPENDENCY_FEATURE_EXCEPTIONS = {}
 
