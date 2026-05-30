@@ -443,6 +443,24 @@ pub(super) fn user_message_display_for_history(
     )
 }
 
+/// Reader Tab-to-ask submits user messages with hidden tool-routing
+/// guidance appended after a sentinel comment. The agent sees the full text
+/// but the chat history must show only the user-visible portion (the
+/// question itself, plus any "[The user is reading ...]" preamble).
+///
+/// This is applied inside `user_message_display_from_parts` so BOTH the
+/// live-submission path (`user_message_display_for_history`) and the
+/// server-replay path (`user_message_display_from_inputs`) strip the
+/// guidance — without it the rollout-driven re-render of a steered turn
+/// shows the unstripped text even when the live render was clean.
+fn strip_system_instruction_suffix(text: &str) -> String {
+    const SENTINEL: &str = "<!-- READER_TOOL_INSTRUCTIONS -->";
+    match text.find(SENTINEL) {
+        Some(idx) => text[..idx].trim_end().to_string(),
+        None => text.to_string(),
+    }
+}
+
 pub(super) fn merge_user_messages_with_history_record(
     messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
 ) -> (UserMessage, UserMessageHistoryRecord) {
@@ -513,6 +531,17 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
+        // Reader Tab-to-ask appends hidden tool-routing guidance after the
+        // `<!-- READER_TOOL_INSTRUCTIONS -->` sentinel. The agent needs the
+        // full text; the chat history must show only the user-visible portion
+        // (the question itself, plus the "[The user is reading ...]" preamble).
+        // Strip BEFORE the existing IDE-context extraction so the rest of this
+        // function sees the trimmed message.
+        let message = strip_system_instruction_suffix(&message);
+        let text_elements = text_elements
+            .into_iter()
+            .filter(|element| element.byte_range.end <= message.len())
+            .collect::<Vec<_>>();
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();
