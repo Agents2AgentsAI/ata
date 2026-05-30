@@ -1371,7 +1371,62 @@ impl Session {
                 match codex_scheduling::load_scheduling_state(path) {
                     Ok(Some(snapshot)) => {
                         cron.hydrate(snapshot.cron_jobs);
-                        runtime.registry.hydrate(snapshot.monitors);
+
+                        // MonitorRegistry::hydrate expects the caller to mark
+                        // non-terminal entries as Interrupted before storing —
+                        // the subprocesses are gone. Monitors that opted into
+                        // `restart_on_resume` (e.g. `tail -F`, long-lived
+                        // servers) get respawned with the same task_id and
+                        // command so watchers from the prior session continue
+                        // to receive lines.
+                        let (to_restart, mut to_store): (Vec<_>, Vec<_>) =
+                            snapshot.monitors.into_iter().partition(|m| {
+                                matches!(
+                                    m.status,
+                                    codex_scheduling::TaskStatus::Running
+                                ) && m.restart_on_resume
+                            });
+                        let now = chrono::Utc::now();
+                        for monitor in to_store.iter_mut() {
+                            if matches!(
+                                monitor.status,
+                                codex_scheduling::TaskStatus::Running
+                            ) {
+                                monitor.status =
+                                    codex_scheduling::TaskStatus::Interrupted;
+                                monitor.stopped_at = Some(now);
+                            }
+                        }
+                        to_store.extend(to_restart.iter().cloned());
+                        runtime.registry.hydrate(to_store);
+
+                        let tx_sub = sess.submission_tx();
+                        for monitor in to_restart {
+                            let task_id = monitor.id.clone();
+                            let watch_tx =
+                                runtime.register_watcher_channel(task_id.clone());
+                            let registry = runtime.registry.clone();
+                            let runtime_for_task = runtime.clone();
+                            let session_for_task = Arc::clone(&sess);
+                            let tx_sub_for_task = tx_sub.clone();
+                            let command = monitor.command.clone();
+                            let background = monitor.background;
+                            let task_id_for_task = task_id.clone();
+                            let join_handle = tokio::spawn(async move {
+                                crate::tools::handlers::monitor::run_monitor(
+                                    task_id_for_task,
+                                    command,
+                                    registry,
+                                    runtime_for_task,
+                                    tx_sub_for_task,
+                                    session_for_task,
+                                    background,
+                                    watch_tx,
+                                )
+                                .await;
+                            });
+                            runtime.store_handle(task_id, join_handle.abort_handle());
+                        }
                     }
                     Ok(None) => {}
                     Err(err) => {
