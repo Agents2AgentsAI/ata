@@ -1152,6 +1152,8 @@ pub(crate) async fn built_tools(
             discoverable_tools,
             extension_tool_executors: extension_tool_executors(sess),
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: sess.services.multi_root_state.clone(),
         },
     )))
 }

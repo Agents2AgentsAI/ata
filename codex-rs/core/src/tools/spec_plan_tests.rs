@@ -178,6 +178,8 @@ async fn probe_with(
             discoverable_tools: inputs.discoverable_tools,
             extension_tool_executors: Vec::new(),
             dynamic_tools: inputs.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
     ToolPlanProbe::from_router(router)
@@ -1136,4 +1138,50 @@ async fn research_tools_omitted_when_per_tool_flags_off() {
     .await;
     plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);
     plan.assert_registered_lacks(RESEARCH_AGENT_TOOLS);
+}
+
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+const CODE_INTEL_AGENT_TOOLS: &[&str] = &[
+    #[cfg(feature = "treesitter")]
+    "code_intel",
+    #[cfg(feature = "lsp")]
+    "lsp",
+];
+
+/// Without a per-session `MultiRootState`, `add_code_intel_tools` must
+/// silently skip every code-intel tool even when the relevant feature
+/// flags are on. The default `probe()` passes `multi_root_state: None`
+/// so this is the only configuration the test harness can exercise
+/// today, but it guards against the regression where the function
+/// forgets the state check and registers a handler that would panic
+/// at call time on `state.expect()`.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+#[tokio::test]
+async fn code_intel_tools_omitted_when_no_multi_root_state() {
+    let plan = probe(|turn| {
+        #[cfg(feature = "treesitter")]
+        set_feature(turn, Feature::TreeSitter, /*enabled*/ true);
+        #[cfg(feature = "lsp")]
+        set_feature(turn, Feature::Lsp, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_lacks(CODE_INTEL_AGENT_TOOLS);
+    plan.assert_registered_lacks(CODE_INTEL_AGENT_TOOLS);
+}
+
+/// With the runtime feature flags off, `add_code_intel_tools` must skip
+/// even if a state were threaded in. This pairs with the previous test
+/// to lock down the gate semantics.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+#[tokio::test]
+async fn code_intel_tools_omitted_when_features_off() {
+    let plan = probe(|turn| {
+        #[cfg(feature = "treesitter")]
+        set_feature(turn, Feature::TreeSitter, /*enabled*/ false);
+        #[cfg(feature = "lsp")]
+        set_feature(turn, Feature::Lsp, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(CODE_INTEL_AGENT_TOOLS);
+    plan.assert_registered_lacks(CODE_INTEL_AGENT_TOOLS);
 }

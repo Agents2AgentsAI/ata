@@ -29,6 +29,14 @@ use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::artifacts::ArtifactsHandler;
 use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+#[cfg(feature = "treesitter")]
+use crate::tools::handlers::code_intel::CodeIntelToolHandler;
+#[cfg(feature = "treesitter")]
+use crate::tools::handlers::code_intel::create_code_intel_tool;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::LspToolHandler;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::create_lsp_tool;
 use crate::tools::handlers::data::DataBridgeHandler;
 use crate::tools::handlers::data::build_data_config;
 use crate::tools::handlers::data_bridge_spec::create_dataset_get_tool;
@@ -185,6 +193,8 @@ struct CoreToolPlanContext<'a> {
     dynamic_tools: &'a [DynamicToolSpec],
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
 }
 
 pub(crate) fn build_tool_router(
@@ -205,6 +215,8 @@ fn build_tool_specs_and_registry(
         discoverable_tools,
         extension_tool_executors,
         dynamic_tools,
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state,
     } = params;
     let default_agent_type_description =
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
@@ -217,6 +229,8 @@ fn build_tool_specs_and_registry(
         dynamic_tools,
         default_agent_type_description: &default_agent_type_description,
         wait_agent_timeouts: wait_agent_timeout_options(turn_context),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: multi_root_state.as_ref(),
     };
     let mut planned_tools = PlannedTools::default();
     add_tool_sources(&context, &mut planned_tools);
@@ -552,6 +566,8 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_js_repl_tools(context, planned_tools);
     add_data_tools(context, planned_tools);
     add_research_tools(context, planned_tools);
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    add_code_intel_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
@@ -693,6 +709,40 @@ fn add_research_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pla
             toolkit.clone(),
         ));
     }
+}
+
+/// Register the ATA code-intel tools (`code_intel` via treesitter,
+/// `lsp` via the LSP client). Both are gated by:
+/// 1. the matching cargo feature on this crate (`treesitter` / `lsp`),
+/// 2. the matching `Feature::TreeSitter` / `Feature::Lsp` runtime flag
+///    (both `Stage::Stable`, default on, so off only if explicitly
+///    disabled in `~/.ata/config.toml`),
+/// 3. the per-session `MultiRootState` having been constructed
+///    (`session::code_intel::init_multi_root_state` returns `None` when
+///    no workspace root has indexable code).
+///
+/// All three must be satisfied; otherwise the handler is silently
+/// skipped so the model doesn't see a tool that would fail at call time.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+fn add_code_intel_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let Some(state) = context.multi_root_state else {
+        return;
+    };
+    let features = context.turn_context.features.get();
+    #[cfg(feature = "treesitter")]
+    if features.enabled(Feature::TreeSitter) {
+        planned_tools.add(CodeIntelToolHandler::new(
+            state.clone(),
+            create_code_intel_tool(),
+        ));
+    }
+    #[cfg(feature = "lsp")]
+    if features.enabled(Feature::Lsp) {
+        planned_tools.add(LspToolHandler::new(state.clone(), create_lsp_tool()));
+    }
+    // Both `if` arms read `features` even when the matching cargo feature
+    // is off, so silence the unused-variable warning in that build.
+    let _ = features;
 }
 
 fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {

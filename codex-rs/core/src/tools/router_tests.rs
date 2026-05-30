@@ -116,6 +116,8 @@ async fn parallel_support_does_not_match_namespaced_local_tool_names() -> anyhow
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 
@@ -195,6 +197,8 @@ async fn mcp_parallel_support_uses_handler_data() -> anyhow::Result<()> {
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 
@@ -230,6 +234,8 @@ async fn tools_without_handlers_do_not_support_parallel() -> anyhow::Result<()> 
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 
@@ -282,6 +288,8 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
             discoverable_tools: None,
             extension_tool_executors: Vec::new(),
             dynamic_tools: &dynamic_tools,
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 
@@ -349,6 +357,8 @@ async fn extension_tool_executors_are_model_visible_and_dispatchable() -> anyhow
             discoverable_tools: None,
             extension_tool_executors: extension_tool_executors(&session),
             dynamic_tools: turn.dynamic_tools.as_slice(),
+            #[cfg(any(feature = "lsp", feature = "treesitter"))]
+            multi_root_state: None,
         },
     );
 

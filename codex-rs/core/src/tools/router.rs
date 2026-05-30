@@ -42,6 +42,12 @@ pub(crate) struct ToolRouterParams<'a> {
     pub(crate) discoverable_tools: Option<Vec<DiscoverableTool>>,
     pub(crate) extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     pub(crate) dynamic_tools: &'a [DynamicToolSpec],
+    /// Per-session multi-root state used by the `code_intel` and `lsp`
+    /// tool handlers. `None` when neither cargo feature is enabled or when
+    /// the session-init builder declined to construct a state (e.g. unit
+    /// tests).
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    pub(crate) multi_root_state: Option<Arc<crate::state::MultiRootState>>,
 }
 
 impl ToolRouter {
