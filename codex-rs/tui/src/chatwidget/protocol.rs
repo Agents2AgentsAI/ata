@@ -239,14 +239,34 @@ impl ChatWidget {
             | ServerNotification::ThreadRealtimeTranscriptDone(_)
             | ServerNotification::WindowsWorldWritableWarning(_)
             | ServerNotification::WindowsSandboxSetupCompleted(_)
-            | ServerNotification::AccountLoginCompleted(_)
-            | ServerNotification::PresentDocument(_)
-            | ServerNotification::UpdateDocumentSection(_)
-            | ServerNotification::AppendDocumentSection(_)
-            | ServerNotification::AddDocumentSection(_)
-            | ServerNotification::PatchDocumentSection(_)
-            | ServerNotification::SchedulingTasksSnapshot(_)
-            | ServerNotification::SchedulingMonitorOutputDelta(_) => {}
+            | ServerNotification::AccountLoginCompleted(_) => {}
+            ServerNotification::PresentDocument(notification) => {
+                self.on_present_document(
+                    notification.event,
+                    from_replay,
+                    is_resume_initial_replay,
+                );
+            }
+            ServerNotification::UpdateDocumentSection(notification) => {
+                self.on_update_document_section(notification.event);
+            }
+            ServerNotification::AppendDocumentSection(notification) => {
+                self.on_append_document_section(notification.event);
+            }
+            ServerNotification::AddDocumentSection(notification) => {
+                self.on_add_document_section(notification.event);
+            }
+            ServerNotification::PatchDocumentSection(notification) => {
+                self.on_patch_document_section(notification.event);
+            }
+            ServerNotification::SchedulingTasksSnapshot(notification) => {
+                self.bottom_pane
+                    .handle_scheduling_snapshot(notification.event);
+            }
+            ServerNotification::SchedulingMonitorOutputDelta(_) => {
+                // Streamed monitor stdout/stderr. SchedulingView does not yet
+                // expose a per-monitor output pane; wire this when that lands.
+            }
             ServerNotification::ContextCompacted(_) => {}
         }
     }

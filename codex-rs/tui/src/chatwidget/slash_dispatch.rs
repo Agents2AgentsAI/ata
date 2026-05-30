@@ -478,15 +478,15 @@ impl ChatWidget {
                 self.request_redraw();
             }
             SlashCommand::Scheduling => {
+                let view = crate::bottom_pane::SchedulingView::new()
+                    .with_auto_refresh(
+                        self.app_event_tx.clone(),
+                        self.frame_requester.clone(),
+                    );
+                self.bottom_pane.show_view(Box::new(view));
                 self.app_event_tx
                     .send(AppEvent::CodexOp(AppCommand::ListSchedulingTasks));
-                self.add_info_message(
-                    "Requested scheduling snapshot. The /scheduling panel UI is not \
-                     yet wired in this build; the snapshot will arrive as a \
-                     `SchedulingTasksSnapshot` event."
-                        .to_string(),
-                    /*hint*/ None,
-                );
+                self.request_redraw();
             }
         }
     }
