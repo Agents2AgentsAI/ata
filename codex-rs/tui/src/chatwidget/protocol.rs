@@ -263,9 +263,13 @@ impl ChatWidget {
                 self.bottom_pane
                     .handle_scheduling_snapshot(notification.event);
             }
-            ServerNotification::SchedulingMonitorOutputDelta(_) => {
-                // Streamed monitor stdout/stderr. SchedulingView does not yet
-                // expose a per-monitor output pane; wire this when that lands.
+            ServerNotification::SchedulingMonitorOutputDelta(notification) => {
+                let event = notification.event;
+                self.bottom_pane.handle_scheduling_monitor_output_delta(
+                    &event.task_id,
+                    &event.stream,
+                    &event.line,
+                );
             }
             ServerNotification::ContextCompacted(_) => {}
         }

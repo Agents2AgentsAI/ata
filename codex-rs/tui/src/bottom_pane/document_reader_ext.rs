@@ -153,6 +153,21 @@ impl BottomPane {
         }
     }
 
+    /// Deliver one streamed monitor stdout/stderr line to the active
+    /// `/scheduling` view. Non-scheduling views ignore it via the default
+    /// trait impl.
+    pub(crate) fn handle_scheduling_monitor_output_delta(
+        &mut self,
+        task_id: &str,
+        stream: &str,
+        line: &str,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_scheduling_monitor_output_delta(task_id, stream, line);
+            self.request_redraw();
+        }
+    }
+
     /// Return reading view context for voice mode integration.
     ///
     /// When the active view is a document reader, this extracts the current

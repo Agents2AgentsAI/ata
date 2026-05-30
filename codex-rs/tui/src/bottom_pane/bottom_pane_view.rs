@@ -233,6 +233,16 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
+    /// Deliver one streamed monitor stdout/stderr line if this view is the
+    /// `/scheduling` panel. Non-scheduling views default to a no-op.
+    fn handle_scheduling_monitor_output_delta(
+        &mut self,
+        _task_id: &str,
+        _stream: &str,
+        _line: &str,
+    ) {
+    }
+
     /// Voice-mode integration hooks. Reading-view overlays override these to
     /// participate in voice narration; everything else gets a no-op.
     #[cfg(not(target_os = "linux"))]
