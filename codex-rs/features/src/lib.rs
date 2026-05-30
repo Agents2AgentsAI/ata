@@ -899,6 +899,48 @@ pub const FEATURES: &[FeatureSpec] = &[
         },
         default_enabled: true,
     },
+    // ATA reorder: ExternalMigration, Goals and PreventIdleSleep are hoisted
+    // up so the eight most-used experimental toggles sit in the popup's first
+    // visible window (MAX_POPUP_ROWS = 8). NetworkProxy and MentionsV2 stay in
+    // their upstream positions further down.
+    FeatureSpec {
+        id: Feature::ExternalMigration,
+        key: "external_migration",
+        stage: Stage::Experimental {
+            name: "External migration",
+            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Goals,
+        key: "goals",
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set or view the goal for a long-running task via /goal.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Ata is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
+        default_enabled: false,
+    },
     FeatureSpec {
         id: Feature::Chronicle,
         key: "chronicle",
@@ -1102,16 +1144,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::ExternalMigration,
-        key: "external_migration",
-        stage: Stage::Experimental {
-            name: "External migration",
-            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
-            announcement: "",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ImageGeneration,
         key: "image_generation",
         stage: Stage::Stable,
@@ -1155,16 +1187,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::GuardianApproval,
         key: "guardian_approval",
         stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Goals,
-        key: "goals",
-        stage: Stage::Experimental {
-            name: "Goals",
-            menu_description: "Set or view the goal for a long-running task via /goal.",
-            announcement: "",
-        },
         default_enabled: true,
     },
     FeatureSpec {
@@ -1226,24 +1248,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "tui_app_server",
         stage: Stage::Removed,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::PreventIdleSleep,
-        key: "prevent_idle_sleep",
-        stage: if cfg!(any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "windows"
-        )) {
-            Stage::Experimental {
-                name: "Prevent sleep while running",
-                menu_description: "Keep your computer awake while Ata is running a thread.",
-                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
-            }
-        } else {
-            Stage::UnderDevelopment
-        },
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,

@@ -1,16 +1,16 @@
 //! `/workspace` slash command dispatcher and `/fast` toggle.
 //!
-//! `/workspace [current|list|use <selector>]` is a thin TUI wrapper that
-//! shells out to the `ata workspace` CLI subcommand and prints the captured
-//! stdout/stderr inline. Workspace creation and the long tail of admin
-//! verbs (init, delete, audit, etc.) stay CLI-only — see PLAN.md TR-040.
+//! `/workspace [current|list|use <selector>]` calls the `codex_workspace`
+//! library directly and prints a human-readable summary inline. Workspace
+//! creation and the long tail of admin verbs (init, delete, audit, etc.) stay
+//! CLI-only — see PLAN.md TR-040.
 //!
 //! `/fast` toggles the model's Fast service tier and prints a confirmation
 //! line so transcript readers can see the new state.
 
-use std::process::Command;
-
 use codex_features::Feature;
+use codex_workspace::commands;
+use codex_workspace::workspace_resolution;
 
 use crate::chatwidget::ChatWidget;
 
@@ -35,49 +35,80 @@ impl ChatWidget {
             None => (trimmed, ""),
         };
 
-        let cli_args: Vec<&str> = match verb.to_ascii_lowercase().as_str() {
-            "current" | "show" | "status" if rest.is_empty() => vec!["workspace", "current"],
-            "list" if rest.is_empty() => vec!["workspace", "list"],
-            "use" | "select" if !rest.is_empty() => vec!["workspace", "use", rest],
+        match verb.to_ascii_lowercase().as_str() {
+            "current" | "show" | "status" if rest.is_empty() => self.workspace_current(),
+            "list" if rest.is_empty() => self.workspace_list(),
+            "use" | "select" if !rest.is_empty() => self.workspace_use(rest),
             _ => {
                 self.add_error_message(WORKSPACE_USAGE.to_string());
-                return;
             }
-        };
+        }
+    }
 
-        let Ok(exe) = std::env::current_exe() else {
-            self.add_error_message(
-                "Could not resolve the ata binary path for /workspace.".to_string(),
-            );
-            return;
-        };
-
-        let output = Command::new(&exe).args(&cli_args).output();
-        match output {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                if !stdout.is_empty() {
-                    self.add_info_message(stdout, None);
-                }
-                if !stderr.is_empty() {
-                    if output.status.success() {
-                        self.add_info_message(stderr, None);
-                    } else {
-                        self.add_error_message(stderr);
-                    }
-                } else if !output.status.success() {
-                    self.add_error_message(format!(
-                        "`ata {}` failed with exit code {}.",
-                        cli_args.join(" "),
-                        output.status.code().unwrap_or(-1)
-                    ));
-                }
+    fn workspace_current(&mut self) {
+        match workspace_resolution::resolve_workspace(None) {
+            Ok(id) => {
+                let name = commands::read::run(&id)
+                    .ok()
+                    .map(|m| m.name)
+                    .unwrap_or_default();
+                let line = if name.is_empty() || name == id {
+                    format!("Current workspace: {id}")
+                } else {
+                    format!("Current workspace: {id} ({name})")
+                };
+                self.add_info_message(line, None);
             }
             Err(err) => {
+                self.add_error_message(format!("Could not resolve current workspace: {err}"));
+            }
+        }
+    }
+
+    fn workspace_list(&mut self) {
+        let active = workspace_resolution::resolve_workspace(None).ok();
+        match commands::list::run() {
+            Ok(summaries) if summaries.is_empty() => {
+                self.add_info_message(
+                    "Workspaces: (none — create one with `ata workspace init <name>`)"
+                        .to_string(),
+                    None,
+                );
+            }
+            Ok(summaries) => {
+                let mut lines = vec!["Workspaces:".to_string()];
+                for summary in summaries {
+                    let marker = if active.as_deref() == Some(summary.id.as_str()) {
+                        " (current)"
+                    } else {
+                        ""
+                    };
+                    let name = if summary.name.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {}", summary.name)
+                    };
+                    lines.push(format!("  {id}{name}{marker}", id = summary.id));
+                }
+                self.add_info_message(lines.join("\n"), None);
+            }
+            Err(err) => {
+                self.add_error_message(format!("Could not list workspaces: {err}"));
+            }
+        }
+    }
+
+    fn workspace_use(&mut self, selector: &str) {
+        match commands::select::run(selector) {
+            Ok(resolved) => {
+                self.add_info_message(format!("Selected workspace: {resolved}"), None);
+            }
+            Err(err) => {
+                let message = err.to_string();
+                // Surface "not found"/"unknown" phrasing so it's discoverable
+                // for users typing an invalid selector.
                 self.add_error_message(format!(
-                    "Failed to run `ata {}`: {err}",
-                    cli_args.join(" ")
+                    "Could not select workspace `{selector}`: workspace not found ({message})"
                 ));
             }
         }
@@ -98,7 +129,6 @@ impl ChatWidget {
         self.toggle_fast_mode_from_ui();
         let is_fast_now = self.current_service_tier() == Some(fast_tier.id.as_str());
         let status = if is_fast_now { "on" } else { "off" };
-        // Toggle didn't change anything (rare: e.g. no fast tier resolved despite the check above).
         if was_fast == is_fast_now {
             self.add_info_message(format!("Fast mode is {status}."), None);
         } else {

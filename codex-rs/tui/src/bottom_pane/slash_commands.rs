@@ -87,14 +87,24 @@ pub(crate) fn commands_for_input(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
 ) -> Vec<SlashCommandItem> {
-    let mut commands = Vec::new();
+    let builtins = builtins_for_input(flags);
     let tiers_enabled = flags.service_tier_commands_enabled;
-    for (_, cmd) in builtins_for_input(flags) {
-        commands.push(SlashCommandItem::Builtin(cmd));
-        if cmd == SlashCommand::Model && tiers_enabled {
+    let mut commands = Vec::new();
+    for (_, cmd) in &builtins {
+        commands.push(SlashCommandItem::Builtin(*cmd));
+        if *cmd == SlashCommand::Model && tiers_enabled {
+            // Skip ServiceTier entries whose name collides with a visible Builtin
+            // (e.g. /fast). Without this dedup the popup shows two rows for the
+            // same name and Enter dispatches the ServiceTier path instead of the
+            // Builtin one.
             commands.extend(
                 service_tier_commands
                     .iter()
+                    .filter(|tier| {
+                        !builtins
+                            .iter()
+                            .any(|(builtin_name, _)| *builtin_name == tier.name)
+                    })
                     .cloned()
                     .map(SlashCommandItem::ServiceTier),
             );
@@ -207,21 +217,23 @@ mod tests {
     fn service_tier_commands_are_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.service_tier_commands_enabled = false;
+        // Use a tier name that doesn't collide with a Builtin so we're
+        // actually testing the disabled-tier code path.
         let commands = vec![ServiceTierCommand {
             id: "priority".to_string(),
-            name: "fast".to_string(),
+            name: "express".to_string(),
             description: "fastest inference".to_string(),
         }];
 
-        assert_eq!(find_slash_command("fast", flags, &commands), None);
+        assert_eq!(find_slash_command("express", flags, &commands), None);
     }
 
     #[test]
-    fn all_service_tiers_are_exposed_as_commands_after_model() {
+    fn non_colliding_service_tiers_are_exposed_as_commands_after_model() {
         let commands = vec![
             ServiceTierCommand {
                 id: "priority".to_string(),
-                name: "fast".to_string(),
+                name: "express".to_string(),
                 description: "fastest inference".to_string(),
             },
             ServiceTierCommand {
@@ -247,6 +259,30 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(inserted, expected);
+    }
+
+    #[test]
+    fn service_tier_names_that_collide_with_builtins_are_filtered() {
+        // The current model exposes a `fast` service tier whose name collides
+        // with the Builtin `/fast` command. The popup must show only the
+        // Builtin row so Enter dispatches to the toggle-fast-mode path rather
+        // than to the service-tier path.
+        let commands = vec![ServiceTierCommand {
+            id: "priority".to_string(),
+            name: "fast".to_string(),
+            description: "fastest inference".to_string(),
+        }];
+
+        let items = commands_for_input(all_enabled_flags(), &commands);
+        let fast_rows: Vec<_> = items
+            .iter()
+            .filter(|item| item.command() == "fast")
+            .collect();
+        assert_eq!(fast_rows.len(), 1, "expected a single /fast row");
+        assert!(matches!(
+            fast_rows[0],
+            SlashCommandItem::Builtin(SlashCommand::Fast)
+        ));
     }
 
     #[test]
@@ -317,9 +353,11 @@ mod tests {
 
     #[test]
     fn side_conversation_exact_lookup_still_resolves_service_tier_commands_for_dispatch_error() {
+        // Use a tier name that doesn't collide with a Builtin so we exercise
+        // the ServiceTier dispatch-error path rather than the Builtin one.
         let command = ServiceTierCommand {
             id: "priority".to_string(),
-            name: "fast".to_string(),
+            name: "express".to_string(),
             description: "fastest inference".to_string(),
         };
         let flags = BuiltinCommandFlags {
@@ -328,7 +366,7 @@ mod tests {
         };
 
         assert_eq!(
-            find_slash_command("fast", flags, from_ref(&command)),
+            find_slash_command("express", flags, from_ref(&command)),
             Some(SlashCommandItem::ServiceTier(command))
         );
     }
