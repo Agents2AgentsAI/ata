@@ -1,14 +1,11 @@
-[build]
-# Override global sccache wrapper for this project — sccache conflicts
-# with incremental compilation, and incremental is far better for local
-# iterative development.
-rustc-wrapper = ""
-
-[profile.dev]
-incremental = true
+# macOS aarch64 defaults Rust test threads to 2 MB which overflows several
+# codex-app-server in_process and tracing tests. Linux defaults to 8 MB so
+# upstream CI passes; bump to 16 MB for all platforms to keep parity.
+[env]
+RUST_MIN_STACK = "16777216"
 
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "link-arg=/STACK:8388608"]
+rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "target-feature=+crt-static"]
 
 # MSVC emits a warning about code that may trip "Cortex-A53 MPCore processor bug #843419" (see
 # https://developer.arm.com/documentation/epm048406/latest) which is sometimes emitted by LLVM.
@@ -18,16 +15,3 @@ rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "link-arg=/arm64hazardfree"]
 
 [target.'cfg(all(windows, target_env = "gnu"))']
 rustflags = ["-C", "link-arg=-Wl,--stack,8388608"]
-
-# Use the system `git` CLI rather than libgit2 when fetching git deps and
-# their submodules. The libwebrtc dep used by `codex-realtime-webrtc`
-# pulls in `yuv-sys/libyuv` from `chromium.googlesource.com`, and on
-# macOS-hosted CI runners libgit2 (built against SecureTransport) fails
-# the TLS handshake with errors like
-# `SecureTransport error: connection closed via error; class=Net (12)`,
-# which surfaces as `failed to update submodule yuv-sys/libyuv` during
-# `cargo metadata` / `cargo chef prepare`. The system `git` uses libcurl
-# with macOS keychain certs and reaches `chromium.googlesource.com`
-# reliably.
-[net]
-git-fetch-with-cli = true

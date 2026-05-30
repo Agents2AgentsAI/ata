@@ -26,8 +26,9 @@ use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 
 const CODE_INTEL_TOOL_DESCRIPTION: &str = include_str!("tool_code_intel.txt");
 const DEFAULT_CHUNK_SIZE: usize = 5000;
@@ -35,6 +36,13 @@ const DEFAULT_CHUNK_OVERLAP: usize = 200;
 
 pub struct CodeIntelToolHandler {
     pub state: Arc<MultiRootState>,
+    pub(crate) spec: ToolSpec,
+}
+
+impl CodeIntelToolHandler {
+    pub(crate) fn new(state: Arc<MultiRootState>, spec: ToolSpec) -> Self {
+        Self { state, spec }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,50 +116,24 @@ enum ResponseFormat {
     Json,
 }
 
-impl ToolHandler for CodeIntelToolHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for CodeIntelToolHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("code_intel")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_code_intel_tool())
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn is_mutating(&self, invocation: &ToolInvocation) -> bool {
-        let Ok(arguments) =
-            function_arguments_from_payload(invocation.payload.clone(), "code_intel")
-        else {
-            return false;
-        };
-        let Ok(args) = parse_arguments::<CodeIntelToolArgs>(&arguments) else {
-            return false;
-        };
-
-        matches!(
-            args.operation,
-            CodeIntelOperation::DefineSymbol
-                | CodeIntelOperation::RedefineSymbol
-                | CodeIntelOperation::DefineFile
-                | CodeIntelOperation::RedefineFile
-                | CodeIntelOperation::MarkFile
-                | CodeIntelOperation::SaveAnnotations
-                | CodeIntelOperation::LoadAnnotations
-                | CodeIntelOperation::AddRoot
-                | CodeIntelOperation::RemoveRoot
-        )
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let turn_cwd = invocation.turn.cwd.clone();
         let payload = invocation.payload;
 
@@ -643,9 +625,11 @@ impl ToolHandler for CodeIntelToolHandler {
             output
         };
 
-        Ok(FunctionToolOutput::from_text(output, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(output, Some(true))))
     }
 }
+
+impl CoreToolRuntime for CodeIntelToolHandler {}
 
 impl CodeIntelToolHandler {
     async fn indices_for_query(

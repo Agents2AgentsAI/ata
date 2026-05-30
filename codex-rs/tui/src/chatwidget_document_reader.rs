@@ -388,7 +388,7 @@ fn browser_resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>
         return format!("ata --yolo resume {thread_id}");
     }
 
-    crate::legacy_core::util::resume_command(thread_name, None)
+    codex_utils_cli::resume_command(thread_name, None)
         .map(|command| command.replacen("ata ", "ata --yolo ", 1))
         .unwrap_or_else(|| "ata --yolo resume <session-id>".to_string())
 }
@@ -413,6 +413,53 @@ impl ChatWidget {
     fn is_reading_view_enabled(&self) -> bool {
         self.reading_view_mode != crate::app_event::ReadingViewMode::Disabled
             && self.active_mode_kind() != ModeKind::Plan
+    }
+
+    /// Apply a new reading-view mode emitted by `ResearchToolsView` to both
+    /// the running widget (immediate effect on TUI routing) and the on-disk
+    /// `~/.ata/config.toml` (so the setting survives restart). The agent's
+    /// math-rendering instructions (driven by `DocumentCache.display_mode`)
+    /// only refresh on the next session start; the user is told.
+    pub(crate) fn set_reading_view_mode(
+        &mut self,
+        mode: crate::app_event::ReadingViewMode,
+    ) {
+        if self.reading_view_mode == mode {
+            return;
+        }
+        self.reading_view_mode = mode;
+
+        // Persist `[reading_view].mode = "<value>"` to ~/.ata/config.toml.
+        let codex_home = self.config.codex_home.clone();
+        let value = mode.config_value().to_string();
+        tokio::spawn(async move {
+            let edit = crate::legacy_core::config::edit::ConfigEdit::SetPath {
+                segments: vec!["reading_view".into(), "mode".into()],
+                value: value.clone().into(),
+            };
+            if let Err(err) = crate::legacy_core::config::edit::apply(
+                codex_home.as_path(),
+                vec![edit],
+            )
+            .await
+            {
+                tracing::warn!(
+                    %err,
+                    new_mode = %value,
+                    "failed to persist reading_view.mode to config.toml",
+                );
+            }
+        });
+
+        self.add_info_message(
+            format!(
+                "Reading view mode set to {}. Agent math-rendering instructions \
+                 update on next session start.",
+                mode.config_value()
+            ),
+            None,
+        );
+        self.request_redraw();
     }
 
     /// Whether the reading view is in browser mode.
@@ -1326,7 +1373,8 @@ impl ChatWidget {
 
             // With alignment-driven karaoke, data-wi IS the spoken index.
             // With heuristic wrapping, data-wi is the visible index and
-            // needs visible→spoken conversion.
+            // needs visible→spoken conversion (equations occupy 0
+            // visible words but multiple spoken words).
             let spoken = if state.alignment_driven_karaoke {
                 word_index.saturating_sub(offset)
             } else {
@@ -1370,7 +1418,9 @@ impl ChatWidget {
     /// Handle a progress-fraction seek from the browser (e.g. progress bar click).
     ///
     /// Converts the fraction [0.0, 1.0] to a word index based on the total
-    /// words in the currently narrated text.
+    /// words in the currently narrated text, then delegates to
+    /// `handle_browser_karaoke_seek` so both paths share the same audio-seek
+    /// and visual-highlight logic.
     #[cfg(not(target_os = "linux"))]
     fn handle_browser_seek_to_progress(&mut self, fraction: f64) {
         let fraction = fraction.clamp(0.0, 1.0);
@@ -1383,7 +1433,8 @@ impl ChatWidget {
         if total_words == 0 {
             return;
         }
-        let target_word = ((fraction * total_words as f64).round() as usize).min(total_words.saturating_sub(1));
+        let target_word = ((fraction * total_words as f64).round() as usize)
+            .min(total_words.saturating_sub(1));
         let offset = self
             .voice_mode_state
             .as_ref()

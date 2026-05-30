@@ -31,28 +31,17 @@ pub enum ConfigEdit {
     SetModel {
         model: Option<String>,
         effort: Option<ReasoningEffort>,
-        model_provider: Option<String>,
     },
-    /// Remove `model` and `model_provider` from the active scope. Used on
-    /// logout from a non-OpenAI provider (e.g., GitHub Copilot) so the next
-    /// launch falls back to the default provider and surfaces the login
-    /// screen, instead of silently entering chat without credentials.
-    /// Leaves `model_reasoning_effort` and other unrelated keys alone.
-    ClearModelAndProvider,
     /// Update the service tier preference for future turns.
-    SetServiceTier { service_tier: Option<ServiceTier> },
+    SetServiceTier { service_tier: Option<String> },
     /// Update the active (or default) model personality.
     SetModelPersonality { personality: Option<Personality> },
     /// Toggle the acknowledgement flag under `[notice]`.
     SetNoticeHideFullAccessWarning(bool),
     /// Toggle the Windows world-writable directories warning acknowledgement flag.
     SetNoticeHideWorldWritableWarning(bool),
-    /// Toggle the opt-out marker for Codex-managed fast defaults.
-    SetNoticeFastDefaultOptOut(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
-    /// Toggle the Windows onboarding acknowledgement flag.
-    SetWindowsWslSetupAcknowledged(bool),
     /// Toggle the model migration prompt acknowledgement flag.
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Toggle the home external config migration prompt acknowledgement flag.
@@ -91,89 +80,18 @@ enum SkillConfigSelector {
     Path(PathBuf),
 }
 
-/// Produces a config edit that sets `[voice_mode] enabled = <bool>`.
-pub fn voice_mode_enabled_edit(enabled: bool) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".to_string(), "enabled".to_string()],
-        value: value(enabled),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode] tts_enabled = <bool>`.
-pub fn voice_mode_tts_edit(enabled: bool) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".to_string(), "tts_enabled".to_string()],
-        value: value(enabled),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode] stt_enabled = <bool>`.
-pub fn voice_mode_stt_edit(enabled: bool) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".to_string(), "stt_enabled".to_string()],
-        value: value(enabled),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode.elevenlabs] api_key = "<key>"`.
-pub fn voice_mode_elevenlabs_api_key_edit(key: &str) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".into(), "elevenlabs".into(), "api_key".into()],
-        value: value(key),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode.elevenlabs] language_code = "<code>"`.
-pub fn voice_mode_elevenlabs_language_edit(code: &str) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec![
-            "voice_mode".into(),
-            "elevenlabs".into(),
-            "language_code".into(),
-        ],
-        value: value(code),
-    }
-}
-
-/// Removes `[voice_mode.elevenlabs] language_code` (auto-detect).
-pub fn voice_mode_elevenlabs_language_clear() -> ConfigEdit {
-    ConfigEdit::ClearPath {
-        segments: vec![
-            "voice_mode".into(),
-            "elevenlabs".into(),
-            "language_code".into(),
-        ],
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode.elevenlabs] speed = <speed>`.
-pub fn voice_mode_elevenlabs_speed_edit(speed: f64) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".into(), "elevenlabs".into(), "speed".into()],
-        value: value(speed),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode] verbosity = "<verbosity>"`.
-pub fn voice_mode_verbosity_edit(verbosity: &str) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".into(), "verbosity".into()],
-        value: value(verbosity),
-    }
-}
-
-/// Produces a config edit that sets `[voice_mode] tts_backend = "<backend>"`.
-pub fn voice_mode_tts_backend_edit(backend: &str) -> ConfigEdit {
-    ConfigEdit::SetPath {
-        segments: vec!["voice_mode".into(), "tts_backend".into()],
-        value: value(backend),
-    }
-}
-
 /// Produces a config edit that sets `[tui].theme = "<name>"`.
 pub fn syntax_theme_edit(name: &str) -> ConfigEdit {
     ConfigEdit::SetPath {
         segments: vec!["tui".to_string(), "theme".to_string()],
+        value: value(name.to_string()),
+    }
+}
+
+/// Produces a config edit that sets [tui].pet = "<name>".
+pub fn tui_pet_edit(name: &str) -> ConfigEdit {
+    ConfigEdit::SetPath {
+        segments: vec!["tui".to_string(), "pet".to_string()],
         value: value(name.to_string()),
     }
 }
@@ -382,8 +300,8 @@ mod document_helpers {
         if !config.enabled {
             entry["enabled"] = value(false);
         }
-        if let Some(environment) = &config.experimental_environment {
-            entry["experimental_environment"] = value(environment.clone());
+        if !config.is_local_environment() {
+            entry["environment_id"] = value(config.environment_id.clone());
         }
         if config.required {
             entry["required"] = value(true);
@@ -418,6 +336,15 @@ mod document_helpers {
             && !scopes.is_empty()
         {
             entry["scopes"] = array_from_iter(scopes.iter().cloned());
+        }
+        if let Some(oauth) = &config.oauth
+            && let Some(client_id) = &oauth.client_id
+            && !client_id.is_empty()
+        {
+            let mut oauth_table = TomlTable::new();
+            oauth_table.set_implicit(false);
+            oauth_table["client_id"] = value(client_id.clone());
+            entry["oauth"] = TomlItem::Table(oauth_table);
         }
         if let Some(resource) = &config.oauth_resource
             && !resource.is_empty()
@@ -586,13 +513,6 @@ mod document_helpers {
 
 struct ConfigDocument {
     doc: DocumentMut,
-    profile: Option<String>,
-}
-
-#[derive(Copy, Clone)]
-enum Scope {
-    Global,
-    Profile,
 }
 
 #[derive(Copy, Clone)]
@@ -602,78 +522,61 @@ enum TraversalMode {
 }
 
 impl ConfigDocument {
-    fn new(doc: DocumentMut, profile: Option<String>) -> Self {
-        Self { doc, profile }
+    fn new(doc: DocumentMut) -> Self {
+        Self { doc }
     }
 
     fn apply(&mut self, edit: &ConfigEdit) -> anyhow::Result<bool> {
         match edit {
-            ConfigEdit::SetModel {
-                model,
-                effort,
-                model_provider,
-            } => Ok({
+            ConfigEdit::SetModel { model, effort } => Ok({
                 let mut mutated = false;
-                mutated |= self.write_profile_value(
+                mutated |= self.write_optional_value(
                     &["model"],
                     model.as_ref().map(|model_value| value(model_value.clone())),
                 );
-                mutated |= self.write_profile_value(
+                mutated |= self.write_optional_value(
                     &["model_reasoning_effort"],
                     effort.map(|effort| value(effort.to_string())),
                 );
-                mutated |= self.write_profile_value(
-                    &["model_provider"],
-                    model_provider
-                        .as_ref()
-                        .map(|provider| value(provider.clone())),
-                );
                 mutated
             }),
-            ConfigEdit::ClearModelAndProvider => Ok({
-                let mut mutated = false;
-                mutated |= self.write_profile_value(&["model"], None);
-                mutated |= self.write_profile_value(&["model_provider"], None);
-                mutated
-            }),
-            ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_profile_value(
+            ConfigEdit::SetServiceTier { service_tier } => Ok(self.write_optional_value(
                 &["service_tier"],
-                service_tier.map(|service_tier| value(service_tier.to_string())),
+                service_tier.as_ref().map(|service_tier| {
+                    // Keep the legacy config spelling stable. Runtime values use
+                    // `priority`, but config.toml continues to store it as `fast`.
+                    let config_value = match ServiceTier::from_request_value(service_tier) {
+                        Some(ServiceTier::Fast) => "fast",
+                        Some(ServiceTier::Flex) => "flex",
+                        None => service_tier.as_str(),
+                    };
+                    value(config_value)
+                }),
             )),
-            ConfigEdit::SetModelPersonality { personality } => Ok(self.write_profile_value(
+            ConfigEdit::SetModelPersonality { personality } => Ok(self.write_optional_value(
                 &["personality"],
                 personality.map(|personality| value(personality.to_string())),
             )),
             ConfigEdit::SetNoticeHideFullAccessWarning(acknowledged) => Ok(self.write_value(
-                Scope::Global,
                 &[NOTICE_TABLE_KEY, "hide_full_access_warning"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged) => Ok(self.write_value(
-                Scope::Global,
                 &[NOTICE_TABLE_KEY, "hide_world_writable_warning"],
                 value(*acknowledged),
             )),
-            ConfigEdit::SetNoticeFastDefaultOptOut(opted_out) => Ok(self.write_value(
-                Scope::Global,
-                &[NOTICE_TABLE_KEY, "fast_default_opt_out"],
-                value(*opted_out),
-            )),
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
-                Scope::Global,
                 &[NOTICE_TABLE_KEY, "hide_rate_limit_model_nudge"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
                 Ok(self.write_value(
-                    Scope::Global,
                     &[NOTICE_TABLE_KEY, migration_config.as_str()],
                     value(*acknowledged),
                 ))
             }
             ConfigEdit::SetNoticeHideExternalConfigMigrationPromptHome(acknowledged) => Ok(self
                 .write_value(
-                    Scope::Global,
                     &[
                         NOTICE_TABLE_KEY,
                         "external_config_migration_prompts",
@@ -683,7 +586,6 @@ impl ConfigDocument {
                 )),
             ConfigEdit::SetNoticeExternalConfigMigrationPromptHomeLastPromptedAt(timestamp) => {
                 Ok(self.write_value(
-                    Scope::Global,
                     &[
                         NOTICE_TABLE_KEY,
                         "external_config_migration_prompts",
@@ -696,7 +598,6 @@ impl ConfigDocument {
                 project,
                 acknowledged,
             ) => Ok(self.write_value(
-                Scope::Global,
                 &[
                     NOTICE_TABLE_KEY,
                     "external_config_migration_prompts",
@@ -709,7 +610,6 @@ impl ConfigDocument {
                 project,
                 timestamp,
             ) => Ok(self.write_value(
-                Scope::Global,
                 &[
                     NOTICE_TABLE_KEY,
                     "external_config_migration_prompts",
@@ -719,14 +619,8 @@ impl ConfigDocument {
                 value(*timestamp),
             )),
             ConfigEdit::RecordModelMigrationSeen { from, to } => Ok(self.write_value(
-                Scope::Global,
                 &[NOTICE_TABLE_KEY, "model_migrations", from.as_str()],
                 value(to.clone()),
-            )),
-            ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged) => Ok(self.write_value(
-                Scope::Global,
-                &["windows_wsl_setup_acknowledged"],
-                value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
             ConfigEdit::AddToolSuggestDisabledTool(disabled_tool) => {
@@ -753,20 +647,26 @@ impl ConfigDocument {
         }
     }
 
-    fn write_profile_value(&mut self, segments: &[&str], value: Option<TomlItem>) -> bool {
+    fn write_optional_value(&mut self, segments: &[&str], value: Option<TomlItem>) -> bool {
         match value {
-            Some(item) => self.write_value(Scope::Profile, segments, item),
-            None => self.clear(Scope::Profile, segments),
+            Some(item) => self.write_value(segments, item),
+            None => self.clear(segments),
         }
     }
 
-    fn write_value(&mut self, scope: Scope, segments: &[&str], value: TomlItem) -> bool {
-        let resolved = self.scoped_segments(scope, segments);
+    fn write_value(&mut self, segments: &[&str], value: TomlItem) -> bool {
+        let resolved = segments
+            .iter()
+            .map(|segment| (*segment).to_string())
+            .collect::<Vec<_>>();
         self.insert(&resolved, value)
     }
 
-    fn clear(&mut self, scope: Scope, segments: &[&str]) -> bool {
-        let resolved = self.scoped_segments(scope, segments);
+    fn clear(&mut self, segments: &[&str]) -> bool {
+        let resolved = segments
+            .iter()
+            .map(|segment| (*segment).to_string())
+            .collect::<Vec<_>>();
         self.remove(&resolved)
     }
 
@@ -799,7 +699,6 @@ impl ConfigDocument {
             .filter(|disabled_tool| seen.insert(disabled_tool.clone()))
             .collect::<Vec<_>>();
         self.write_value(
-            Scope::Global,
             &["tool_suggest", "disabled_tools"],
             document_helpers::tool_suggest_disabled_tools_value(&disabled_tools),
         )
@@ -811,7 +710,7 @@ impl ConfigDocument {
 
     fn replace_mcp_servers(&mut self, servers: &BTreeMap<String, McpServerConfig>) -> bool {
         if servers.is_empty() {
-            return self.clear(Scope::Global, &["mcp_servers"]);
+            return self.clear(&["mcp_servers"]);
         }
 
         let root = self.doc.as_table_mut();
@@ -973,26 +872,6 @@ impl ConfigDocument {
         mutated
     }
 
-    fn scoped_segments(&self, scope: Scope, segments: &[&str]) -> Vec<String> {
-        let resolved: Vec<String> = segments
-            .iter()
-            .map(|segment| (*segment).to_string())
-            .collect();
-
-        if matches!(scope, Scope::Profile)
-            && resolved.first().is_none_or(|segment| segment != "profiles")
-            && let Some(profile) = self.profile.as_deref()
-        {
-            let mut scoped = Vec::with_capacity(resolved.len() + 2);
-            scoped.push("profiles".to_string());
-            scoped.push(profile.to_string());
-            scoped.extend(resolved);
-            return scoped;
-        }
-
-        resolved
-    }
-
     fn insert(&mut self, segments: &[String], value: TomlItem) -> bool {
         let Some((last, parents)) = segments.split_last() else {
             return false;
@@ -1119,32 +998,21 @@ fn write_skill_config_selector(table: &mut TomlTable, selector: &SkillConfigSele
     }
 }
 
-/// Get the default model for a provider.
-///
-/// Returns the recommended default model for each known provider, or `None`
-/// for unknown providers (which clears the model to use remote default).
-pub fn default_model_for_provider(provider_id: &str) -> Option<&'static str> {
-    match provider_id {
-        "openai" => Some("gpt-5.3-codex"),
-        "anthropic" => Some("claude-sonnet-4-6"),
-        "gemini" => Some("gemini-3.1-pro-preview"),
-        "copilot" => Some("gpt-4o"),
-        _ => None, // Unknown provider, clear model
-    }
+/// Persist edits using a blocking strategy.
+pub fn apply_blocking(codex_home: &Path, edits: &[ConfigEdit]) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    apply_blocking_to_resolved_file(&config_path, edits)
 }
 
-/// Persist edits using a blocking strategy.
-pub fn apply_blocking(
-    codex_home: &Path,
-    profile: Option<&str>,
+fn apply_blocking_to_resolved_file(
+    resolved_config_file: &Path,
     edits: &[ConfigEdit],
 ) -> anyhow::Result<()> {
     if edits.is_empty() {
         return Ok(());
     }
 
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let write_paths = resolve_symlink_write_paths(&config_path)?;
+    let write_paths = resolve_symlink_write_paths(resolved_config_file)?;
     let serialized = match write_paths.read_path {
         Some(path) => match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
@@ -1160,13 +1028,7 @@ pub fn apply_blocking(
         serialized.parse::<DocumentMut>()?
     };
 
-    let profile = profile.map(ToOwned::to_owned).or_else(|| {
-        doc.get("profile")
-            .and_then(|item| item.as_str())
-            .map(ToOwned::to_owned)
-    });
-
-    let mut document = ConfigDocument::new(doc, profile);
+    let mut document = ConfigDocument::new(doc);
     let mut mutated = false;
 
     for edit in edits {
@@ -1179,7 +1041,7 @@ pub fn apply_blocking(
 
     write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
         format!(
-            "failed to persist config.toml at {}",
+            "failed to persist config at {}",
             write_paths.write_path.display()
         )
     })?;
@@ -1188,14 +1050,11 @@ pub fn apply_blocking(
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.
-pub async fn apply(
-    codex_home: &Path,
-    profile: Option<&str>,
-    edits: Vec<ConfigEdit>,
-) -> anyhow::Result<()> {
+///
+pub async fn apply(codex_home: &Path, edits: Vec<ConfigEdit>) -> anyhow::Result<()> {
     let codex_home = codex_home.to_path_buf();
-    let profile = profile.map(ToOwned::to_owned);
-    task::spawn_blocking(move || apply_blocking(&codex_home, profile.as_deref(), &edits))
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    task::spawn_blocking(move || apply_blocking_to_resolved_file(&config_path, &edits))
         .await
         .context("config persistence task panicked")?
 }
@@ -1203,47 +1062,40 @@ pub async fn apply(
 /// Fluent builder to batch config edits and apply them atomically.
 #[derive(Default)]
 pub struct ConfigEditsBuilder {
-    codex_home: PathBuf,
-    profile: Option<String>,
+    config_path: PathBuf,
     edits: Vec<ConfigEdit>,
 }
 
 impl ConfigEditsBuilder {
     pub fn new(codex_home: &Path) -> Self {
+        Self::for_config_path(&codex_home.join(CONFIG_TOML_FILE))
+    }
+
+    pub fn for_config(config: &crate::config::Config) -> Self {
+        let config_path = config
+            .config_layer_stack
+            .get_user_config_file()
+            .map(codex_utils_absolute_path::AbsolutePathBuf::to_path_buf)
+            .unwrap_or_else(|| config.codex_home.join(CONFIG_TOML_FILE).to_path_buf());
+        Self::for_config_path(&config_path)
+    }
+
+    pub fn for_config_path(config_path: &Path) -> Self {
         Self {
-            codex_home: codex_home.to_path_buf(),
-            profile: None,
+            config_path: config_path.to_path_buf(),
             edits: Vec::new(),
         }
     }
 
-    pub fn with_profile(mut self, profile: Option<&str>) -> Self {
-        self.profile = profile.map(ToOwned::to_owned);
-        self
-    }
-
-    pub fn set_model(
-        mut self,
-        model: Option<&str>,
-        effort: Option<ReasoningEffort>,
-        model_provider: Option<String>,
-    ) -> Self {
+    pub fn set_model(mut self, model: Option<&str>, effort: Option<ReasoningEffort>) -> Self {
         self.edits.push(ConfigEdit::SetModel {
             model: model.map(ToOwned::to_owned),
             effort,
-            model_provider,
         });
         self
     }
 
-    /// Remove `model` and `model_provider` from the active scope while
-    /// preserving sibling keys like `model_reasoning_effort`.
-    pub fn clear_model_and_provider(mut self) -> Self {
-        self.edits.push(ConfigEdit::ClearModelAndProvider);
-        self
-    }
-
-    pub fn set_service_tier(mut self, service_tier: Option<ServiceTier>) -> Self {
+    pub fn set_service_tier(mut self, service_tier: Option<String>) -> Self {
         self.edits.push(ConfigEdit::SetServiceTier { service_tier });
         self
     }
@@ -1263,12 +1115,6 @@ impl ConfigEditsBuilder {
     pub fn set_hide_world_writable_warning(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetNoticeHideWorldWritableWarning(acknowledged));
-        self
-    }
-
-    pub fn set_fast_default_opt_out(mut self, opted_out: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetNoticeFastDefaultOptOut(opted_out));
         self
     }
 
@@ -1317,12 +1163,6 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_windows_wsl_setup_acknowledged(mut self, acknowledged: bool) -> Self {
-        self.edits
-            .push(ConfigEdit::SetWindowsWslSetupAcknowledged(acknowledged));
-        self
-    }
-
     pub fn set_model_availability_nux_count(mut self, shown_count: &HashMap<String, u32>) -> Self {
         self.edits
             .extend(model_availability_nux_count_edits(shown_count));
@@ -1349,27 +1189,16 @@ impl ConfigEditsBuilder {
 
     /// Enable or disable a feature flag by key under the `[features]` table.
     ///
-    /// Disabling a default-false feature clears the root-scoped key instead of
+    /// Disabling a default-false feature clears the key instead of
     /// persisting `false`, so the config does not pin the feature once it
-    /// graduates to globally enabled. Profile-scoped disables still persist
-    /// `false` so they can override an inherited root enable.
+    /// graduates to globally enabled.
     pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
-        let profile_scoped = self.profile.is_some();
-        let segments = if let Some(profile) = self.profile.as_ref() {
-            vec![
-                "profiles".to_string(),
-                profile.clone(),
-                "features".to_string(),
-                key.to_string(),
-            ]
-        } else {
-            vec!["features".to_string(), key.to_string()]
-        };
+        let segments = vec!["features".to_string(), key.to_string()];
         let is_default_false_feature = FEATURES
             .iter()
             .find(|spec| spec.key == key)
             .is_some_and(|spec| !spec.default_enabled);
-        if enabled || profile_scoped || !is_default_false_feature {
+        if enabled || !is_default_false_feature {
             self.edits.push(ConfigEdit::SetPath {
                 segments,
                 value: value(enabled),
@@ -1380,49 +1209,9 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_reading_view_mode(mut self, mode: &str) -> Self {
-        let mode = match mode.trim().to_ascii_lowercase().as_str() {
-            "browser" => "browser",
-            "disabled" | "off" => "disabled",
-            _ => "tui",
-        };
-        self.edits.push(ConfigEdit::SetPath {
-            segments: vec!["reading_view".to_string(), "mode".to_string()],
-            value: value(mode),
-        });
-
-        // `[reading_view].mode` is the source of truth. Clear the old feature
-        // flag location so saved configs do not contain contradictory state.
-        self.edits.push(ConfigEdit::ClearPath {
-            segments: vec!["features".to_string(), "reading_view".to_string()],
-        });
-        if let Some(profile) = self.profile.as_ref() {
-            self.edits.push(ConfigEdit::ClearPath {
-                segments: vec![
-                    "profiles".to_string(),
-                    profile.clone(),
-                    "features".to_string(),
-                    "reading_view".to_string(),
-                ],
-            });
-        }
-
-        self
-    }
-
     pub fn set_windows_sandbox_mode(mut self, mode: &str) -> Self {
-        let segments = if let Some(profile) = self.profile.as_ref() {
-            vec![
-                "profiles".to_string(),
-                profile.clone(),
-                "windows".to_string(),
-                "sandbox".to_string(),
-            ]
-        } else {
-            vec!["windows".to_string(), "sandbox".to_string()]
-        };
         self.edits.push(ConfigEdit::SetPath {
-            segments,
+            segments: vec!["windows".to_string(), "sandbox".to_string()],
             value: value(mode),
         });
         self
@@ -1470,34 +1259,15 @@ impl ConfigEditsBuilder {
             "elevated_windows_sandbox",
             "enable_experimental_windows_sandbox",
         ] {
-            let mut segments = vec!["features".to_string(), key.to_string()];
-            if let Some(profile) = self.profile.as_ref() {
-                segments = vec![
-                    "profiles".to_string(),
-                    profile.clone(),
-                    "features".to_string(),
-                    key.to_string(),
-                ];
-            }
+            let segments = vec!["features".to_string(), key.to_string()];
             self.edits.push(ConfigEdit::ClearPath { segments });
         }
         self
     }
 
     pub fn set_session_picker_view(mut self, mode: SessionPickerViewMode) -> Self {
-        let segments = if let Some(profile) = self.profile.as_ref() {
-            vec![
-                "profiles".to_string(),
-                profile.clone(),
-                "tui".to_string(),
-                "session_picker_view".to_string(),
-            ]
-        } else {
-            vec!["tui".to_string(), "session_picker_view".to_string()]
-        };
-
         self.edits.push(ConfigEdit::SetPath {
-            segments,
+            segments: vec!["tui".to_string(), "session_picker_view".to_string()],
             value: value(mode.to_string()),
         });
         self
@@ -1513,13 +1283,13 @@ impl ConfigEditsBuilder {
 
     /// Apply edits on a blocking thread.
     pub fn apply_blocking(self) -> anyhow::Result<()> {
-        apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
+        apply_blocking_to_resolved_file(&self.config_path, &self.edits)
     }
 
     /// Apply edits asynchronously via a blocking offload.
     pub async fn apply(self) -> anyhow::Result<()> {
         task::spawn_blocking(move || {
-            apply_blocking(&self.codex_home, self.profile.as_deref(), &self.edits)
+            apply_blocking_to_resolved_file(&self.config_path, &self.edits)
         })
         .await
         .context("config persistence task panicked")?

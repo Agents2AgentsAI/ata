@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Stage and optionally package the @a2a-ai/ata npm module."""
+"""Stage and optionally package the @openai/codex npm module."""
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -10,94 +11,90 @@ import tempfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ATA_CLI_ROOT = SCRIPT_DIR.parent
-REPO_ROOT = ATA_CLI_ROOT.parent
+CODEX_CLI_ROOT = SCRIPT_DIR.parent
+REPO_ROOT = CODEX_CLI_ROOT.parent
 RESPONSES_API_PROXY_NPM_ROOT = REPO_ROOT / "codex-rs" / "responses-api-proxy" / "npm"
-ATA_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
-ATA_NPM_NAME = "@a2a-ai/ata"
+CODEX_SDK_ROOT = REPO_ROOT / "sdk" / "typescript"
+CODEX_NPM_NAME = "@openai/codex"
+CODEX_PACKAGE_COMPONENT = "codex-package"
 
-# `npm_name` is the local optional-dependency alias consumed by `bin/ata.js`.
-# The underlying package published to npm is always `@a2a-ai/ata`.
-ATA_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
-    "ata-linux-x64": {
-        "npm_name": "@a2a-ai/ata-linux-x64",
+# `npm_name` is the local optional-dependency alias consumed by `bin/codex.js`.
+# The underlying package published to npm is always `@openai/codex`.
+CODEX_PLATFORM_PACKAGES: dict[str, dict[str, str]] = {
+    "codex-linux-x64": {
+        "npm_name": "@openai/codex-linux-x64",
         "npm_tag": "linux-x64",
         "target_triple": "x86_64-unknown-linux-musl",
         "os": "linux",
         "cpu": "x64",
     },
-    "ata-linux-arm64": {
-        "npm_name": "@a2a-ai/ata-linux-arm64",
+    "codex-linux-arm64": {
+        "npm_name": "@openai/codex-linux-arm64",
         "npm_tag": "linux-arm64",
         "target_triple": "aarch64-unknown-linux-musl",
         "os": "linux",
         "cpu": "arm64",
     },
-    "ata-darwin-x64": {
-        "npm_name": "@a2a-ai/ata-darwin-x64",
+    "codex-darwin-x64": {
+        "npm_name": "@openai/codex-darwin-x64",
         "npm_tag": "darwin-x64",
         "target_triple": "x86_64-apple-darwin",
         "os": "darwin",
         "cpu": "x64",
     },
-    "ata-darwin-arm64": {
-        "npm_name": "@a2a-ai/ata-darwin-arm64",
+    "codex-darwin-arm64": {
+        "npm_name": "@openai/codex-darwin-arm64",
         "npm_tag": "darwin-arm64",
         "target_triple": "aarch64-apple-darwin",
         "os": "darwin",
         "cpu": "arm64",
     },
-    "ata-win32-x64": {
-        "npm_name": "@a2a-ai/ata-win32-x64",
+    "codex-win32-x64": {
+        "npm_name": "@openai/codex-win32-x64",
         "npm_tag": "win32-x64",
         "target_triple": "x86_64-pc-windows-msvc",
         "os": "win32",
         "cpu": "x64",
     },
+    "codex-win32-arm64": {
+        "npm_name": "@openai/codex-win32-arm64",
+        "npm_tag": "win32-arm64",
+        "target_triple": "aarch64-pc-windows-msvc",
+        "os": "win32",
+        "cpu": "arm64",
+    },
 }
 
 PACKAGE_EXPANSIONS: dict[str, list[str]] = {
-    "ata": ["ata", *ATA_PLATFORM_PACKAGES],
+    "codex": ["codex", *CODEX_PLATFORM_PACKAGES],
 }
 
 PACKAGE_NATIVE_COMPONENTS: dict[str, list[str]] = {
-    "ata": [],
-    "ata-linux-x64": ["bwrap", "ata", "rg"],
-    "ata-linux-arm64": ["bwrap", "ata", "rg"],
-    "ata-darwin-x64": ["ata", "rg"],
-    "ata-darwin-arm64": ["ata", "rg"],
-    "ata-win32-x64": ["ata", "rg", "ata-windows-sandbox-setup", "ata-command-runner"],
-    "ata-responses-api-proxy": ["ata-responses-api-proxy"],
-    "ata-sdk": [],
+    "codex": [],
+    "codex-linux-x64": [CODEX_PACKAGE_COMPONENT],
+    "codex-linux-arm64": [CODEX_PACKAGE_COMPONENT],
+    "codex-darwin-x64": [CODEX_PACKAGE_COMPONENT],
+    "codex-darwin-arm64": [CODEX_PACKAGE_COMPONENT],
+    "codex-win32-x64": [CODEX_PACKAGE_COMPONENT],
+    "codex-win32-arm64": [CODEX_PACKAGE_COMPONENT],
+    "codex-responses-api-proxy": ["codex-responses-api-proxy"],
+    "codex-sdk": [],
 }
 
 PACKAGE_TARGET_FILTERS: dict[str, str] = {
     package_name: package_config["target_triple"]
-    for package_name, package_config in ATA_PLATFORM_PACKAGES.items()
+    for package_name, package_config in CODEX_PLATFORM_PACKAGES.items()
 }
 
 PACKAGE_CHOICES = tuple(PACKAGE_NATIVE_COMPONENTS)
 
-# NOTE: `codex-resources` is the literal directory name the Rust runtime looks
-# for next to the executable (see codex-rs/linux-sandbox/src/bundled_bwrap.rs);
-# do not rename it. `ata` is where bin/ata.js expects the binary.
-COMPONENT_DEST_DIR: dict[str, str] = {
-    "bwrap": "codex-resources",
-    "ata": "ata",
-    "ata-responses-api-proxy": "ata-responses-api-proxy",
-    "ata-windows-sandbox-setup": "ata",
-    "ata-command-runner": "ata",
-    "rg": "path",
-}
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build or stage the Ata CLI npm package.")
+    parser = argparse.ArgumentParser(description="Build or stage the Codex CLI npm package.")
     parser.add_argument(
         "--package",
         choices=PACKAGE_CHOICES,
-        default="ata",
-        help="Which npm package to stage (default: ata).",
+        default="codex",
+        help="Which npm package to stage (default: codex).",
     )
     parser.add_argument(
         "--version",
@@ -132,16 +129,6 @@ def parse_args() -> argparse.Namespace:
         "--vendor-src",
         type=Path,
         help="Directory containing pre-installed native binaries to bundle (vendor root).",
-    )
-    parser.add_argument(
-        "--allow-missing-native-component",
-        dest="allow_missing_native_components",
-        action="append",
-        default=[],
-        help=(
-            "Native component that may be absent from --vendor-src. Intended for CI "
-            "compatibility with older artifact workflows; releases should not use this."
-        ),
     )
     return parser.parse_args()
 
@@ -183,25 +170,24 @@ def main() -> int:
                 staging_dir,
                 native_components,
                 target_filter={target_filter} if target_filter else None,
-                allow_missing_components=set(args.allow_missing_native_components),
             )
 
         if release_version:
             staging_dir_str = str(staging_dir)
-            if package == "ata":
+            if package == "codex":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the CLI:\n"
-                    f"    node {staging_dir_str}/bin/ata.js --version\n"
-                    f"    node {staging_dir_str}/bin/ata.js --help\n\n"
+                    f"    node {staging_dir_str}/bin/codex.js --version\n"
+                    f"    node {staging_dir_str}/bin/codex.js --help\n\n"
                 )
-            elif package == "ata-responses-api-proxy":
+            elif package == "codex-responses-api-proxy":
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify the responses API proxy:\n"
-                    f"    node {staging_dir_str}/bin/ata-responses-api-proxy.js --help\n\n"
+                    f"    node {staging_dir_str}/bin/codex-responses-api-proxy.js --help\n\n"
                 )
-            elif package in ATA_PLATFORM_PACKAGES:
+            elif package in CODEX_PLATFORM_PACKAGES:
                 print(
                     f"Staged version {version} for release in {staging_dir_str}\n\n"
                     "Verify native payload contents:\n"
@@ -236,7 +222,7 @@ def prepare_staging_dir(staging_dir: Path | None) -> tuple[Path, bool]:
             raise RuntimeError(f"Staging directory {staging_dir} is not empty.")
         return staging_dir, False
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="ata-npm-stage-"))
+    temp_dir = Path(tempfile.mkdtemp(prefix="codex-npm-stage-"))
     return temp_dir, True
 
 
@@ -244,21 +230,18 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
     package_json: dict
     package_json_path: Path | None = None
 
-    if package == "ata":
+    if package == "codex":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ATA_CLI_ROOT / "bin" / "ata.js", bin_dir / "ata.js")
-        rg_manifest = ATA_CLI_ROOT / "bin" / "rg"
-        if rg_manifest.exists():
-            shutil.copy2(rg_manifest, bin_dir / "rg")
+        shutil.copy2(CODEX_CLI_ROOT / "bin" / "codex.js", bin_dir / "codex.js")
 
         readme_src = REPO_ROOT / "README.md"
         if readme_src.exists():
             shutil.copy2(readme_src, staging_dir / "README.md")
 
-        package_json_path = ATA_CLI_ROOT / "package.json"
-    elif package in ATA_PLATFORM_PACKAGES:
-        platform_package = ATA_PLATFORM_PACKAGES[package]
+        package_json_path = CODEX_CLI_ROOT / "package.json"
+    elif package in CODEX_PLATFORM_PACKAGES:
+        platform_package = CODEX_PLATFORM_PACKAGES[package]
         platform_npm_tag = platform_package["npm_tag"]
         platform_version = compute_platform_package_version(version, platform_npm_tag)
 
@@ -266,40 +249,40 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         if readme_src.exists():
             shutil.copy2(readme_src, staging_dir / "README.md")
 
-        with open(ATA_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
-            ata_package_json = json.load(fh)
+        with open(CODEX_CLI_ROOT / "package.json", "r", encoding="utf-8") as fh:
+            codex_package_json = json.load(fh)
 
         package_json = {
-            "name": ATA_NPM_NAME,
+            "name": CODEX_NPM_NAME,
             "version": platform_version,
-            "license": ata_package_json.get("license", "Apache-2.0"),
+            "license": codex_package_json.get("license", "Apache-2.0"),
             "os": [platform_package["os"]],
             "cpu": [platform_package["cpu"]],
             "files": ["vendor"],
-            "repository": ata_package_json.get("repository"),
+            "repository": codex_package_json.get("repository"),
         }
 
-        engines = ata_package_json.get("engines")
+        engines = codex_package_json.get("engines")
         if isinstance(engines, dict):
             package_json["engines"] = engines
 
-        package_manager = ata_package_json.get("packageManager")
+        package_manager = codex_package_json.get("packageManager")
         if isinstance(package_manager, str):
             package_json["packageManager"] = package_manager
-    elif package == "ata-responses-api-proxy":
+    elif package == "codex-responses-api-proxy":
         bin_dir = staging_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
-        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "ata-responses-api-proxy.js"
-        shutil.copy2(launcher_src, bin_dir / "ata-responses-api-proxy.js")
+        launcher_src = RESPONSES_API_PROXY_NPM_ROOT / "bin" / "codex-responses-api-proxy.js"
+        shutil.copy2(launcher_src, bin_dir / "codex-responses-api-proxy.js")
 
         readme_src = RESPONSES_API_PROXY_NPM_ROOT / "README.md"
         if readme_src.exists():
             shutil.copy2(readme_src, staging_dir / "README.md")
 
         package_json_path = RESPONSES_API_PROXY_NPM_ROOT / "package.json"
-    elif package == "ata-sdk":
-        package_json_path = ATA_SDK_ROOT / "package.json"
-        stage_ata_sdk_sources(staging_dir)
+    elif package == "codex-sdk":
+        package_json_path = CODEX_SDK_ROOT / "package.json"
+        stage_codex_sdk_sources(staging_dir)
     else:
         raise RuntimeError(f"Unknown package '{package}'.")
 
@@ -308,18 +291,18 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
             package_json = json.load(fh)
         package_json["version"] = version
 
-    if package == "ata":
-        package_json["files"] = ["bin"]
+    if package == "codex":
+        package_json["files"] = ["bin/codex.js"]
         package_json["optionalDependencies"] = {
-            ATA_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
-                f"npm:{ATA_NPM_NAME}@"
-                f"{compute_platform_package_version(version, ATA_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
+            CODEX_PLATFORM_PACKAGES[platform_package]["npm_name"]: (
+                f"npm:{CODEX_NPM_NAME}@"
+                f"{compute_platform_package_version(version, CODEX_PLATFORM_PACKAGES[platform_package]['npm_tag'])}"
             )
-            for platform_package in PACKAGE_EXPANSIONS["ata"]
-            if platform_package != "ata"
+            for platform_package in PACKAGE_EXPANSIONS["codex"]
+            if platform_package != "codex"
         }
 
-    elif package == "ata-sdk":
+    elif package == "codex-sdk":
         scripts = package_json.get("scripts")
         if isinstance(scripts, dict):
             scripts.pop("prepare", None)
@@ -327,7 +310,7 @@ def stage_sources(staging_dir: Path, version: str, package: str) -> None:
         dependencies = package_json.get("dependencies")
         if not isinstance(dependencies, dict):
             dependencies = {}
-        dependencies[ATA_NPM_NAME] = version
+        dependencies[CODEX_NPM_NAME] = version
         package_json["dependencies"] = dependencies
 
     with open(staging_dir / "package.json", "w", encoding="utf-8") as out:
@@ -342,19 +325,19 @@ def compute_platform_package_version(version: str, platform_tag: str) -> str:
 
 
 def run_command(cmd: list[str], cwd: Path | None = None) -> None:
-    print("+", " ".join(cmd))
+    print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, cwd=cwd, check=True)
 
 
-def stage_ata_sdk_sources(staging_dir: Path) -> None:
-    package_root = ATA_SDK_ROOT
+def stage_codex_sdk_sources(staging_dir: Path) -> None:
+    package_root = CODEX_SDK_ROOT
 
     run_command(["pnpm", "install", "--frozen-lockfile"], cwd=package_root)
     run_command(["pnpm", "run", "build"], cwd=package_root)
 
     dist_src = package_root / "dist"
     if not dist_src.exists():
-        raise RuntimeError("ata-sdk build did not produce a dist directory.")
+        raise RuntimeError("codex-sdk build did not produce a dist directory.")
 
     shutil.copytree(dist_src, staging_dir / "dist")
 
@@ -372,14 +355,12 @@ def copy_native_binaries(
     staging_dir: Path,
     components: list[str],
     target_filter: set[str] | None = None,
-    allow_missing_components: set[str] | None = None,
 ) -> None:
     vendor_src = vendor_src.resolve()
     if not vendor_src.exists():
         raise RuntimeError(f"Vendor source directory not found: {vendor_src}")
 
-    components_set = {component for component in components if component in COMPONENT_DEST_DIR}
-    allow_missing_components = allow_missing_components or set()
+    components_set = set(components)
     if not components_set:
         return
 
@@ -397,24 +378,25 @@ def copy_native_binaries(
         if target_filter is not None and target_dir.name not in target_filter:
             continue
 
-        dest_target_dir = vendor_dest / target_dir.name
-        dest_target_dir.mkdir(parents=True, exist_ok=True)
         copied_targets.add(target_dir.name)
 
-        for component in components_set:
-            dest_dir_name = COMPONENT_DEST_DIR.get(component)
-            if dest_dir_name is None:
-                continue
+        dest_target_dir = vendor_dest / target_dir.name
 
-            src_component_dir = target_dir / dest_dir_name
+        if CODEX_PACKAGE_COMPONENT in components_set:
+            if dest_target_dir.exists():
+                shutil.rmtree(dest_target_dir)
+            shutil.copytree(target_dir, dest_target_dir)
+        else:
+            dest_target_dir.mkdir(parents=True, exist_ok=True)
+
+        for component in sorted(components_set - {CODEX_PACKAGE_COMPONENT}):
+            src_component_dir = target_dir / component
             if not src_component_dir.exists():
-                if component in allow_missing_components:
-                    continue
                 raise RuntimeError(
                     f"Missing native component '{component}' in vendor source: {src_component_dir}"
                 )
 
-            dest_component_dir = dest_target_dir / dest_dir_name
+            dest_component_dir = dest_target_dir / component
             if dest_component_dir.exists():
                 shutil.rmtree(dest_component_dir)
             shutil.copytree(src_component_dir, dest_component_dir)
@@ -425,16 +407,23 @@ def copy_native_binaries(
             missing_list = ", ".join(missing_targets)
             raise RuntimeError(f"Missing target directories in vendor source: {missing_list}")
 
-
 def run_npm_pack(staging_dir: Path, output_path: Path) -> Path:
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(prefix="ata-npm-pack-") as pack_dir_str:
+    with tempfile.TemporaryDirectory(prefix="codex-npm-pack-") as pack_dir_str:
         pack_dir = Path(pack_dir_str)
+        npm_cache_dir = pack_dir / "npm-cache"
+        npm_logs_dir = pack_dir / "npm-logs"
+        npm_cache_dir.mkdir()
+        npm_logs_dir.mkdir()
+        env = os.environ.copy()
+        env["NPM_CONFIG_CACHE"] = str(npm_cache_dir)
+        env["NPM_CONFIG_LOGS_DIR"] = str(npm_logs_dir)
         stdout = subprocess.check_output(
             ["npm", "pack", "--json", "--pack-destination", str(pack_dir)],
             cwd=staging_dir,
+            env=env,
             text=True,
         )
         try:

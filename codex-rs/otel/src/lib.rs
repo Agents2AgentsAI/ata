@@ -58,6 +58,7 @@ impl From<codex_app_server_protocol::AuthMode> for TelemetryAuthMode {
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
             | codex_app_server_protocol::AuthMode::AgentIdentity => Self::Chatgpt,
+            codex_app_server_protocol::AuthMode::Ata => Self::ApiKey,
         }
     }
 }

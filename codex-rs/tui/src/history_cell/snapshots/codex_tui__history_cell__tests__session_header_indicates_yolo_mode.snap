@@ -1,0 +1,12 @@
+---
+source: tui/src/history_cell/tests.rs
+assertion_line: 1470
+expression: rendered
+---
+╭───────────────────────────────────────╮
+│ >_ Agents2Agents ata (vtest)          │
+│                                       │
+│ model:       gpt-5   /model to change │
+│ directory:   /tmp/project             │
+│ permissions: YOLO mode                │
+╰───────────────────────────────────────╯

@@ -8,4 +8,5 @@ ignore = [
     "RUSTSEC-2025-0141", # bincode via syntect; remove when syntect drops or updates it
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
+    "RUSTSEC-2026-0097", # rand 0.8.5 via age/codex-secrets; unsoundness only with custom logger in TryRng path; remove when age upgrades to rand >=0.8.6
 ]

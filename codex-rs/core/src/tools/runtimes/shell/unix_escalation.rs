@@ -122,7 +122,7 @@ pub(super) async fn try_run_zsh_fork(
         &req.cwd,
         &env,
         req.additional_permissions.clone(),
-        req.workspace_kb_root.as_ref(),
+        req.workspace_kb_root.clone(),
     )?;
     let options = ExecOptions {
         expiration: req.timeout_ms.into(),
@@ -916,6 +916,7 @@ impl CoreShellCommandExecutor {
             cwd: workdir.clone(),
             env,
             additional_permissions,
+            workspace_kb_root: None,
         };
         let options = ExecOptions {
             expiration: ExecExpiration::DefaultTimeout,

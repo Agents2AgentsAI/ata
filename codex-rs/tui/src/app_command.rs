@@ -16,6 +16,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -31,7 +32,6 @@ pub(crate) enum AppCommand {
         transport: Option<ThreadRealtimeStartTransport>,
         voice: Option<Value>,
     },
-    #[allow(dead_code)]
     RealtimeConversationAudio(ThreadRealtimeAudioChunk),
     RealtimeConversationClose,
     RunUserShellCommand {
@@ -42,7 +42,7 @@ pub(crate) enum AppCommand {
         cwd: PathBuf,
         approval_policy: AskForApproval,
         approvals_reviewer: Option<ApprovalsReviewer>,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -56,6 +56,7 @@ pub(crate) enum AppCommand {
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
@@ -107,11 +108,11 @@ pub(crate) enum AppCommand {
     ApproveGuardianDeniedAction {
         event: GuardianAssessmentEvent,
     },
-    /// ATA scheduling: request a snapshot of cron/monitor/loop tasks for the
+    /// ATA scheduling: request a snapshot of cron/monitor tasks for the
     /// active thread. Response arrives as a `SchedulingTasksSnapshot`
     /// notification.
     ListSchedulingTasks,
-    /// ATA scheduling: delete one cron/monitor/loop row from the panel via
+    /// ATA scheduling: delete one cron/monitor row from the panel via
     /// the `d` keypress. Server aborts the task first if it's still running
     /// and emits a fresh `SchedulingTasksSnapshot` so the row disappears
     /// without waiting for the 1s auto-refresh tick.
@@ -137,7 +138,7 @@ impl AppCommand {
         Self::RealtimeConversationStart { transport, voice }
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(crate) fn realtime_conversation_audio(frame: ThreadRealtimeAudioChunk) -> Self {
         Self::RealtimeConversationAudio(frame)
     }
@@ -155,7 +156,7 @@ impl AppCommand {
         items: Vec<UserInput>,
         cwd: PathBuf,
         approval_policy: AskForApproval,
-        permission_profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
         model: String,
         effort: Option<ReasoningEffortConfig>,
         summary: Option<ReasoningSummaryConfig>,
@@ -169,7 +170,7 @@ impl AppCommand {
             cwd,
             approval_policy,
             approvals_reviewer: None,
-            permission_profile,
+            active_permission_profile,
             model,
             effort,
             summary,
@@ -186,6 +187,7 @@ impl AppCommand {
         approval_policy: Option<AskForApproval>,
         approvals_reviewer: Option<ApprovalsReviewer>,
         permission_profile: Option<PermissionProfile>,
+        active_permission_profile: Option<ActivePermissionProfile>,
         windows_sandbox_level: Option<WindowsSandboxLevel>,
         model: Option<String>,
         effort: Option<Option<ReasoningEffortConfig>>,
@@ -199,6 +201,7 @@ impl AppCommand {
             approval_policy,
             approvals_reviewer,
             permission_profile,
+            active_permission_profile,
             windows_sandbox_level,
             model,
             effort,

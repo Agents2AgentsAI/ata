@@ -44,6 +44,10 @@ function Normalize-Version {
         return "latest"
     }
 
+    if ($RawVersion.StartsWith("rust-v")) {
+        return $RawVersion.Substring(6)
+    }
+
     if ($RawVersion.StartsWith("v")) {
         return $RawVersion.Substring(1)
     }
@@ -51,16 +55,16 @@ function Normalize-Version {
     return $RawVersion
 }
 
-function Get-ReleaseAssetMetadata {
+function Find-ReleaseAssetMetadata {
     param(
         [string]$AssetName,
         [string]$ResolvedVersion
     )
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/Agents2AgentsAI/ata/releases/tags/v$ResolvedVersion"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/tags/rust-v$ResolvedVersion"
     $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
     if ($null -eq $asset) {
-        throw "Could not find release asset $AssetName for Ata $ResolvedVersion."
+        return $null
     }
 
     $digestMatch = [regex]::Match([string]$asset.digest, "^sha256:([0-9a-fA-F]{64})$")
@@ -74,6 +78,20 @@ function Get-ReleaseAssetMetadata {
     }
 }
 
+function Get-ReleaseAssetMetadata {
+    param(
+        [string]$AssetName,
+        [string]$ResolvedVersion
+    )
+
+    $metadata = Find-ReleaseAssetMetadata -AssetName $AssetName -ResolvedVersion $ResolvedVersion
+    if ($null -eq $metadata) {
+        throw "Could not find release asset $AssetName for Codex $ResolvedVersion."
+    }
+
+    return $metadata
+}
+
 function Test-ArchiveDigest {
     param(
         [string]$ArchivePath,
@@ -82,8 +100,25 @@ function Test-ArchiveDigest {
 
     $actualDigest = (Get-FileHash -LiteralPath $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualDigest -ne $ExpectedDigest) {
-        throw "Downloaded Ata archive checksum did not match release metadata. Expected $ExpectedDigest but got $actualDigest."
+        throw "Downloaded Codex archive checksum did not match expected digest. Expected $ExpectedDigest but got $actualDigest."
     }
+}
+
+function Get-PackageArchiveDigest {
+    param(
+        [string]$ManifestPath,
+        [string]$AssetName
+    )
+
+    $escapedAssetName = [regex]::Escape($AssetName)
+    foreach ($line in Get-Content -LiteralPath $ManifestPath) {
+        $match = [regex]::Match($line, "^\s*([0-9a-fA-F]{64})\s+$escapedAssetName\s*$")
+        if ($match.Success) {
+            return $match.Groups[1].Value.ToLowerInvariant()
+        }
+    }
+
+    throw "Could not find SHA-256 digest for $AssetName in codex-package_SHA256SUMS."
 }
 
 function Path-Contains {
@@ -150,9 +185,9 @@ function Resolve-Version {
         return $normalizedVersion
     }
 
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/Agents2AgentsAI/ata/releases/latest"
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/openai/codex/releases/latest"
     if (-not $release.tag_name) {
-        Write-Error "Failed to resolve the latest Ata release version."
+        Write-Error "Failed to resolve the latest Codex release version."
         exit 1
     }
 
@@ -186,7 +221,12 @@ function Get-CurrentInstalledVersion {
         [string]$StandaloneCurrentDir
     )
 
-    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "ata.exe")
+    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "bin\codex.exe")
+    if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
+        return $standaloneVersion
+    }
+
+    $standaloneVersion = Get-VersionFromBinary -CodexPath (Join-Path $StandaloneCurrentDir "codex.exe")
     if (-not [string]::IsNullOrWhiteSpace($standaloneVersion)) {
         return $standaloneVersion
     }
@@ -212,7 +252,7 @@ function Test-OldStandaloneBinLayout {
         return $false
     }
 
-    $requiredFiles = @("ata.exe", "rg.exe")
+    $requiredFiles = @("codex.exe", "rg.exe")
     foreach ($fileName in $requiredFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $VisibleBinDir $fileName) -PathType Leaf)) {
             return $false
@@ -220,11 +260,11 @@ function Test-OldStandaloneBinLayout {
     }
 
     $knownFiles = @(
-        "ata.exe",
+        "codex.exe",
         "rg.exe",
-        "ata-command-runner.exe",
-        "ata-windows-sandbox.exe",
-        "ata-windows-sandbox-setup.exe"
+        "codex-command-runner.exe",
+        "codex-windows-sandbox.exe",
+        "codex-windows-sandbox-setup.exe"
     )
     foreach ($child in Get-ChildItem -LiteralPath $VisibleBinDir -Force) {
         if ($child.PSIsContainer) {
@@ -248,9 +288,9 @@ function Move-OldStandaloneBinIfApproved {
         return $null
     }
 
-    Write-Step "We found an older Ata install at $VisibleBinDir"
-    Write-WarningStep "To continue, Ata needs to update the install at this path."
-    if (-not (Prompt-YesNo "Replace it with the current Ata setup now?")) {
+    Write-Step "We found an older Codex install at $VisibleBinDir"
+    Write-WarningStep "To continue, Codex needs to update the install at this path."
+    if (-not (Prompt-YesNo "Replace it with the current Codex setup now?")) {
         throw "Cannot replace older standalone install without confirmation: $VisibleBinDir"
     }
 
@@ -445,34 +485,84 @@ function Ensure-Junction {
     throw "Refusing to replace file at $LinkPath with a junction."
 }
 
-function Test-ReleaseIsComplete {
+function Test-PackageContentsAreComplete {
     param(
-        [string]$ReleaseDir,
-        [string]$ExpectedVersion,
-        [string]$ExpectedTarget
+        [string]$PackageDir
     )
 
-    if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
+    if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) {
         return $false
     }
 
     $expectedFiles = @(
-        "ata.exe",
-        "codex-resources\ata-command-runner.exe",
-        "codex-resources\ata-windows-sandbox-setup.exe",
+        "codex-package.json",
+        "bin\codex.exe",
+        "codex-path\rg.exe",
+        "codex-resources\codex-command-runner.exe",
+        "codex-resources\codex-windows-sandbox-setup.exe"
+    )
+    foreach ($name in $expectedFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-LegacyPlatformNpmContentsAreComplete {
+    param(
+        [string]$PackageDir
+    )
+
+    if (-not (Test-Path -LiteralPath $PackageDir -PathType Container)) {
+        return $false
+    }
+
+    $expectedFiles = @(
+        "codex.exe",
+        "codex-resources\codex-command-runner.exe",
+        "codex-resources\codex-windows-sandbox-setup.exe",
         "codex-resources\rg.exe"
     )
     foreach ($name in $expectedFiles) {
-        if (-not (Test-Path -LiteralPath (Join-Path $ReleaseDir $name) -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
             return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-ReleaseIsComplete {
+    param(
+        [string]$ReleaseDir,
+        [string]$ExpectedVersion,
+        [string]$ExpectedTarget,
+        [string]$Layout
+    )
+
+    switch ($Layout) {
+        "Package" {
+            if (-not (Test-PackageContentsAreComplete -PackageDir $ReleaseDir)) {
+                return $false
+            }
+        }
+        "LegacyPlatformNpm" {
+            if (-not (Test-LegacyPlatformNpmContentsAreComplete -PackageDir $ReleaseDir)) {
+                return $false
+            }
+        }
+        default {
+            throw "Unknown Codex installer layout: $Layout"
         }
     }
 
     return (Split-Path -Leaf $ReleaseDir) -eq "$ExpectedVersion-$ExpectedTarget"
 }
 
-function Get-ExistingAtaCommand {
-    $existing = Get-Command ata -ErrorAction SilentlyContinue
+function Get-ExistingCodexCommand {
+    $existing = Get-Command codex -ErrorAction SilentlyContinue
     if ($null -eq $existing) {
         return $null
     }
@@ -480,7 +570,7 @@ function Get-ExistingAtaCommand {
     return $existing.Source
 }
 
-function Get-ExistingAtaManager {
+function Get-ExistingCodexManager {
     param(
         [string]$ExistingPath,
         [string]$VisibleBinDir
@@ -510,14 +600,14 @@ function Get-ConflictingInstall {
         [string]$VisibleBinDir
     )
 
-    $existingPath = Get-ExistingAtaCommand
-    $manager = Get-ExistingAtaManager -ExistingPath $existingPath -VisibleBinDir $VisibleBinDir
+    $existingPath = Get-ExistingCodexCommand
+    $manager = Get-ExistingCodexManager -ExistingPath $existingPath -VisibleBinDir $VisibleBinDir
     if ($null -eq $manager) {
         return $null
     }
 
-    Write-Step "Detected existing $manager-managed Ata at $existingPath"
-    Write-WarningStep "Multiple managed Ata installs can be ambiguous because PATH order decides which one runs."
+    Write-Step "Detected existing $manager-managed Codex at $existingPath"
+    Write-WarningStep "Multiple managed Codex installs can be ambiguous because PATH order decides which one runs."
 
     return [PSCustomObject]@{
         Manager = $manager
@@ -537,33 +627,33 @@ function Maybe-HandleConflictingInstall {
     $manager = $Conflict.Manager
 
     $uninstallArgs = if ($manager -eq "bun") {
-        @("remove", "-g", "@a2a-ai/ata")
+        @("remove", "-g", "@openai/codex")
     } else {
-        @("uninstall", "-g", "@a2a-ai/ata")
+        @("uninstall", "-g", "@openai/codex")
     }
     $uninstallCommand = if ($manager -eq "bun") { "bun" } else { "npm" }
 
-    if (Prompt-YesNo "Uninstall the existing $manager-managed Ata now?") {
+    if (Prompt-YesNo "Uninstall the existing $manager-managed Codex now?") {
         Write-Step "Running: $uninstallCommand $($uninstallArgs -join ' ')"
         try {
             & $uninstallCommand @uninstallArgs
         } catch {
-            Write-WarningStep "Failed to uninstall the existing $manager-managed Ata. Continuing with the standalone install."
+            Write-WarningStep "Failed to uninstall the existing $manager-managed Codex. Continuing with the standalone install."
         }
     } else {
-        Write-WarningStep "Leaving the existing $manager-managed Ata installed. PATH order will determine which ata runs."
+        Write-WarningStep "Leaving the existing $manager-managed Codex installed. PATH order will determine which codex runs."
     }
 }
 
-function Test-VisibleAtaCommand {
+function Test-VisibleCodexCommand {
     param(
         [string]$VisibleBinDir
     )
 
-    $ataCommand = Join-Path $VisibleBinDir "ata.exe"
-    & $ataCommand --version *> $null
+    $codexCommand = Join-Path $VisibleBinDir "codex.exe"
+    & $codexCommand --version *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw "Installed Ata command failed verification: $ataCommand --version"
+        throw "Installed Codex command failed verification: $codexCommand --version"
     }
 }
 
@@ -573,7 +663,7 @@ if ($env:OS -ne "Windows_NT") {
 }
 
 if (-not [Environment]::Is64BitOperatingSystem) {
-    Write-Error "Ata requires a 64-bit version of Windows."
+    Write-Error "Codex requires a 64-bit version of Windows."
     exit 1
 }
 
@@ -582,15 +672,18 @@ $target = $null
 $platformLabel = $null
 $npmTag = $null
 switch ($architecture) {
+    "Arm64" {
+        $target = "aarch64-pc-windows-msvc"
+        $platformLabel = "Windows (ARM64)"
+        $npmTag = "win32-arm64"
+    }
     "X64" {
         $target = "x86_64-pc-windows-msvc"
         $platformLabel = "Windows (x64)"
         $npmTag = "win32-x64"
     }
     default {
-        # Windows ARM64 is not built/released; x64 binaries can run under
-        # the OS x64 emulator if needed.
-        Write-Error "Unsupported architecture: $architecture (only Windows x64 is released)"
+        Write-Error "Unsupported architecture: $architecture"
         exit 1
     }
 }
@@ -605,13 +698,11 @@ $releasesDir = Join-Path $standaloneRoot "releases"
 $currentDir = Join-Path $standaloneRoot "current"
 $lockPath = Join-Path $standaloneRoot "install.lock"
 
-$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\Agents2AgentsAI\Ata\bin"
-if (-not [string]::IsNullOrWhiteSpace($env:ATA_INSTALL_DIR)) {
-    $visibleBinDir = $env:ATA_INSTALL_DIR
-} elseif (-not [string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
-    $visibleBinDir = $env:CODEX_INSTALL_DIR
-} else {
+$defaultVisibleBinDir = Join-Path $env:LOCALAPPDATA "Programs\OpenAI\Codex\bin"
+if ([string]::IsNullOrWhiteSpace($env:CODEX_INSTALL_DIR)) {
     $visibleBinDir = $defaultVisibleBinDir
+} else {
+    $visibleBinDir = $env:CODEX_INSTALL_DIR
 }
 
 $currentVersion = Get-CurrentInstalledVersion -StandaloneCurrentDir $currentDir
@@ -620,11 +711,11 @@ $releaseName = "$resolvedVersion-$target"
 $releaseDir = Join-Path $releasesDir $releaseName
 
 if (-not [string]::IsNullOrWhiteSpace($currentVersion) -and $currentVersion -ne $resolvedVersion) {
-    Write-Step "Updating Ata CLI from $currentVersion to $resolvedVersion"
+    Write-Step "Updating Codex CLI from $currentVersion to $resolvedVersion"
 } elseif (-not [string]::IsNullOrWhiteSpace($currentVersion)) {
-    Write-Step "Updating Ata CLI"
+    Write-Step "Updating Codex CLI"
 } else {
-    Write-Step "Installing Ata CLI"
+    Write-Step "Installing Codex CLI"
 }
 Write-Step "Detected platform: $platformLabel"
 Write-Step "Resolved version: $resolvedVersion"
@@ -632,48 +723,80 @@ Write-Step "Resolved version: $resolvedVersion"
 $conflictingInstall = Get-ConflictingInstall -VisibleBinDir $visibleBinDir
 $oldStandaloneBackup = $null
 
-$packageAsset = "ata-npm-$npmTag-$resolvedVersion.tgz"
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ata-install-" + [System.Guid]::NewGuid().ToString("N"))
+$packageAsset = "codex-package-$target.tar.gz"
+$checksumAsset = "codex-package_SHA256SUMS"
+$packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+$checksumMetadata = Find-ReleaseAssetMetadata -AssetName $checksumAsset -ResolvedVersion $resolvedVersion
+$installLayout = "Package"
+if ($null -eq $packageMetadata -or $null -eq $checksumMetadata) {
+    $packageAsset = "codex-npm-$npmTag-$resolvedVersion.tgz"
+    $packageMetadata = Find-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
+    if ($null -ne $packageMetadata) {
+        $installLayout = "LegacyPlatformNpm"
+    } else {
+        throw "Could not find Codex package or platform npm release assets for Codex $resolvedVersion."
+    }
+    $checksumMetadata = $null
+}
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-install-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
 
 try {
     Invoke-WithInstallLock -LockPath $lockPath -Script {
         Remove-StaleInstallArtifacts -ReleasesDir $releasesDir
 
-        if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target)) {
+        if (-not (Test-ReleaseIsComplete -ReleaseDir $releaseDir -ExpectedVersion $resolvedVersion -ExpectedTarget $target -Layout $installLayout)) {
             if (Test-Path -LiteralPath $releaseDir) {
                 Write-WarningStep "Found incomplete existing release at $releaseDir. Reinstalling."
             }
 
             $archivePath = Join-Path $tempDir $packageAsset
-            $extractDir = Join-Path $tempDir "extract"
+            $checksumPath = Join-Path $tempDir $checksumAsset
             $stagingDir = Join-Path $releasesDir ".staging.$releaseName.$PID"
-            $assetMetadata = Get-ReleaseAssetMetadata -AssetName $packageAsset -ResolvedVersion $resolvedVersion
 
-            Write-Step "Downloading Ata CLI"
-            Invoke-WebRequest -Uri $assetMetadata.Url -OutFile $archivePath
-            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $assetMetadata.Sha256
+            Write-Step "Downloading Codex CLI"
+            if ($installLayout -eq "Package") {
+                Invoke-WebRequest -Uri $checksumMetadata.Url -OutFile $checksumPath
+                Test-ArchiveDigest -ArchivePath $checksumPath -ExpectedDigest $checksumMetadata.Sha256
+                $expectedPackageDigest = Get-PackageArchiveDigest -ManifestPath $checksumPath -AssetName $packageAsset
+            } else {
+                $expectedPackageDigest = $packageMetadata.Sha256
+            }
+            Invoke-WebRequest -Uri $packageMetadata.Url -OutFile $archivePath
+            Test-ArchiveDigest -ArchivePath $archivePath -ExpectedDigest $expectedPackageDigest
 
-            New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
             New-Item -ItemType Directory -Force -Path $releasesDir | Out-Null
             if (Test-Path -LiteralPath $stagingDir) {
                 Remove-Item -LiteralPath $stagingDir -Recurse -Force
             }
             New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
-            tar -xzf $archivePath -C $extractDir
+            if ($installLayout -eq "Package") {
+                tar -xzf $archivePath -C $stagingDir
+                if (-not (Test-PackageContentsAreComplete -PackageDir $stagingDir)) {
+                    throw "Downloaded Codex package archive did not contain the expected package layout."
+                }
+            } else {
+                $extractDir = Join-Path $tempDir "extract"
+                New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+                tar -xzf $archivePath -C $extractDir
 
-            $vendorRoot = Join-Path $extractDir "package/vendor/$target"
-            $resourcesDir = Join-Path $stagingDir "codex-resources"
-            New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
-            $copyMap = @{
-                "ata/ata.exe" = "ata.exe"
-                "ata/ata-command-runner.exe" = "codex-resources\ata-command-runner.exe"
-                "ata/ata-windows-sandbox-setup.exe" = "codex-resources\ata-windows-sandbox-setup.exe"
-                "path/rg.exe" = "codex-resources\rg.exe"
-            }
+                $vendorRoot = Join-Path $extractDir "package/vendor/$target"
+                $resourcesDir = Join-Path $stagingDir "codex-resources"
+                New-Item -ItemType Directory -Force -Path $resourcesDir | Out-Null
+                $copyMap = @{
+                    "codex/codex.exe" = "codex.exe"
+                    "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
+                    "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                    "path/rg.exe" = "codex-resources\rg.exe"
+                }
 
-            foreach ($relativeSource in $copyMap.Keys) {
-                Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+                foreach ($relativeSource in $copyMap.Keys) {
+                    Copy-Item -LiteralPath (Join-Path $vendorRoot $relativeSource) -Destination (Join-Path $stagingDir $copyMap[$relativeSource])
+                }
+
+                if (-not (Test-LegacyPlatformNpmContentsAreComplete -PackageDir $stagingDir)) {
+                    throw "Downloaded Codex npm archive did not contain the expected legacy platform package layout."
+                }
             }
 
             if (Test-Path -LiteralPath $releaseDir) {
@@ -686,11 +809,16 @@ try {
         Ensure-Junction -LinkPath $currentDir -TargetPath $releaseDir -InstallerOwnedTargetPrefix $releasesDir
 
         $visibleParent = Split-Path -Parent $visibleBinDir
+        $currentBinDir = if ($installLayout -eq "Package") {
+            Join-Path $currentDir "bin"
+        } else {
+            $currentDir
+        }
         New-Item -ItemType Directory -Force -Path $visibleParent | Out-Null
         $oldStandaloneBackup = Move-OldStandaloneBinIfApproved -VisibleBinDir $visibleBinDir -DefaultVisibleBinDir $defaultVisibleBinDir
         try {
-            Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentDir -InstallerOwnedTargetPrefix $standaloneRoot
-            Test-VisibleAtaCommand -VisibleBinDir $visibleBinDir
+            Ensure-Junction -LinkPath $visibleBinDir -TargetPath $currentBinDir -InstallerOwnedTargetPrefix $standaloneRoot
+            Test-VisibleCodexCommand -VisibleBinDir $visibleBinDir
         } catch {
             if ($null -ne $oldStandaloneBackup -and (Test-Path -LiteralPath $oldStandaloneBackup)) {
                 if (Test-Path -LiteralPath $visibleBinDir) {
@@ -734,12 +862,12 @@ if (-not (Path-Contains -PathValue $env:Path -Entry $visibleBinDir)) {
     }
 }
 
-Write-Step "Current PowerShell session: ata"
-Write-Step "Future PowerShell windows: open a new PowerShell window and run: ata"
-Write-Host "Ata CLI $resolvedVersion installed successfully."
+Write-Step "Current PowerShell session: codex"
+Write-Step "Future PowerShell windows: open a new PowerShell window and run: codex"
+Write-Host "Codex CLI $resolvedVersion installed successfully."
 
-$ataCommand = Join-Path $visibleBinDir "ata.exe"
-if (Prompt-YesNo "Start Ata now?") {
-    Write-Step "Launching Ata"
-    & $ataCommand
+$codexCommand = Join-Path $visibleBinDir "codex.exe"
+if (Prompt-YesNo "Start Codex now?") {
+    Write-Step "Launching Codex"
+    & $codexCommand
 }

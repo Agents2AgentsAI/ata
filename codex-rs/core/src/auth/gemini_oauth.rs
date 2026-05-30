@@ -243,7 +243,7 @@ async fn ensure_gemini_oauth_context_with_refresh(
                 auth_credentials_store_mode,
             )
             .map_err(|err| {
-                CodexErr::Api(format!(
+                CodexErr::InvalidRequest(format!(
                     "Failed to persist Gemini OAuth credential updates: {err}"
                 ))
             })?;
@@ -264,7 +264,7 @@ async fn ensure_gemini_oauth_context_with_refresh(
             auth_credentials_store_mode,
         )
         .map_err(|err| {
-            CodexErr::Api(format!(
+            CodexErr::InvalidRequest(format!(
                 "Failed to persist Gemini OAuth credential updates: {err}"
             ))
         })?;
@@ -315,11 +315,11 @@ async fn refresh_access_token(
         ))
         .send()
         .await
-        .map_err(|err| CodexErr::Api(format!("Gemini OAuth token refresh request failed: {err}")))?;
+        .map_err(|err| CodexErr::InvalidRequest(format!("Gemini OAuth token refresh request failed: {err}")))?;
 
     let status = response.status();
     let body = response.text().await.map_err(|err| {
-        CodexErr::Api(format!("Failed to read Gemini OAuth token response: {err}"))
+        CodexErr::InvalidRequest(format!("Failed to read Gemini OAuth token response: {err}"))
     })?;
 
     if !status.is_success() {
@@ -329,20 +329,20 @@ async fn refresh_access_token(
                 PROVIDER_GEMINI,
                 auth_credentials_store_mode,
             );
-            return Err(CodexErr::Api(
+            return Err(CodexErr::InvalidRequest(
                 "Gemini OAuth session expired or revoked. Run `ata login --provider gemini --with-oauth` again."
                     .to_string(),
             ));
         }
 
         let redacted_body = redact_error_body(&body);
-        return Err(CodexErr::Api(format!(
+        return Err(CodexErr::InvalidRequest(format!(
             "Gemini OAuth token refresh failed ({status}): {redacted_body}"
         )));
     }
 
     let refresh_response: RefreshTokenResponse = serde_json::from_str(&body).map_err(|err| {
-        CodexErr::Api(format!(
+        CodexErr::InvalidRequest(format!(
             "Failed to parse Gemini OAuth token refresh response JSON: {err}"
         ))
     })?;
@@ -462,16 +462,16 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
         .send()
         .await
         .map_err(|err| {
-            CodexErr::Api(format!(
+            CodexErr::InvalidRequest(format!(
                 "Gemini Code Assist loadCodeAssist request failed: {err}"
             ))
         })?
         .error_for_status()
-        .map_err(|err| CodexErr::Api(format!("Gemini Code Assist loadCodeAssist failed: {err}")))?
+        .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist loadCodeAssist failed: {err}")))?
         .json()
         .await
         .map_err(|err| {
-            CodexErr::Api(format!(
+            CodexErr::InvalidRequest(format!(
                 "Failed to parse Gemini Code Assist loadCodeAssist response: {err}"
             ))
         })?;
@@ -511,15 +511,15 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
         .send()
         .await
         .map_err(|err| {
-            CodexErr::Api(format!(
+            CodexErr::InvalidRequest(format!(
                 "Gemini Code Assist onboardUser request failed: {err}"
             ))
         })?
         .error_for_status()
-        .map_err(|err| CodexErr::Api(format!("Gemini Code Assist onboardUser failed: {err}")))?
+        .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist onboardUser failed: {err}")))?
         .json()
         .await
-        .map_err(|err| CodexErr::Api(format!("Failed to parse onboardUser response: {err}")))?;
+        .map_err(|err| CodexErr::InvalidRequest(format!("Failed to parse onboardUser response: {err}")))?;
 
     let poll_started = tokio::time::Instant::now();
     let mut poll_interval = ONBOARD_POLL_INITIAL_INTERVAL;
@@ -555,18 +555,18 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
             .send()
             .await
             .map_err(|err| {
-                CodexErr::Api(format!("Gemini Code Assist operation poll failed: {err}"))
+                CodexErr::InvalidRequest(format!("Gemini Code Assist operation poll failed: {err}"))
             })?
             .error_for_status()
-            .map_err(|err| CodexErr::Api(format!("Gemini Code Assist operation failed: {err}")))?
+            .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist operation failed: {err}")))?
             .json()
             .await
-            .map_err(|err| CodexErr::Api(format!("Failed to parse operation response: {err}")))?;
+            .map_err(|err| CodexErr::InvalidRequest(format!("Failed to parse operation response: {err}")))?;
         poll_interval = std::cmp::min(poll_interval.saturating_mul(2), ONBOARD_POLL_MAX_INTERVAL);
     }
 
     if poll_timed_out {
-        return Err(CodexErr::Api(
+        return Err(CodexErr::InvalidRequest(
             "Gemini Code Assist onboarding timed out while waiting for project setup. Retry in a minute, or set GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_PROJECT_ID explicitly."
                 .to_string(),
         ));
@@ -589,13 +589,13 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
 
     let ineligible_messages = ineligible_tier_messages(&load_response);
     if !ineligible_messages.is_empty() {
-        return Err(CodexErr::Api(format!(
+        return Err(CodexErr::InvalidRequest(format!(
             "Gemini Code Assist project resolution failed: {}",
             ineligible_messages.join("; ")
         )));
     }
 
-    Err(CodexErr::Api(
+    Err(CodexErr::InvalidRequest(
         "Gemini OAuth could not resolve a Google Cloud project. Set GOOGLE_CLOUD_PROJECT (or GOOGLE_CLOUD_PROJECT_ID), or complete Gemini Code Assist onboarding."
             .to_string(),
     ))

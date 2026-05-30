@@ -93,6 +93,8 @@ build:clippy --@rules_rust//rust/settings:clippy.toml=//codex-rs:clippy.toml
 # in their own `Cargo.toml`, but `rules_rust` Bazel clippy does not read Cargo lint levels.
 # `clippy.toml` can configure lint behavior, but it cannot set allow/warn/deny/forbid levels.
 build:clippy --@rules_rust//rust/settings:clippy_flag=-Dwarnings
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_invalid_type
+build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::await_holding_lock
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::expect_used
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::identity_op
 build:clippy --@rules_rust//rust/settings:clippy_flag=--deny=clippy::manual_clamp
@@ -190,6 +192,11 @@ common --@v8//:v8_enable_sandbox=True
 # artifact migration ships matching Rust feature selection for Cargo consumers.
 common:v8-release-compat --@v8//:v8_enable_pointer_compression=False
 common:v8-release-compat --@v8//:v8_enable_sandbox=False
+
+# Match rusty_v8's upstream GN release contract for published artifacts: every
+# target object uses Chromium's custom libc++ headers and the archive folds in
+# the matching runtime objects.
+common:rusty-v8-upstream-libcxx --@v8//:v8_use_rusty_v8_custom_libcxx=True
 
 # Optional per-user local overrides.
 try-import %workspace%/user.bazelrc

@@ -1,103 +1,91 @@
-# Ata CLI (Rust Implementation)
+# Codex CLI (Rust Implementation)
 
 We provide Codex CLI as a standalone executable to ensure a zero-dependency install.
 
-## Installing Ata
+## Installing Codex
 
-Today, the easiest way to install Ata is via `npm`:
-
-```shell
-npm i -g @a2a-ai/ata
-ata
-```
-
-You can also install via Homebrew (`brew install --cask ata`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/Agents2AgentsAI/ata/releases).
-
-For macOS/Linux, you can also install via:
+Today, the easiest way to install Codex is via `npm`:
 
 ```shell
-curl -fsSL https://agents2agents.ai/ata/install.sh | sh
+npm i -g @openai/codex
+codex
 ```
+
+You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
 
 ## Documentation quickstart
 
-- First run with Ata? Start with [`docs/getting-started.md`](../docs/getting-started.md) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
+- First run with Codex? Start with [`docs/getting-started.md`](../docs/getting-started.md) (links to the walkthrough for prompts, keyboard shortcuts, and session management).
 - Want deeper control? See [`docs/config.md`](../docs/config.md) and [`docs/install.md`](../docs/install.md).
 
 ## What's new in the Rust CLI
 
-The Rust implementation is now the maintained Ata CLI and serves as the default experience. It includes a number of features that the legacy TypeScript CLI never supported.
+The Rust implementation is now the maintained Codex CLI and serves as the default experience. It includes a number of features that the legacy TypeScript CLI never supported.
 
 ### Config
 
-Ata supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`docs/config.md`](../docs/config.md) for details.
+Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`docs/config.md`](../docs/config.md) for details.
 
 ### Model Context Protocol Support
 
 #### MCP client
 
-Ata CLI functions as an MCP client that allows the Ata CLI to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#connecting-to-mcp-servers) for details.
+Codex CLI functions as an MCP client that allows the Codex CLI and IDE extension to connect to MCP servers on startup. See the [`configuration documentation`](../docs/config.md#connecting-to-mcp-servers) for details.
 
 #### MCP server (experimental)
 
-Ata can be launched as an MCP _server_ by running `ata mcp-server`. This allows _other_ MCP clients to use Ata as a tool for another agent.
+Codex can be launched as an MCP _server_ by running `codex mcp-server`. This allows _other_ MCP clients to use Codex as a tool for another agent.
 
 Use the [`@modelcontextprotocol/inspector`](https://github.com/modelcontextprotocol/inspector) to try it out:
 
 ```shell
-npx @modelcontextprotocol/inspector ata mcp-server
+npx @modelcontextprotocol/inspector codex mcp-server
 ```
 
-Use `ata mcp` to add/list/get/remove MCP server launchers defined in `config.toml`, and `ata mcp-server` to run the MCP server directly.
+Use `codex mcp` to add/list/get/remove MCP server launchers defined in `config.toml`, and `codex mcp-server` to run the MCP server directly.
 
 ### Notifications
 
-You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS. When Ata detects that it is running under WSL 2 inside Windows Terminal (`WT_SESSION` is set), the TUI automatically falls back to native Windows toast notifications so approval prompts and completed turns surface even though Windows Terminal does not implement OSC 9.
+You can enable notifications by configuring a script that is run whenever the agent finishes a turn. The [notify documentation](../docs/config.md#notify) includes a detailed example that explains how to get desktop notifications via [terminal-notifier](https://github.com/julienXX/terminal-notifier) on macOS. When Codex detects that it is running under WSL 2 inside Windows Terminal (`WT_SESSION` is set), the TUI automatically falls back to native Windows toast notifications so approval prompts and completed turns surface even though Windows Terminal does not implement OSC 9.
 
-### `ata exec` to run Ata programmatically/non-interactively
+### `codex exec` to run Codex programmatically/non-interactively
 
 To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the prompt via `stdin`) and Codex will work on your task until it decides that it is done and exits. If you provide both a prompt argument and piped stdin, Codex appends stdin as a `<stdin>` block after the prompt so patterns like `echo "my output" | codex exec "Summarize this concisely"` work naturally. Output is printed to the terminal directly. You can set the `RUST_LOG` environment variable to see more about what's going on.
 Use `codex exec --ephemeral ...` to run without persisting session rollout files to disk.
 
-### Experimenting with the Ata Sandbox
+### Experimenting with the Codex Sandbox
 
-To test to see what happens when a command is run under the sandbox provided by Ata, we provide the following subcommands in Ata CLI:
+To test to see what happens when a command is run under the sandbox provided by Codex, use the `sandbox` subcommand in Codex CLI:
 
 ```
-# macOS
-codex sandbox macos [--log-denials] [COMMAND]...
+# Uses the sandbox implementation for the current host OS:
+# Seatbelt on macOS, the Linux sandbox on Linux, and Windows restricted token on Windows.
+codex sandbox [COMMAND]...
 
-# Linux
-codex sandbox linux [COMMAND]...
-
-# Windows
-codex sandbox windows [COMMAND]...
-
-# Legacy aliases
-codex debug seatbelt [--log-denials] [COMMAND]...
-codex debug landlock [COMMAND]...
+# macOS-only diagnostic option
+codex sandbox --log-denials [COMMAND]...
 ```
 
-To try a writable legacy sandbox mode with these commands, pass an explicit config override such
-as `-c 'sandbox_mode="workspace-write"'`.
+`codex sandbox` also accepts `--profile NAME` (`-p NAME`) to layer
+`$CODEX_HOME/NAME.config.toml` onto the base user config for the sandboxed
+command.
 
 ### Selecting a sandbox policy via `--sandbox`
 
 The Rust CLI exposes a dedicated `--sandbox` (`-s`) flag that lets you pick the sandbox policy **without** having to reach for the generic `-c/--config` option:
 
 ```shell
-# Run Ata with the default, read-only sandbox
-ata --sandbox read-only
+# Run Codex with the default, read-only sandbox
+codex --sandbox read-only
 
 # Allow the agent to write within the current workspace while still blocking network access
-ata --sandbox workspace-write
+codex --sandbox workspace-write
 
 # Danger! Disable sandboxing entirely (only do this if you are already running in a container or other isolated env)
-ata --sandbox danger-full-access
+codex --sandbox danger-full-access
 ```
 
-The same setting can be persisted in `~/.ata/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
-In `workspace-write`, Ata also includes `~/.ata/memories` in its writable roots so memory maintenance does not require an extra approval.
+In `workspace-write`, Codex also includes `~/.codex/memories` in its writable roots so memory maintenance does not require an extra approval.
 
 ## Code Organization
 

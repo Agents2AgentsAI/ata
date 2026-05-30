@@ -18,6 +18,10 @@ mod feature_configs;
 mod legacy;
 pub use feature_configs::AppsMcpPathOverrideConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
+pub use feature_configs::NetworkProxyConfigToml;
+pub use feature_configs::NetworkProxyDomainPermissionToml;
+pub use feature_configs::NetworkProxyModeToml;
+pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -72,31 +76,22 @@ impl Stage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
     // Stable.
-    /// Removed compatibility flag retained as a no-op so old configs can
-    /// still parse `undo`.
-    GhostCommit,
     /// Enable the default shell tool.
     ShellTool,
     /// Enable Claude-style lifecycle hooks loaded from hooks.json files.
     CodexHooks,
 
     // Experimental
-    /// Removed compatibility flag for the deleted JavaScript REPL feature.
-    JsRepl,
     /// Enable JavaScript code mode backed by the in-process V8 runtime.
     CodeMode,
     /// Restrict model-visible tools to code mode entrypoints (`exec`, `wait`).
     CodeModeOnly,
-    /// Removed compatibility flag for the deleted JavaScript REPL tool-only mode.
-    JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
     UnifiedExec,
     /// Route shell tool execution through the zsh exec bridge.
     ShellZshFork,
     /// Reflow transcript scrollback when the terminal is resized.
     TerminalResizeReflow,
-    /// Include the freeform apply_patch tool.
-    ApplyPatchFreeform,
     /// Stream structured progress while apply_patch input is being generated.
     ApplyPatchStreamingEvents,
     /// Allow exec tools to request additional permissions while staying sandboxed.
@@ -108,40 +103,23 @@ pub enum Feature {
     /// Allow the model to request web searches that fetch cached content.
     /// Takes precedence over `WebSearchRequest`.
     WebSearchCached,
-    /// Legacy search-tool feature flag kept for backward compatibility.
-    SearchTool,
-    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
-    /// wrappers and config can still parse it.
-    UseLinuxSandboxBwrap,
     /// Use the legacy Landlock Linux sandbox fallback instead of the default
     /// bubblewrap pipeline.
     UseLegacyLandlock,
-    /// Allow the model to request approval and propose exec rules.
-    RequestRule,
-    /// Enable Windows sandbox (restricted token) on Windows.
-    WindowsSandbox,
-    /// Use the elevated Windows sandbox pipeline (setup + runner).
-    WindowsSandboxElevated,
-    /// Legacy remote models flag kept for backward compatibility.
-    RemoteModels,
     /// Experimental shell snapshotting.
     ShellSnapshot,
-    /// Enable git commit attribution guidance via model instructions.
-    CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
-    /// Persist rollout metadata to a local SQLite database.
-    Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
-    /// Enable product-owned built-in MCP servers.
-    BuiltInMcp,
     /// Enable the Chronicle sidecar for passive screen-context memories.
     Chronicle,
     /// Append additional AGENTS.md guidance to user instructions.
     ChildAgentsMd,
     /// Compress request bodies (zstd) when sending streaming requests to codex-backend.
     EnableRequestCompression,
+    /// Start the managed network proxy for sandboxed sessions.
+    NetworkProxy,
     /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
@@ -152,19 +130,17 @@ pub enum Feature {
     Apps,
     /// Enable MCP apps.
     EnableMcpApps,
-    /// Use the new path for the built-in apps MCP server.
+    /// Use the new path for the host-owned apps MCP server.
     AppsMcpPathOverride,
-    /// Enable the tool_search tool for apps.
+    /// Removed compatibility flag retained as a no-op now that tool_search is always enabled.
     ToolSearch,
     /// Always defer MCP tools behind tool_search instead of exposing small sets directly.
     ToolSearchAlwaysDeferMcpTools,
-    /// Expose placeholder tools for unavailable historical tool calls.
-    UnavailableDummyTools,
     /// Enable discoverable tool suggestions for apps.
     ToolSuggest,
     /// Enable plugins.
     Plugins,
-    /// Enable plugin-bundled lifecycle hooks.
+    /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
     /// Allow the in-app browser pane in desktop apps.
     ///
@@ -184,26 +160,24 @@ pub enum Feature {
     ComputerUse,
     /// Temporary internal-only flag for PS-backed remote plugin catalog development.
     RemotePlugin,
+    /// Enable remote plugin sharing flows.
+    PluginSharing,
     /// Show the startup prompt for migrating external agent config into Codex.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
     /// Allow prompting and installing missing MCP dependencies.
     SkillMcpDependencyInstall,
-    /// Prompt for missing skill env var dependencies.
+    /// Removed compatibility flag for deleted skill env var dependency prompting.
     SkillEnvVarDependencyPrompt,
-    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
-    /// Kept for config backward compatibility; behavior is always steer-enabled.
-    Steer,
+    /// Enable the unified mention popup prototype.
+    MentionsV2,
     /// Allow request_user_input in Default collaboration mode.
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
-    /// Enable collaboration modes (Plan, Default).
-    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
-    CollaborationModes,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
     /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
@@ -216,21 +190,8 @@ pub enum Feature {
     FastMode,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
-    /// Connect app-server to the ChatGPT remote control service.
-    RemoteControl,
-    /// Removed compatibility flag retained as a no-op so old wrappers can
-    /// still pass `--enable image_detail_original`.
-    ImageDetailOriginal,
-    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
-    TuiAppServer,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Enable workspace-specific owner nudge copy and prompts in the TUI.
-    WorkspaceOwnerUsageNudge,
-    /// Legacy rollout flag for Responses API WebSocket transport experiments.
-    ResponsesWebsockets,
-    /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
-    ResponsesWebsocketsV2,
     /// Send `response.processed` over Responses API websockets after a turn response is recorded.
     ResponsesWebsocketResponseProcessed,
     /// Enable remote compaction v2 over the normal Responses API.
@@ -241,12 +202,59 @@ pub enum Feature {
     Lsp,
     /// Enable TreeSitter-based code indexing.
     TreeSitter,
+
+    // Removed
+    /// Removed compatibility flag retained as a no-op so old configs can
+    /// still parse `undo`.
+    GhostCommit,
+    /// Removed compatibility flag for the deleted JavaScript REPL feature.
+    JsRepl,
+    /// Removed compatibility flag for the deleted JavaScript REPL tool-only mode.
+    JsReplToolsOnly,
+    /// Legacy search-tool feature flag kept for backward compatibility.
+    SearchTool,
+    /// Removed legacy Linux bubblewrap opt-in flag retained as a no-op so old
+    /// wrappers and config can still parse it.
+    UseLinuxSandboxBwrap,
+    /// Allow the model to request approval and propose exec rules.
+    RequestRule,
+    /// Enable Windows sandbox (restricted token) on Windows.
+    WindowsSandbox,
+    /// Use the elevated Windows sandbox pipeline (setup + runner).
+    WindowsSandboxElevated,
+    /// Legacy remote models flag kept for backward compatibility.
+    RemoteModels,
+    /// Removed legacy git commit attribution guidance flag.
+    CodexGitCommit,
+    /// Persist rollout metadata to a local SQLite database.
+    Sqlite,
+    /// Removed compatibility flag for the deleted apply_patch fallback feature.
+    ApplyPatchFreeform,
+    /// Removed compatibility flag for the deleted unavailable-tool placeholder backfill.
+    UnavailableDummyTools,
+    /// Steer feature flag - when enabled, Enter submits immediately instead of queuing.
+    /// Kept for config backward compatibility; behavior is always steer-enabled.
+    Steer,
+    /// Enable collaboration modes (Plan, Default).
+    /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
+    CollaborationModes,
+    /// Removed compatibility flag for the deleted remote control feature.
+    RemoteControl,
+    /// Removed compatibility flag retained as a no-op so old wrappers can
+    /// still pass `--enable image_detail_original`.
+    ImageDetailOriginal,
+    /// Removed compatibility flag. The TUI now always uses the app-server implementation.
+    TuiAppServer,
+    /// Removed compatibility flag retained as a no-op now that workspace owner
+    /// usage nudges are always enabled.
+    WorkspaceOwnerUsageNudge,
+    /// Legacy rollout flag for Responses API WebSocket transport experiments.
+    ResponsesWebsockets,
+    /// Legacy rollout flag for Responses API WebSocket transport v2 experiments.
+    ResponsesWebsocketsV2,
     /// ATA-private: surface the document-reader / reading-view UI overlay.
     ReadingView,
-    /// ATA-private: enable voice mode (push-to-talk capture + ElevenLabs TTS).
-    VoiceMode,
-    /// ATA-private: master toggle for the research tool integrations (turning
-    /// this on enables the family below as a unit).
+    /// ATA-private: master research toggle, gates the `/research` popup.
     Research,
     /// ATA-private: research paper search tools (Semantic Scholar, arXiv, OpenAlex).
     ResearchPaperSearch,
@@ -256,16 +264,25 @@ pub enum Feature {
     ResearchHackerNews,
     /// ATA-private: worldwide patent search via the EPO Open Patent Services API.
     ResearchPatents,
-    /// ATA-private: repository cloning, summarization, and analysis tools.
+    /// ATA-private: clone/summarize/analyze code repositories from search results.
     ResearchRepoAnalysis,
-    /// ATA-private: knowledge-base persistence (cards, journal, cross-paper reports).
+    /// ATA-private: enable the workspace knowledge base. When on, every turn
+    /// exports `CODEX_KB_PATH` to the shell environment and grants a
+    /// sandbox-writable root at that path so the agent can write under
+    /// `~/.ata/<workspace_id>/knowledge-base/...` without approval prompts.
     ResearchKnowledgeBase,
-    /// ATA-private: master toggle for the data tool integrations (HuggingFace /
-    /// Kaggle dataset discovery, download, and management).
-    DataTools,
-    /// ATA-private: Claude Code-style scheduling primitives (Cron / Monitor / Loop)
-    /// running in-session, plus persistent OS cron jobs.
+    /// ATA-private: voice mode (push-to-talk STT, TTS narration, reading-view
+    /// karaoke). Gated off by default — `/voice-setup` flips it on.
+    VoiceMode,
+    /// ATA-private: agent-callable scheduling tools (`cron_create`, `cron_list`,
+    /// `cron_delete`, `monitor_start`, `monitor_list`, `monitor_stop`,
+    /// `monitor_wait`, `monitor_watch_for`). Backed by `codex-scheduling`
+    /// CronRegistry + MonitorRuntime on the Session.
     Scheduling,
+    /// ATA-private: agent-callable data tools (`dataset_search`, `dataset_get`).
+    /// Backed by `codex-data-tools::DataToolkit`. HuggingFace works without
+    /// credentials; Kaggle paths are gated separately by env-var presence.
+    DataTools,
 }
 
 impl Feature {
@@ -306,25 +323,17 @@ pub struct Features {
 
 #[derive(Debug, Clone, Default)]
 pub struct FeatureOverrides {
-    pub include_apply_patch_tool: Option<bool>,
     pub web_search_request: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureConfigSource<'a> {
     pub features: Option<&'a FeaturesToml>,
-    pub include_apply_patch_tool: Option<bool>,
-    pub experimental_use_freeform_apply_patch: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
 }
 
 impl FeatureOverrides {
     fn apply(self, features: &mut Features) {
-        LegacyFeatureToggles {
-            include_apply_patch_tool: self.include_apply_patch_tool,
-            ..Default::default()
-        }
-        .apply(features);
         if let Some(enabled) = self.web_search_request {
             if enabled {
                 features.enable(Feature::WebSearchRequest);
@@ -448,7 +457,22 @@ impl Features {
                 "js_repl_tools_only" => {
                     continue;
                 }
+                "remote_control" => {
+                    continue;
+                }
+                "apply_patch_freeform" => {
+                    continue;
+                }
+                "tool_search" => {
+                    continue;
+                }
                 "image_detail_original" => {
+                    continue;
+                }
+                "plugin_hooks" => {
+                    continue;
+                }
+                "skill_env_var_dependency_prompt" => {
                     continue;
                 }
                 "use_legacy_landlock" => {
@@ -489,8 +513,6 @@ impl Features {
 
         for source in [base, profile] {
             LegacyFeatureToggles {
-                include_apply_patch_tool: source.include_apply_patch_tool,
-                experimental_use_freeform_apply_patch: source.experimental_use_freeform_apply_patch,
                 experimental_use_unified_exec_tool: source.experimental_use_unified_exec_tool,
             }
             .apply(&mut features);
@@ -508,42 +530,6 @@ impl Features {
 
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
-    }
-
-    /// Returns `true` if the given research tool ID is enabled.
-    ///
-    /// Most research tools are grouped by provider. The master Research toggle
-    /// enables public research tools wired in this build, while Zotero stays
-    /// independently gated because it requires user library configuration.
-    pub fn is_research_tool_enabled(&self, tool_id: &str) -> bool {
-        if self.enabled(Feature::Research) {
-            if tool_id.starts_with("zotero_") {
-                return self.enabled(Feature::ResearchZotero);
-            }
-            return tool_id.starts_with("paper_")
-                || tool_id.starts_with("hn_")
-                || tool_id.starts_with("patent_");
-        }
-
-        match tool_id {
-            _ if tool_id.starts_with("paper_") => self.enabled(Feature::ResearchPaperSearch),
-            _ if tool_id.starts_with("hn_") => self.enabled(Feature::ResearchHackerNews),
-            _ if tool_id.starts_with("patent_") => self.enabled(Feature::ResearchPatents),
-            _ if tool_id.starts_with("zotero_") => self.enabled(Feature::ResearchZotero),
-            _ => false,
-        }
-    }
-
-    pub fn has_any_research_enabled(&self) -> bool {
-        self.enabled(Feature::Research)
-            || self.enabled(Feature::ResearchZotero)
-            || self.enabled(Feature::ResearchPaperSearch)
-            || self.enabled(Feature::ResearchHackerNews)
-            || self.enabled(Feature::ResearchPatents)
-    }
-
-    pub fn has_any_data_enabled(&self) -> bool {
-        self.enabled(Feature::DataTools)
     }
 
     pub fn normalize_dependencies(&mut self) {
@@ -657,6 +643,7 @@ pub struct FeaturesToml {
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
+    pub network_proxy: Option<FeatureToml<NetworkProxyConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
     entries: BTreeMap<String, bool>,
@@ -682,6 +669,9 @@ impl FeaturesToml {
         {
             entries.insert(Feature::AppsMcpPathOverride.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
+        }
         entries
     }
 
@@ -689,6 +679,7 @@ impl FeaturesToml {
         let Self {
             multi_agent_v2,
             apps_mcp_path_override,
+            network_proxy,
             entries,
         } = self;
         for key in legacy::legacy_feature_keys() {
@@ -700,6 +691,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::AppsMcpPathOverride {
                 materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
+            } else if spec.id == Feature::NetworkProxy {
+                materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
                 entries.insert(spec.key.to_string(), enabled);
             }
@@ -794,9 +787,19 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::ShellSnapshot,
+        key: "shell_snapshot",
+        stage: Stage::Experimental {
+            name: "Shell snapshot",
+            menu_description: "Capture an interactive shell snapshot at session start so the agent inherits your aliases, functions, and environment.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
-        stage: Stage::Removed,
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -846,20 +849,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ShellSnapshot,
-        key: "shell_snapshot",
-        stage: Stage::Experimental {
-            name: "Shell snapshot",
-            menu_description: "Snapshot your shell environment to avoid re-running login scripts for every command.",
-            announcement: "NEW! Try shell snapshotting to make your Ata faster. Enable in /experimental!",
-        },
-        default_enabled: false,
-    },
-    // Experimental program. Rendered in the `/experimental` menu for users.
-    FeatureSpec {
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -884,10 +876,69 @@ pub const FEATURES: &[FeatureSpec] = &[
         },
         default_enabled: false,
     },
+    // ATA-specific experimental features placed early in FEATURES so the
+    // `/experimental` popup (capped at MAX_POPUP_ROWS = 8 visible rows)
+    // surfaces them without scrolling.
     FeatureSpec {
-        id: Feature::BuiltInMcp,
-        key: "builtin_mcp",
-        stage: Stage::UnderDevelopment,
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::Experimental {
+            name: "Voice mode",
+            menu_description: "Talk to Ata: push-to-talk dictation plus spoken replies. Use /voice to toggle.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Scheduling,
+        key: "scheduling",
+        stage: Stage::Experimental {
+            name: "Scheduling",
+            menu_description: "Schedule recurring prompts (cron) and background monitors. View active tasks via /scheduling.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    // ATA reorder: ExternalMigration, Goals and PreventIdleSleep are hoisted
+    // up so the eight most-used experimental toggles sit in the popup's first
+    // visible window (MAX_POPUP_ROWS = 8). NetworkProxy and MentionsV2 stay in
+    // their upstream positions further down.
+    FeatureSpec {
+        id: Feature::ExternalMigration,
+        key: "external_migration",
+        stage: Stage::Experimental {
+            name: "External migration",
+            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
+            announcement: "",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Goals,
+        key: "goals",
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set or view the goal for a long-running task via /goal.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::PreventIdleSleep,
+        key: "prevent_idle_sleep",
+        stage: if cfg!(any(
+            target_os = "macos",
+            target_os = "linux",
+            target_os = "windows"
+        )) {
+            Stage::Experimental {
+                name: "Prevent sleep while running",
+                menu_description: "Keep your computer awake while Ata is running a thread.",
+                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
+            }
+        } else {
+            Stage::UnderDevelopment
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -905,7 +956,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ApplyPatchFreeform,
         key: "apply_patch_freeform",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -975,6 +1026,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::NetworkProxy,
+        key: "network_proxy",
+        stage: Stage::Experimental {
+            name: "Network proxy",
+            menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
+            announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
+        },
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Stable,
@@ -1013,8 +1074,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ToolSearch,
         key: "tool_search",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSearchAlwaysDeferMcpTools,
@@ -1025,8 +1086,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::UnavailableDummyTools,
         key: "unavailable_dummy_tools",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Removed,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ToolSuggest,
@@ -1043,7 +1104,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::PluginHooks,
         key: "plugin_hooks",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1077,14 +1138,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::ExternalMigration,
-        key: "external_migration",
-        stage: Stage::Experimental {
-            name: "External migration",
-            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
-            announcement: "",
-        },
-        default_enabled: false,
+        id: Feature::PluginSharing,
+        key: "plugin_sharing",
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ImageGeneration,
@@ -1101,7 +1158,17 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::SkillEnvVarDependencyPrompt,
         key: "skill_env_var_dependency_prompt",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::MentionsV2,
+        key: "mentions_v2",
+        stage: Stage::Experimental {
+            name: "Mentions v2",
+            menu_description: "Use a unified @ mention popup for files, folders, apps, plugins, and skills.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
@@ -1121,16 +1188,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Stable,
         default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Goals,
-        key: "goals",
-        stage: Stage::Experimental {
-            name: "Goals",
-            menu_description: "Set a persistent goal Codex can continue over time",
-            announcement: "",
-        },
-        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
@@ -1177,7 +1234,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RemoteControl,
         key: "remote_control",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1193,27 +1250,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::PreventIdleSleep,
-        key: "prevent_idle_sleep",
-        stage: if cfg!(any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "windows"
-        )) {
-            Stage::Experimental {
-                name: "Prevent sleep while running",
-                menu_description: "Keep your computer awake while Ata is running a thread.",
-                announcement: "NEW: Prevent sleep while running is now available in /experimental.",
-            }
-        } else {
-            Stage::UnderDevelopment
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::WorkspaceOwnerUsageNudge,
         key: "workspace_owner_usage_nudge",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1265,20 +1304,10 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::VoiceMode,
-        key: "voice_mode",
-        stage: Stage::Experimental {
-            name: "Voice mode",
-            menu_description: "Push-to-talk capture + ElevenLabs TTS",
-            announcement: "Push-to-talk capture + ElevenLabs TTS.",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::Research,
         key: "research",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ResearchPaperSearch,
@@ -1289,8 +1318,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResearchZotero,
         key: "research_zotero",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ResearchHackerNews,
@@ -1301,14 +1330,14 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResearchPatents,
         key: "research_patents",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ResearchRepoAnalysis,
         key: "research_repo_analysis",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ResearchKnowledgeBase,
@@ -1319,18 +1348,8 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DataTools,
         key: "data_tools",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::Scheduling,
-        key: "scheduling",
-        stage: Stage::Experimental {
-            name: "Scheduling",
-            menu_description: "OS-cron / in-session loop / in-session monitor tools. Cron entries live in the system crontab and survive ata exit; loops and monitors are scoped to the chat session.",
-            announcement: "",
-        },
-        default_enabled: false,
+        stage: Stage::Stable,
+        default_enabled: true,
     },
 ];
 
@@ -1356,7 +1375,9 @@ pub fn unstable_features_warning_event(
             if !features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment) && !is_research_feature(spec.id) {
+            if matches!(spec.stage, Stage::UnderDevelopment)
+                && !is_research_feature(spec.id)
+            {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }

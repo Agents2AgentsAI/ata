@@ -43,6 +43,11 @@ pub enum ProviderAccount {
     /// expose the GitHub user identity here because the OAuth token itself is
     /// the sole credential and we only need to signal "Copilot is active".
     Copilot,
+    /// Authenticated via the ATA Supabase OTP flow. The verified email is
+    /// surfaced so `/status` can render "Signed in as user@example.com".
+    Ata {
+        email: String,
+    },
 }
 
 impl PlanType {

@@ -233,6 +233,16 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
+    /// Deliver one streamed monitor stdout/stderr line if this view is the
+    /// `/scheduling` panel. Non-scheduling views default to a no-op.
+    fn handle_scheduling_monitor_output_delta(
+        &mut self,
+        _task_id: &str,
+        _stream: &str,
+        _line: &str,
+    ) {
+    }
+
     /// Voice-mode integration hooks. Reading-view overlays override these to
     /// participate in voice narration; everything else gets a no-op.
     #[cfg(not(target_os = "linux"))]
@@ -261,5 +271,20 @@ pub(crate) trait BottomPaneView: Renderable {
         _word_idx: Option<usize>,
         _heading_words_to_skip: usize,
     ) {
+    }
+
+    /// Query whether the active reading view is currently paused mid-TTS.
+    /// Non-reading views default to "not paused" — they are not voice-aware.
+    #[cfg(not(target_os = "linux"))]
+    fn voice_tts_paused(&self) -> bool {
+        false
+    }
+
+    /// Current voice status label (e.g. "Reading…") for the active reading
+    /// view. Only the document reader sets this; everything else returns
+    /// `None`.
+    #[cfg(all(test, not(target_os = "linux")))]
+    fn voice_status(&self) -> Option<String> {
+        None
     }
 }

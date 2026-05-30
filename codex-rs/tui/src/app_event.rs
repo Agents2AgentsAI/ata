@@ -32,7 +32,11 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::legacy_core::config::types::TtsBackend;
+use crate::legacy_core::config::types::VoiceVerbosity;
+
 use crate::app_command::AppCommand;
+use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
@@ -43,8 +47,7 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
-use codex_protocol::config_types::ServiceTier;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
@@ -61,6 +64,10 @@ pub(crate) enum RealtimeAudioDeviceKind {
 pub(crate) enum ThreadGoalSetMode {
     ConfirmIfExists,
     ReplaceExisting,
+    UpdateExisting {
+        status: ThreadGoalStatus,
+        token_budget: Option<i64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +91,12 @@ impl RealtimeAudioDeviceKind {
             Self::Speaker => "speaker",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsolidationScrollbackReflow {
+    IfResizeReflowRan,
+    Required,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +136,51 @@ pub(crate) enum KeymapEditIntent {
     ReplaceOne { old_key: String },
 }
 
+/// Per-thread reading-view routing mode. `Tui` renders the document inside the
+/// bottom-pane reader; `Browser` hands it off to the in-process browser viewer;
+/// `Disabled` suppresses both and falls back to the inline transcript cell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ReadingViewMode {
+    #[default]
+    Disabled,
+    Tui,
+    Browser,
+}
+
+impl ReadingViewMode {
+    /// Canonical config value written to `[reading_view].mode` in
+    /// `~/.ata/config.toml`.
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    /// Display label used in the research tools picker.
+    /// Diverges from `config_value` so the picker can show "off" — friendlier
+    /// than "disabled" in a single-row UI — while configs stay canonical.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Tui => "tui",
+            Self::Browser => "browser",
+            Self::Disabled => "off",
+        }
+    }
+
+    /// Parse a raw config string (case-insensitive). Treats unknown values as
+    /// `Tui` (the legacy default), and accepts the "off" alias for backward
+    /// compatibility with earlier ATA builds.
+    pub(crate) fn from_config_value(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("browser") => Self::Browser,
+            Some("disabled" | "off") => Self::Disabled,
+            _ => Self::Tui,
+        }
+    }
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum AppEvent {
@@ -155,6 +213,12 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Persist a branch discovered from an App git-action directive into thread metadata.
+    SyncThreadGitBranch {
+        thread_id: ThreadId,
+        branch: String,
+    },
+
     /// Fetch a persistent cross-session message history entry by offset.
     LookupMessageHistoryEntry {
         thread_id: ThreadId,
@@ -164,6 +228,11 @@ pub(crate) enum AppEvent {
 
     /// Start a new session.
     NewSession,
+
+    /// Result of the fresh startup thread that is attached after the input UI is live.
+    StartupThreadStarted {
+        result: Result<AppServerStartedThread, String>,
+    },
 
     /// Clear the terminal UI (screen + scrollback), start a fresh session, and keep the
     /// previous chat resumable.
@@ -202,6 +271,26 @@ pub(crate) enum AppEvent {
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 
+    /// Open the ATA Supabase sign-in view in the bottom pane.
+    SupabaseLoginOpen,
+    /// User submitted an email address — dispatch the ATA OTP send request
+    /// against the app server.
+    SupabaseSendOtp { email: String },
+    /// App server returned the result of an ATA OTP send. `Ok` transitions
+    /// the open view to the OTP-entry phase; `Err` shows the error inline.
+    SupabaseSendOtpResult(Result<(), String>),
+    /// User submitted an OTP code — dispatch the ATA verify request.
+    SupabaseVerifyOtp { email: String, otp: String },
+    /// App server returned the result of an ATA OTP verify. `Ok(email)`
+    /// transitions the view to the success state and refreshes auth.
+    SupabaseVerifyOtpResult(Result<String, String>),
+    /// User requested an ATA sign-out from `/supabase-logout`. Triggers
+    /// the app-server logout call + AuthManager reload.
+    SupabaseLogoutRequested,
+    /// App server returned the result of an ATA logout. `Ok` surfaces
+    /// "Signed out"; `Err` surfaces the error.
+    SupabaseLogoutResult(Result<(), String>),
+
     /// Request to exit the application due to a fatal error.
     #[allow(dead_code)]
     FatalExitRequest(String),
@@ -237,6 +326,11 @@ pub(crate) enum AppEvent {
     /// Open the current thread goal summary/action menu.
     OpenThreadGoalMenu {
         thread_id: ThreadId,
+    },
+
+    /// Open an editor for the current thread goal objective.
+    OpenThreadGoalEditor {
+        thread_id: Option<ThreadId>,
     },
 
     /// Set or replace the current thread goal objective.
@@ -298,8 +392,45 @@ pub(crate) enum AppEvent {
         url: String,
     },
 
+    /// Persist a pet selection and reload the ambient pet.
+    PetSelected {
+        pet_id: String,
+    },
+
+    /// Persist terminal pets as disabled and remove the ambient pet.
+    PetDisabled,
+
+    /// Start loading the side preview for the pet picker.
+    PetPreviewRequested {
+        pet_id: String,
+    },
+
+    /// Result of loading the side preview for the pet picker.
+    PetPreviewLoaded {
+        request_id: u64,
+        result: Result<crate::pets::AmbientPet, String>,
+    },
+
+    /// Result of loading the selected ambient pet before config persistence.
+    PetSelectionLoaded {
+        request_id: u64,
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    },
+
+    /// Result of restoring the configured ambient pet during startup.
+    ConfiguredPetLoaded {
+        pet_id: String,
+        result: Result<Option<crate::pets::AmbientPet>, String>,
+    },
+
     /// Refresh app connector state and mention bindings.
     RefreshConnectors {
+        force_refetch: bool,
+    },
+
+    /// Fetch app connector state from the app server after the widget accepts a refresh request.
+    FetchConnectorsList {
         force_refetch: bool,
     },
 
@@ -519,9 +650,15 @@ pub(crate) enum AppEvent {
     /// finalization. The `App` handler walks backward through `transcript_cells`
     /// to find the `AgentMessageCell` run and splices in the consolidated cell.
     /// The `cwd` keeps local file-link display stable across the final re-render.
+    /// `scrollback_reflow` lets table-tail finalization force the already-emitted
+    /// terminal scrollback to be rebuilt from the consolidated source-backed cell.
+    /// `deferred_history_cell` lets callers add the final stream tail to the
+    /// transcript without first writing its provisional render to scrollback.
     ConsolidateAgentMessage {
         source: String,
         cwd: PathBuf,
+        scrollback_reflow: ConsolidationScrollbackReflow,
+        deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },
 
     /// Replace the contiguous run of streaming `ProposedPlanStreamCell`s at the
@@ -550,9 +687,6 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
-    /// Update the active collaboration mask in the running app and widget.
-    UpdateCollaborationMode(CollaborationModeMask),
-
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
@@ -569,7 +703,7 @@ pub(crate) enum AppEvent {
 
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<String>,
     },
 
     /// Open the device picker for a realtime microphone or speaker.
@@ -620,6 +754,7 @@ pub(crate) enum AppEvent {
     OpenFullAccessConfirmation {
         preset: ApprovalPreset,
         return_to_permissions: bool,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Open the Windows world-writable directories warning.
@@ -629,6 +764,7 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWorldWritableWarningConfirmation {
         preset: Option<ApprovalPreset>,
+        profile_selection: Option<PermissionProfileSelection>,
         /// Up to 3 sample world-writable directories to display in the warning.
         sample_paths: Vec<String>,
         /// If there are more than `sample_paths`, this carries the remaining count.
@@ -641,24 +777,28 @@ pub(crate) enum AppEvent {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxEnablePrompt {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Open the Windows sandbox fallback prompt after declining or failing elevation.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     OpenWindowsSandboxFallbackPrompt {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin the elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxElevatedSetup {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
         preset: ApprovalPreset,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Begin a non-elevated grant of read access for an additional directory.
@@ -679,6 +819,7 @@ pub(crate) enum AppEvent {
     EnableWindowsSandboxForAgentMode {
         preset: ApprovalPreset,
         mode: WindowsSandboxEnableMode,
+        profile_selection: Option<PermissionProfileSelection>,
     },
 
     /// Update the Windows sandbox feature mode without changing approval presets.
@@ -687,8 +828,11 @@ pub(crate) enum AppEvent {
     /// Update the current approval policy in the running app and widget.
     UpdateAskForApprovalPolicy(AskForApproval),
 
-    /// Update the current permission profile in the running app and widget.
-    UpdatePermissionProfile(PermissionProfile),
+    /// Update the current built-in active permission profile in the running app and widget.
+    UpdateActivePermissionProfile(ActivePermissionProfile),
+
+    /// Select a named permission profile, optionally applying built-in mode settings too.
+    SelectPermissionProfile(PermissionProfileSelection),
 
     /// Update the current approvals reviewer in the running app and widget.
     UpdateApprovalsReviewer(ApprovalsReviewer),
@@ -776,6 +920,11 @@ pub(crate) enum AppEvent {
         current_hash: String,
     },
 
+    /// Trust the current definitions for one or more hooks by stable hook key.
+    TrustHooks {
+        updates: Vec<crate::hooks_rpc::HookTrustUpdate>,
+    },
+
     /// Result of persisting hook enabled state.
     HookEnabledSet {
         key: String,
@@ -815,13 +964,6 @@ pub(crate) enum AppEvent {
     SubmitUserMessageWithMode {
         text: String,
         collaboration_mode: CollaborationModeMask,
-    },
-
-    /// Submit a plain text user message using the active collaboration mode.
-    /// Used by overlays (document reader, voice mode) that don't track an
-    /// explicit mode.
-    SubmitUserText {
-        text: String,
     },
 
     /// Open the approval popup.
@@ -930,66 +1072,39 @@ pub(crate) enum AppEvent {
         action: String,
     },
 
-    // ─── Reading view + voice mode (ATA features) ──────────────────────
-    /// The reading-view HTTP server finished starting up.
-    ReadingViewServerStarted(codex_reading_view_server::ReadingViewServer),
-    /// A message received from a browser WebSocket client connected to the
-    /// reading-view server (e.g. follow-up question, read-aloud request).
-    ReadingViewBrowserMessage(String),
-    /// The user changed the reading view mode via the reading-view setup
-    /// popup. Currently emitted from `bottom_pane::ResearchToolsView`.
-    ReadingViewModeChanged(ReadingViewMode),
-
-    /// `/workspace use <selector>` switched the active workspace. The app
-    /// loop refreshes the in-memory sandbox + cwd context so the next turn
-    /// runs against the new workspace's repos.
-    WorkspaceSelectionChanged,
-
-    /// Apply TTS/STT toggle settings from the voice setup popup.
-    #[cfg(not(target_os = "linux"))]
-    UpdateVoiceSettings {
-        /// When true, new sessions start with `/voice` already enabled.
-        startup_enabled: bool,
-        tts_enabled: bool,
-        stt_enabled: bool,
-        elevenlabs_api_key: Option<String>,
-        /// Some(None) = clear to auto-detect, Some(Some("en")) = set, None = unchanged.
-        language_code: Option<Option<String>>,
-        /// Some(speed) = set, None = unchanged.
-        speed: Option<f64>,
-        verbosity: crate::legacy_core::config::types::VoiceVerbosity,
-        tts_backend: crate::legacy_core::config::types::TtsBackend,
-    },
-
-    /// Periodic tick to update the TTS word-highlight position.
-    #[cfg(not(target_os = "linux"))]
-    VoiceModeHighlightTick,
-    /// Voice mode STT transcription completed.
-    #[cfg(not(target_os = "linux"))]
-    VoiceModeTranscriptionComplete {
+    /// Submit a free-form user text to the active thread as if the user
+    /// typed it into the composer. Used by overlay views (e.g. document
+    /// reader Tab-to-ask) that synthesise prompts on the user's behalf.
+    SubmitUserText {
         text: String,
     },
-    /// Voice mode STT transcription failed.
-    #[cfg(not(target_os = "linux"))]
-    VoiceModeTranscriptionFailed {
-        error: String,
-    },
-    /// Interrupt TTS playback.
-    #[cfg(not(target_os = "linux"))]
+
+    /// Reading-view mode toggle emitted by the ResearchToolsView.
+    /// Tracked separately from feature flags so the BrowserViewer wrapper
+    /// can decide whether to route to the in-TUI reader or the browser.
+    ReadingViewModeChanged(ReadingViewMode),
+
+    /// Raw browser → app message forwarded from the
+    /// `codex-reading-view-server` WebSocket. The payload is the
+    /// browser-emitted JSON string; the chatwidget parses it and routes
+    /// to the right handler (follow-up question, read-aloud request,
+    /// karaoke seek, …).
+    ReadingViewBrowserMessage(String),
+
+    /// The `codex-reading-view-server` finished its asynchronous startup
+    /// and is ready to accept pending events. The chatwidget moves the
+    /// server into its own state and flushes any queued payloads.
+    ReadingViewServerStarted(codex_reading_view_server::ReadingViewServer),
+
+    /// Voice-mode TTS controls emitted by the document reader. The Wave 9D
+    /// `voice_mode` module owns the consumer side; defining the variants
+    /// here unblocks the producer (Wave 9B reader views).
     VoiceModeInterruptTts,
-    /// Pause TTS playback.
-    #[cfg(not(target_os = "linux"))]
     VoiceModePauseTts,
-    /// Resume TTS playback after pause.
-    #[cfg(not(target_os = "linux"))]
     VoiceModeResumeTts,
-    /// Change client-side TTS playback speed by a delta (e.g. +0.1 or -0.1).
-    #[cfg(not(target_os = "linux"))]
     VoiceModePlaybackSpeedChange {
         delta: f64,
     },
-    /// Auto-narrate a reading view section via TTS when voice mode is active.
-    #[cfg(not(target_os = "linux"))]
     VoiceModeNarrateSection {
         document_id: String,
         section_index: usize,
@@ -997,169 +1112,78 @@ pub(crate) enum AppEvent {
         selection_word_offset: Option<usize>,
         manual: bool,
     },
-    /// Pre-generate TTS audio for an adjacent section in the background.
-    #[cfg(not(target_os = "linux"))]
     VoiceModePrefetchSection {
         document_id: String,
         section_index: usize,
         text: String,
     },
-    /// Periodic volume meter sample emitted while voice capture is active.
-    /// Emitted by the PTT meter task that's only spawned once the composer
-    /// Space key handler activates voice capture (follow-up).
-    #[cfg(not(target_os = "linux"))]
-    #[allow(dead_code)]
+
+    /// Push-to-talk recording meter tick — the meter renders the most
+    /// recently observed audio level (encoded as a unicode meter glyph
+    /// string by `RecordingMeterState`).
     VoiceModeMeterTick {
         text: String,
     },
-    /// PTT timeout safety poller fired — voice mode checks elapsed press time.
-    /// Emitted by the PTT timeout poller, gated behind the same composer
-    /// key handler follow-up as `VoiceModeMeterTick`.
-    #[cfg(not(target_os = "linux"))]
-    #[allow(dead_code)]
+    /// The PTT timeout poller fired. Used to detect Space-release in
+    /// terminals that don't emit KeyEventKind::Release.
     VoiceModePttTimeoutCheck,
-    /// New TTS audio chunk arrived from the persistent ElevenLabs worker.
-    #[cfg(not(target_os = "linux"))]
+    /// Karaoke highlight tick — drives the per-word highlight cursor for
+    /// the active TTS narration.
+    VoiceModeHighlightTick,
+    /// Successful STT transcription delivered for submission to the agent.
+    VoiceModeTranscriptionComplete {
+        text: String,
+    },
+    /// STT transcription failed (mic error, missing API key, recording
+    /// too short, runtime error). The chatwidget surfaces the message.
+    VoiceModeTranscriptionFailed {
+        error: String,
+    },
+    /// A chunk of TTS audio + optional word-level alignment arrived from
+    /// the ElevenLabs WebSocket worker.
     VoiceModeTtsAudioChunk {
         pcm: Vec<i16>,
         alignment: Option<codex_elevenlabs::TtsAlignment>,
     },
-    /// TTS worker reported an error.
-    #[cfg(not(target_os = "linux"))]
+    /// TTS pipeline failure (backend missing / connection failure /
+    /// stream error). Surfaced inline so the user knows audio went silent.
     VoiceModeTtsError {
         error: String,
     },
-    /// TTS worker finished streaming the current sentence.
-    #[cfg(not(target_os = "linux"))]
+    /// All in-flight TTS tasks for the current turn finished.
     VoiceModeTtsFinished,
+
+    /// Apply voice-mode settings produced by `VoiceSetupView` to the runtime
+    /// chatwidget state and persist them to `~/.ata/config.toml`.
+    /// The outer `Option`s on `language_code` / `speed` distinguish "user
+    /// touched this field" (Some) from "leave the existing config value
+    /// alone" (None); the inner `Option<String>` on `language_code` further
+    /// distinguishes "explicit language" from "auto-detect".
+    UpdateVoiceSettings {
+        startup_enabled: bool,
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        language_code: Option<Option<String>>,
+        speed: Option<f64>,
+        verbosity: VoiceVerbosity,
+        tts_backend: TtsBackend,
+    },
 }
 
-/// Reading view display mode, chosen via the `/reading-view` setup popup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ReadingViewMode {
-    /// Built-in terminal reader (default).
-    #[default]
-    Tui,
-    /// Opens in browser with rich HTML rendering.
-    Browser,
-    /// No reading view — content stays in chat.
-    Disabled,
-}
-
-impl ReadingViewMode {
-    pub(crate) fn config_value(self) -> &'static str {
-        match self {
-            Self::Tui => "tui",
-            Self::Browser => "browser",
-            Self::Disabled => "disabled",
-        }
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Tui => "tui",
-            Self::Browser => "browser",
-            Self::Disabled => "off",
-        }
-    }
-
-    pub(crate) fn from_config_value(value: Option<&str>) -> Self {
-        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-            Some("browser") => Self::Browser,
-            Some("disabled" | "off") => Self::Disabled,
-            _ => Self::Tui,
-        }
-    }
-
-    pub(crate) fn from_config(config: &crate::legacy_core::config::Config) -> Self {
-        let configured_mode = config
-            .config_layer_stack
-            .effective_config()
-            .as_table()
-            .and_then(|t| t.get("reading_view"))
-            .and_then(|v| {
-                v.clone()
-                    .try_into::<crate::legacy_core::config::types::ReadingViewToml>()
-                    .ok()
-            })
-            .and_then(|rv| rv.mode);
-
-        if configured_mode.is_some() {
-            return Self::from_config_value(configured_mode.as_deref());
-        }
-
-        // Backward compatibility for configs written before `[reading_view].mode`
-        // became the source of truth.
-        if !config.features.enabled(Feature::ReadingView) {
-            return Self::Disabled;
-        }
-
-        Self::Tui
-    }
+/// Named profile selection to apply after any required UI guardrails complete.
+#[derive(Debug, Clone)]
+pub(crate) struct PermissionProfileSelection {
+    pub profile_id: String,
+    pub approval_policy: Option<AskForApproval>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub display_label: String,
 }
 
 #[derive(Debug)]
 pub(crate) struct RealtimeWebrtcOffer {
     pub(crate) offer_sdp: String,
     pub(crate) handle: RealtimeWebrtcSessionHandle,
-}
-
-#[cfg(test)]
-mod reading_view_mode_tests {
-    use super::ReadingViewMode;
-
-    #[test]
-    fn config_value_uses_disabled_while_label_uses_off() {
-        assert_eq!(ReadingViewMode::Disabled.label(), "off");
-        assert_eq!(ReadingViewMode::Disabled.config_value(), "disabled");
-    }
-
-    #[test]
-    fn from_config_value_accepts_legacy_off_alias() {
-        assert_eq!(
-            ReadingViewMode::from_config_value(Some("off")),
-            ReadingViewMode::Disabled
-        );
-        assert_eq!(
-            ReadingViewMode::from_config_value(Some("disabled")),
-            ReadingViewMode::Disabled
-        );
-        assert_eq!(
-            ReadingViewMode::from_config_value(Some("browser")),
-            ReadingViewMode::Browser
-        );
-    }
-
-    #[tokio::test]
-    async fn from_config_prefers_reading_view_mode_over_legacy_feature_flag() -> std::io::Result<()>
-    {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join(codex_config::CONFIG_TOML_FILE),
-            r#"[reading_view]
-mode = "disabled"
-
-[features]
-reading_view = true
-"#,
-        )?;
-
-        let config = crate::legacy_core::config::ConfigBuilder::default()
-            .codex_home(tmp.path().to_path_buf())
-            .harness_overrides(crate::legacy_core::config::ConfigOverrides {
-                cwd: Some(tmp.path().to_path_buf()),
-                ..Default::default()
-            })
-            .build()
-            .await?;
-
-        assert_eq!(
-            ReadingViewMode::from_config(&config),
-            ReadingViewMode::Disabled
-        );
-
-        Ok(())
-    }
 }
 
 /// The exit strategy requested by the UI layer.

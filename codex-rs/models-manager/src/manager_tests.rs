@@ -196,6 +196,7 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
 
 async fn chatgpt_auth_tokens_for_tests(codex_home: &Path) -> CodexAuth {
     let auth_dot_json = codex_login::AuthDotJson {
+        version: None,
         auth_mode: Some(AuthMode::ChatgptAuthTokens),
         openai_api_key: None,
         tokens: Some(TokenData {
@@ -211,7 +212,7 @@ c2ln",
         }),
         last_refresh: Some(Utc::now()),
         agent_identity: None,
-        ..Default::default()
+        providers: std::collections::HashMap::new(),
     };
     std::fs::create_dir_all(codex_home).expect("codex home should be created");
     std::fs::write(
@@ -277,34 +278,6 @@ async fn get_model_info_uses_custom_catalog() {
     assert!(model_info.supports_image_detail_original);
     assert!(!model_info.supports_parallel_tool_calls);
     assert!(!model_info.used_fallback_model_metadata);
-}
-
-#[tokio::test]
-async fn get_model_info_aliases_legacy_gemini_slugs_to_preview() {
-    // Saved configs from before the `-preview` rename should keep working
-    // without forcing the user to re-pick the model. The alias both
-    // resolves the catalog entry (so no "fallback metadata" warning) and
-    // rewrites the slug used downstream (so the wire request goes out with
-    // the slug Copilot/Gemini actually accept).
-    let config = ModelsManagerConfig::default();
-    let manager = static_manager_for_tests(ModelsResponse {
-        models: vec![
-            remote_model("gemini-3.1-pro-preview", "Gemini 3.1 Pro", 0),
-            remote_model("gemini-3-flash-preview", "Gemini 3 Flash", 10),
-        ],
-    });
-
-    for (legacy, canonical) in [
-        ("gemini-3.1-pro", "gemini-3.1-pro-preview"),
-        ("gemini-3-flash", "gemini-3-flash-preview"),
-    ] {
-        let info = manager.get_model_info(legacy, &config).await;
-        assert!(
-            !info.used_fallback_model_metadata,
-            "legacy slug `{legacy}` should resolve via alias",
-        );
-        assert_eq!(info.slug, canonical);
-    }
 }
 
 #[tokio::test]
@@ -392,6 +365,160 @@ async fn refresh_available_models_sorts_by_priority() {
         high_idx < low_idx,
         "higher priority should be listed before lower priority"
     );
+    assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn refresh_available_models_uses_remote_only_catalog_for_chatgpt_auth() {
+    let remote_models = vec![remote_model(
+        "chatgpt-visible-source-of-truth",
+        "ChatGPT Visible",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, remote_models);
+    assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn refresh_available_models_uses_cached_remote_only_catalog_for_chatgpt_auth() {
+    let remote_models = vec![remote_model(
+        "chatgpt-cached-source-of-truth",
+        "ChatGPT Cached",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let fetch_endpoint = TestModelsEndpoint::new(vec![remote_models.clone()]);
+    let fetch_manager =
+        openai_manager_for_tests(codex_home.path().to_path_buf(), fetch_endpoint.clone());
+
+    fetch_manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("initial refresh succeeds");
+
+    let cache_endpoint = TestModelsEndpoint::new(Vec::new());
+    let cache_manager =
+        openai_manager_for_tests(codex_home.path().to_path_buf(), cache_endpoint.clone());
+
+    cache_manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("cached refresh succeeds");
+
+    assert_eq!(cache_manager.get_remote_models().await, remote_models);
+    assert_eq!(
+        cache_endpoint.fetch_count(),
+        0,
+        "fresh cache should avoid a model fetch"
+    );
+}
+
+#[tokio::test]
+async fn get_model_info_uses_fallback_for_bundled_models_when_chatgpt_remote_is_authoritative() {
+    let remote_models = vec![remote_model(
+        "chatgpt-authoritative-model-info",
+        "ChatGPT Model Info",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![remote_models]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let bundled_slug = load_remote_models_from_file()
+        .expect("bundled models should parse")
+        .first()
+        .expect("bundled models should contain at least one model")
+        .slug
+        .clone();
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    let model_info = manager
+        .get_model_info(&bundled_slug, &ModelsManagerConfig::default())
+        .await;
+
+    assert_eq!(model_info.slug, bundled_slug);
+    assert!(model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
+async fn refresh_available_models_preserves_bundled_catalog_for_empty_chatgpt_remote() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![Vec::new()]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let expected = load_remote_models_from_file().expect("bundled models should parse");
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
+}
+
+#[tokio::test]
+async fn refresh_available_models_merges_hidden_only_chatgpt_remote_with_bundled_catalog() {
+    let hidden_remote = remote_model_with_visibility(
+        "chatgpt-hidden-only",
+        "ChatGPT Hidden",
+        /*priority*/ 0,
+        "hide",
+    );
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![vec![hidden_remote.clone()]]);
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint);
+    let mut expected = load_remote_models_from_file().expect("bundled models should parse");
+    expected.push(hidden_remote);
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
+}
+
+#[tokio::test]
+async fn refresh_available_models_keeps_merging_for_api_auth() {
+    let remote_models = vec![remote_model(
+        "api-auth-visible-remote",
+        "API Auth Visible",
+        /*priority*/ 0,
+    )];
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = Arc::new(TestModelsEndpoint {
+        has_command_auth: true,
+        uses_codex_backend: false,
+        responses: Mutex::new(vec![remote_models.clone()].into()),
+        fetch_count: AtomicUsize::new(0),
+    });
+    let manager = openai_manager_for_tests_with_auth(
+        codex_home.path().to_path_buf(),
+        endpoint.clone(),
+        Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
+            "test-api-key",
+        ))),
+    );
+    let mut expected = load_remote_models_from_file().expect("bundled models should parse");
+    expected.extend(remote_models);
+
+    manager
+        .refresh_available_models(RefreshStrategy::OnlineIfUncached)
+        .await
+        .expect("refresh succeeds");
+
+    assert_eq!(manager.get_remote_models().await, expected);
     assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
 }
 
@@ -811,133 +938,4 @@ fn bundled_models_json_roundtrips() {
         !response.models.is_empty(),
         "bundled models.json should contain at least one model"
     );
-}
-
-#[test]
-fn bundled_copilot_models_json_roundtrips() {
-    let response = crate::bundled_copilot_models_response()
-        .unwrap_or_else(|err| panic!("bundled copilot_models.json should parse: {err}"));
-
-    let serialized =
-        serde_json::to_string(&response).expect("bundled copilot_models.json should serialize");
-    let roundtripped: ModelsResponse = serde_json::from_str(&serialized)
-        .expect("serialized copilot_models.json should deserialize");
-
-    assert_eq!(
-        response, roundtripped,
-        "bundled copilot_models.json should round trip through serde"
-    );
-    assert!(
-        !response.models.is_empty(),
-        "bundled copilot_models.json should contain at least one model"
-    );
-    // Slugs must be unique so the picker can identify a selected model.
-    let mut seen = std::collections::HashSet::new();
-    for model in &response.models {
-        assert!(
-            seen.insert(model.slug.clone()),
-            "duplicate slug in copilot_models.json: {}",
-            model.slug
-        );
-    }
-    // Sanity check: the catalog must contain the model the Copilot login
-    // flow persists as the default, otherwise newly-logged-in users land on
-    // a model that is not in the picker.
-    assert!(
-        response.models.iter().any(|m| m.slug == "gpt-4.1"),
-        "bundled copilot_models.json must include the login-default slug"
-    );
-}
-
-/// Pins the Anthropic catalog to the exact spec the user dictated:
-/// Opus 4.7 + Sonnet 4.6 with full reasoning depth (low→max), Haiku 4.5
-/// with no reasoning effort. Catches accidental additions, slug typos,
-/// and depth-tier drift.
-#[test]
-fn bundled_anthropic_models_json_matches_spec() {
-    use codex_protocol::openai_models::ReasoningEffort;
-    let response = crate::bundled_anthropic_models_response()
-        .unwrap_or_else(|err| panic!("bundled anthropic_models.json should parse: {err}"));
-
-    // serde roundtrip — catches schema drift.
-    let serialized =
-        serde_json::to_string(&response).expect("anthropic_models.json should serialize");
-    let roundtripped: ModelsResponse =
-        serde_json::from_str(&serialized).expect("anthropic_models.json should round-trip");
-    assert_eq!(response, roundtripped);
-
-    let slugs: Vec<&str> = response.models.iter().map(|m| m.slug.as_str()).collect();
-    assert_eq!(
-        slugs,
-        vec!["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
-        "anthropic catalog must contain exactly the three spec'd slugs, in order",
-    );
-
-    let efforts_of = |slug: &str| -> Vec<ReasoningEffort> {
-        response
-            .models
-            .iter()
-            .find(|m| m.slug == slug)
-            .unwrap_or_else(|| panic!("missing {slug}"))
-            .supported_reasoning_levels
-            .iter()
-            .map(|opt| opt.effort)
-            .collect()
-    };
-    let full = vec![
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-        ReasoningEffort::XHigh,
-        ReasoningEffort::Max,
-    ];
-    assert_eq!(efforts_of("claude-opus-4-7"), full);
-    assert_eq!(efforts_of("claude-sonnet-4-6"), full);
-    assert!(
-        efforts_of("claude-haiku-4-5").is_empty(),
-        "Haiku 4.5 ships without reasoning effort per spec"
-    );
-}
-
-/// Same for Gemini: 3.1 Pro / Flash / Flash-Lite with minimal→high.
-#[test]
-fn bundled_gemini_models_json_matches_spec() {
-    use codex_protocol::openai_models::ReasoningEffort;
-    let response = crate::bundled_gemini_models_response()
-        .unwrap_or_else(|err| panic!("bundled gemini_models.json should parse: {err}"));
-
-    let serialized = serde_json::to_string(&response).expect("gemini_models.json should serialize");
-    let roundtripped: ModelsResponse =
-        serde_json::from_str(&serialized).expect("gemini_models.json should round-trip");
-    assert_eq!(response, roundtripped);
-
-    let slugs: Vec<&str> = response.models.iter().map(|m| m.slug.as_str()).collect();
-    assert_eq!(
-        slugs,
-        vec![
-            "gemini-3.1-pro-preview",
-            "gemini-3.1-flash-preview",
-            "gemini-3.1-flash-lite"
-        ],
-        "gemini catalog must contain exactly the three spec'd slugs, in order",
-    );
-
-    let expected = vec![
-        ReasoningEffort::Minimal,
-        ReasoningEffort::Low,
-        ReasoningEffort::Medium,
-        ReasoningEffort::High,
-    ];
-    for slug in &slugs {
-        let efforts: Vec<ReasoningEffort> = response
-            .models
-            .iter()
-            .find(|m| m.slug == *slug)
-            .unwrap()
-            .supported_reasoning_levels
-            .iter()
-            .map(|opt| opt.effort)
-            .collect();
-        assert_eq!(efforts, expected, "{slug} reasoning levels must match spec");
-    }
 }

@@ -44,23 +44,28 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub(crate) struct ResearchBridgeHandler {
     tool_name: ToolName,
+    spec: ToolSpec,
     toolkit: Arc<codex_research_tools::ResearchToolkit>,
 }
 
 impl ResearchBridgeHandler {
     pub(crate) fn new(
         tool_name: impl Into<String>,
+        spec: ToolSpec,
         toolkit: Arc<codex_research_tools::ResearchToolkit>,
     ) -> Self {
         Self {
             tool_name: ToolName::plain(tool_name.into()),
+            spec,
             toolkit,
         }
     }
@@ -231,6 +236,41 @@ impl ResearchBridgeHandler {
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
             }
+            "repo_clone_and_summarize" => dispatch_with_params!(RepoUrlAndBranchArgs, |params| self
+                .toolkit
+                .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
+            "repo_find_models" => dispatch_with_params!(RepoUrlAndFrameworkArgs, |params| self
+                .toolkit
+                .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),
+            "repo_extract_requirements" => {
+                dispatch_with_params!(RepoUrlArgs, |params| self
+                    .toolkit
+                    .repo_extract_requirements(params.repo_url.as_str()))
+            }
+            "repo_find_entrypoints" => dispatch_with_params!(RepoUrlAndTaskHintArgs, |params| self
+                .toolkit
+                .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref())),
+            "repo_extract_io_shapes" => dispatch_with_params!(RepoUrlAndModelClassArgs, |params| {
+                self.toolkit
+                    .repo_extract_io_shapes(params.repo_url.as_str(), params.model_class.as_deref())
+            }),
+            "repo_get_health" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_get_health(params.repo_url.as_str())),
+            "repo_find_export_paths" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_find_export_paths(params.repo_url.as_str())),
+            "repo_extract_config_schema" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_extract_config_schema(params.repo_url.as_str())),
+            "repo_diff_requirements" => {
+                dispatch_with_params!(RepoDiffRequirementsArgs, |params| self
+                    .toolkit
+                    .repo_diff_requirements(
+                        params.repo_url.as_str(),
+                        params.local_requirements_path.as_str()
+                    ))
+            }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown research tool: {tool_name}"
             ))),
@@ -238,18 +278,20 @@ impl ResearchBridgeHandler {
     }
 }
 
-impl ToolHandler for ResearchBridgeHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ResearchBridgeHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             tool_name, payload, ..
         } = invocation;
@@ -263,10 +305,14 @@ impl ToolHandler for ResearchBridgeHandler {
             }
         };
 
-        self.execute_native_tool(tool_name.name.as_str(), arguments.as_str())
-            .await
+        let output = self
+            .execute_native_tool(tool_name.name.as_str(), arguments.as_str())
+            .await?;
+        Ok(boxed_tool_output(output))
     }
 }
+
+impl CoreToolRuntime for ResearchBridgeHandler {}
 
 pub fn build_research_config(
     toml: Option<&ResearchToolsToml>,
@@ -427,6 +473,41 @@ struct PaperPaginationArgs {
     max_chars_per_item: Option<u32>,
 }
 
+#[derive(Deserialize)]
+struct RepoUrlArgs {
+    repo_url: String,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndBranchArgs {
+    repo_url: String,
+    branch: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndFrameworkArgs {
+    repo_url: String,
+    framework: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndTaskHintArgs {
+    repo_url: String,
+    task_hint: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndModelClassArgs {
+    repo_url: String,
+    model_class: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoDiffRequirementsArgs {
+    repo_url: String,
+    local_requirements_path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +519,21 @@ mod tests {
     use wiremock::ResponseTemplate;
     use wiremock::matchers::method;
     use wiremock::matchers::path;
+
+    fn placeholder_spec(name: &str) -> ToolSpec {
+        ToolSpec::Function(codex_tools::ResponsesApiTool {
+            name: name.to_string(),
+            description: String::new(),
+            strict: false,
+            parameters: codex_tools::JsonSchema::object(
+                Default::default(),
+                None,
+                Some(codex_tools::AdditionalProperties::Boolean(false)),
+            ),
+            output_schema: None,
+            defer_loading: None,
+        })
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn paper_get_handler_uses_toolkit_and_returns_serialized_json() {
@@ -491,6 +587,7 @@ mod tests {
 
         let handler = ResearchBridgeHandler::new(
             "paper_get",
+            placeholder_spec("paper_get"),
             Arc::new(codex_research_tools::ResearchToolkit::new(
                 build_reqwest_client(),
                 config,
@@ -607,6 +704,7 @@ mod tests {
 
         let handler = ResearchBridgeHandler::new(
             "paper_get",
+            placeholder_spec("paper_get"),
             Arc::new(codex_research_tools::ResearchToolkit::new(
                 build_reqwest_client(),
                 config,

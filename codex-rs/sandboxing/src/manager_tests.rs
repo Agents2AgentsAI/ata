@@ -85,6 +85,7 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
+                workspace_kb_root: None,
             },
             permissions: &permissions,
             sandbox: SandboxType::None,
@@ -136,6 +137,7 @@ fn transform_additional_permissions_enable_network_for_external_sandbox() {
                         Some(Vec::new()),
                     )),
                 }),
+                workspace_kb_root: None,
             },
             permissions: &permissions,
             sandbox: SandboxType::None,
@@ -183,7 +185,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             path: FileSystemPath::Path {
                 path: denied_path.clone(),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permissions = PermissionProfile::from_runtime_permissions(
@@ -204,6 +206,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
                     )),
                     ..Default::default()
                 }),
+                workspace_kb_root: None,
             },
             permissions: &permissions,
             sandbox: SandboxType::None,
@@ -228,7 +231,7 @@ fn transform_additional_permissions_preserves_denied_entries() {
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: denied_path },
-                access: FileSystemAccessMode::None,
+                access: FileSystemAccessMode::Deny,
             },
             FileSystemSandboxEntry {
                 path: FileSystemPath::Path { path: allowed_path },
@@ -257,6 +260,7 @@ fn transform_linux_seccomp_request(
                 cwd: cwd.clone(),
                 env: HashMap::new(),
                 additional_permissions: None,
+                workspace_kb_root: None,
             },
             permissions: &permissions,
             sandbox: SandboxType::LinuxSeccomp,

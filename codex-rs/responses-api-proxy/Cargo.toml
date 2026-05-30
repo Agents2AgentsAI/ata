@@ -10,7 +10,7 @@ path = "src/lib.rs"
 doctest = false
 
 [[bin]]
-name = "ata-responses-api-proxy"
+name = "codex-responses-api-proxy"
 path = "src/main.rs"
 
 [lints]

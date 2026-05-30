@@ -45,8 +45,9 @@ use crate::tools::handlers::lsp_workspace_edit::workspace_edit_to_apply_patch;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::context::boxed_tool_output;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 
 mod code_actions;
 mod formatting;
@@ -84,6 +85,18 @@ pub struct LspToolHandler {
     /// so that a removeRoot + addRoot cycle (which creates a new `Arc`) causes
     /// re-warmup even if the root name is identical.
     pub warmed_workspaces: tokio::sync::Mutex<HashMap<String, usize>>,
+    pub(crate) spec: ToolSpec,
+}
+
+impl LspToolHandler {
+    pub(crate) fn new(state: Arc<MultiRootState>, spec: ToolSpec) -> Self {
+        Self {
+            state,
+            warmed_files: tokio::sync::Mutex::new(HashSet::new()),
+            warmed_workspaces: tokio::sync::Mutex::new(HashMap::new()),
+            spec,
+        }
+    }
 }
 
 struct FileQueryContext {
@@ -165,30 +178,24 @@ enum LspOperation {
     Diagnostics,
 }
 
-impl ToolHandler for LspToolHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for LspToolHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("lsp")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_lsp_tool())
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        false
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let turn_cwd = invocation.turn.cwd.clone();
         let payload = invocation.payload;
 
@@ -609,9 +616,11 @@ impl ToolHandler for LspToolHandler {
             }
         };
 
-        Ok(FunctionToolOutput::from_text(out, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(out, Some(true))))
     }
 }
+
+impl CoreToolRuntime for LspToolHandler {}
 
 impl LspToolHandler {
     async fn registry_for_root(

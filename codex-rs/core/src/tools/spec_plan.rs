@@ -1,40 +1,25 @@
+use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
+use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
-use crate::tools::handlers::AttachUrlFilesHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
-use crate::tools::handlers::ContainerExecHandler;
 use crate::tools::handlers::CreateGoalHandler;
-use crate::tools::handlers::CronCreateHandler;
-use crate::tools::handlers::CronDeleteHandler;
-use crate::tools::handlers::CronListHandler;
-use crate::tools::handlers::CronSessionCreateHandler;
-use crate::tools::handlers::CronSessionDeleteHandler;
-use crate::tools::handlers::CronSessionListHandler;
-use crate::tools::handlers::CropFigureHandler;
-use crate::tools::handlers::DocumentReaderHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetGoalHandler;
+use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
-use crate::tools::handlers::LocalShellHandler;
 use crate::tools::handlers::McpHandler;
-use crate::tools::handlers::MonitorListHandler;
-use crate::tools::handlers::MonitorStartHandler;
-use crate::tools::handlers::MonitorStopHandler;
-use crate::tools::handlers::MonitorWaitHandler;
-use crate::tools::handlers::MonitorWatchForHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputHandler;
-use crate::tools::handlers::ResearchBridgeHandler;
 use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
-use crate::tools::handlers::ShellHandler;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
 use crate::tools::handlers::UpdateGoalHandler;
@@ -42,632 +27,1251 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::artifacts::ArtifactsHandler;
+use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+#[cfg(feature = "treesitter")]
+use crate::tools::handlers::code_intel::CodeIntelToolHandler;
+#[cfg(feature = "treesitter")]
+use crate::tools::handlers::code_intel::create_code_intel_tool;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::LspToolHandler;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::create_lsp_tool;
+use crate::tools::handlers::data::DataBridgeHandler;
+use crate::tools::handlers::data::build_data_config;
+use crate::tools::handlers::data_bridge_spec::create_dataset_download_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_get_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_list_files_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_search_tool;
+use crate::tools::handlers::data_bridge_spec::create_hf_dataset_info_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_download_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_list_files_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competitions_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_dataset_info_tool;
+use crate::tools::handlers::js_repl::JsReplHandler;
+use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
+use crate::tools::handlers::research::ResearchBridgeHandler;
+use crate::tools::handlers::research::build_research_config;
+use crate::tools::handlers::research_bridge_spec::{
+    create_hn_get_thread_tool, create_hn_search_tool, create_paper_citations_tool,
+    create_paper_get_tool, create_paper_recommendations_tool, create_paper_references_tool,
+    create_paper_search_tool, create_patent_get_tool, create_patent_search_tool,
+    create_repo_clone_and_summarize_tool, create_repo_diff_requirements_tool,
+    create_repo_extract_config_schema_tool, create_repo_extract_io_shapes_tool,
+    create_repo_extract_requirements_tool, create_repo_find_entrypoints_tool,
+    create_repo_find_export_paths_tool, create_repo_find_models_tool, create_repo_get_health_tool,
+    create_zotero_add_items_to_collection_tool, create_zotero_advanced_search_tool,
+    create_zotero_create_attachment_link_tool, create_zotero_create_collection_tool,
+    create_zotero_create_items_tool, create_zotero_find_or_create_collection_tool,
+    create_zotero_get_annotations_tool, create_zotero_get_attachments_tool,
+    create_zotero_get_collection_items_tool, create_zotero_get_collections_tool,
+    create_zotero_get_fulltext_tool, create_zotero_get_item_citation_tool,
+    create_zotero_get_item_tool, create_zotero_get_notes_tool, create_zotero_get_recent_tool,
+    create_zotero_get_tags_tool, create_zotero_grep_text_tool, create_zotero_list_groups_tool,
+    create_zotero_search_notes_tool, create_zotero_search_tool, create_zotero_update_items_tool,
+};
 use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
+use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
+use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
+use crate::tools::handlers::crop_figure::CropFigureHandler;
+use crate::tools::handlers::cron::CronCreateHandler;
+use crate::tools::handlers::cron::CronDeleteHandler;
+use crate::tools::handlers::cron::CronListHandler;
+use crate::tools::handlers::cron_session::CronSessionCreateHandler;
+use crate::tools::handlers::cron_session::CronSessionDeleteHandler;
+use crate::tools::handlers::cron_session::CronSessionListHandler;
 use crate::tools::handlers::cron_session_spec::create_cron_session_create_tool;
 use crate::tools::handlers::cron_session_spec::create_cron_session_delete_tool;
 use crate::tools::handlers::cron_session_spec::create_cron_session_list_tool;
 use crate::tools::handlers::cron_spec::create_cron_create_tool;
 use crate::tools::handlers::cron_spec::create_cron_delete_tool;
 use crate::tools::handlers::cron_spec::create_cron_list_tool;
-use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
+use crate::tools::handlers::document_reader::DocumentReaderHandler;
 use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
 use crate::tools::handlers::document_reader::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
-use crate::tools::handlers::js_repl::JsReplHandler;
-use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
+use crate::tools::handlers::document_reader::reading_view_tools_enabled;
+use crate::tools::handlers::monitor::MonitorListHandler;
+use crate::tools::handlers::monitor::MonitorStartHandler;
+use crate::tools::handlers::monitor::MonitorStopHandler;
+use crate::tools::handlers::monitor::MonitorWaitHandler;
+use crate::tools::handlers::monitor::MonitorWatchForHandler;
 use crate::tools::handlers::monitor_spec::create_monitor_list_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_start_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_stop_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_wait_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_watch_for_tool;
+use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
 use crate::tools::handlers::multi_agents::SpawnAgentHandler;
 use crate::tools::handlers::multi_agents::WaitAgentHandler;
+use crate::tools::handlers::multi_agents_common::DEFAULT_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
+use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
-use crate::tools::handlers::shell_spec::ShellToolOptions;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
 use crate::tools::hosted_spec::create_web_search_tool;
-use crate::tools::registry::ToolRegistryBuilder;
-use crate::tools::spec_plan_types::ToolRegistryBuildParams;
-use crate::tools::spec_plan_types::agent_type_description;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExposure;
+use crate::tools::registry::ToolRegistry;
+use crate::tools::registry::override_tool_exposure;
+use crate::tools::router::ToolRouter;
+use crate::tools::router::ToolRouterParams;
+use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_mcp::ToolInfo;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
+use codex_tools::TOOL_SEARCH_TOOL_NAME;
+use codex_tools::ToolCall as ExtensionToolCall;
 use codex_tools::ToolEnvironmentMode;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
-use codex_tools::ToolSearchSource;
-use codex_tools::ToolSearchSourceInfo;
+use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
-use codex_tools::ToolsConfig;
-use codex_tools::coalesce_loadable_tool_specs;
+use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
-use codex_tools::collect_tool_search_source_infos;
+use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
-use codex_tools::dynamic_tool_to_loadable_tool_spec;
-use codex_tools::mcp_tool_to_responses_api_tool;
+use codex_tools::request_user_input_available_modes;
+use codex_tools::shell_command_backend_for_features;
+use codex_tools::shell_type_for_model_and_features;
 use std::collections::BTreeMap;
-#[cfg(feature = "lsp")]
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use tracing::warn;
 
-pub fn build_tool_registry_builder(
-    config: &ToolsConfig,
-    params: ToolRegistryBuildParams<'_>,
-) -> ToolRegistryBuilder {
-    let mut builder = ToolRegistryBuilder::new(config.code_mode_enabled);
-    let exec_permission_approvals_enabled = config.exec_permission_approvals_enabled;
+const MULTI_AGENT_V2_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
-    if config.code_mode_enabled {
-        let namespace_descriptions = params
-            .tool_namespaces
-            .into_iter()
-            .flatten()
-            .map(|(namespace, detail)| {
-                (
-                    namespace.clone(),
-                    codex_code_mode::ToolNamespaceDescription {
-                        name: detail.name.clone(),
-                        description: detail.description.clone().unwrap_or_default(),
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let nested_config = config.for_code_mode_nested_tools();
-        let nested_builder = build_tool_registry_builder(
-            &nested_config,
-            ToolRegistryBuildParams {
-                discoverable_tools: None,
-                ..params
-            },
-        );
-        let mut enabled_tools = collect_code_mode_exec_prompt_tool_definitions(
-            nested_builder
-                .specs()
-                .iter()
-                .map(|configured_tool| &configured_tool.spec),
-        );
-        enabled_tools
-            .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-        builder.register_handler(Arc::new(CodeModeExecuteHandler::new(
-            create_code_mode_tool(
-                &enabled_tools,
-                &namespace_descriptions,
-                config.code_mode_only_enabled,
-                config.search_tool
-                    && params
-                        .deferred_mcp_tools
-                        .is_some_and(|tools| !tools.is_empty()),
-            ),
-        )));
-        builder.register_handler(Arc::new(CodeModeWaitHandler));
+type PlannedRuntime = Arc<dyn CoreToolRuntime>;
+
+#[derive(Default)]
+struct PlannedTools {
+    runtimes: Vec<PlannedRuntime>,
+    hosted_specs: Vec<ToolSpec>,
+}
+
+impl PlannedTools {
+    fn add<T>(&mut self, handler: T)
+    where
+        T: CoreToolRuntime + 'static,
+    {
+        self.runtimes.push(Arc::new(handler));
     }
 
-    if config.environment_mode.has_environment() {
-        let include_environment_id =
-            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
-        match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.register_handler(Arc::new(ShellHandler::new(ShellToolOptions {
-                    exec_permission_approvals_enabled,
-                })));
-            }
-            ConfigShellToolType::Local => {
-                builder.register_handler(Arc::new(LocalShellHandler::new()));
-            }
-            ConfigShellToolType::UnifiedExec => {
-                builder.register_handler(Arc::new(ExecCommandHandler::new(
-                    ExecCommandHandlerOptions {
-                        allow_login_shell: config.allow_login_shell,
-                        exec_permission_approvals_enabled,
-                        include_environment_id,
-                    },
-                )));
-                builder.register_handler(Arc::new(WriteStdinHandler));
-            }
-            ConfigShellToolType::Disabled => {}
-            ConfigShellToolType::ShellCommand => {
-                builder.register_handler(Arc::new(ShellCommandHandler::new(
-                    ShellCommandHandlerOptions {
-                        backend_config: config.shell_command_backend,
-                        allow_login_shell: config.allow_login_shell,
-                        exec_permission_approvals_enabled,
-                    },
-                )));
-            }
+    fn add_arc(&mut self, handler: PlannedRuntime) {
+        self.runtimes.push(handler);
+    }
+
+    fn add_with_exposure<T>(&mut self, handler: T, exposure: ToolExposure)
+    where
+        T: CoreToolRuntime + 'static,
+    {
+        self.runtimes
+            .push(override_tool_exposure(Arc::new(handler), exposure));
+    }
+
+    fn add_dispatch_only<T>(&mut self, handler: T)
+    where
+        T: CoreToolRuntime + 'static,
+    {
+        self.add_with_exposure(handler, ToolExposure::Hidden);
+    }
+
+    fn add_hosted_spec(&mut self, spec: ToolSpec) {
+        self.hosted_specs.push(spec);
+    }
+
+    fn runtimes(&self) -> &[PlannedRuntime] {
+        &self.runtimes
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CoreToolPlanContext<'a> {
+    turn_context: &'a TurnContext,
+    mcp_tools: Option<&'a [ToolInfo]>,
+    deferred_mcp_tools: Option<&'a [ToolInfo]>,
+    discoverable_tools: Option<&'a [DiscoverableTool]>,
+    extension_tool_executors: &'a [Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    dynamic_tools: &'a [DynamicToolSpec],
+    default_agent_type_description: &'a str,
+    wait_agent_timeouts: WaitAgentTimeoutOptions,
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    multi_root_state: Option<&'a Arc<crate::state::MultiRootState>>,
+}
+
+pub(crate) fn build_tool_router(
+    turn_context: &TurnContext,
+    params: ToolRouterParams<'_>,
+) -> ToolRouter {
+    let (model_visible_specs, registry) = build_tool_specs_and_registry(turn_context, params);
+    ToolRouter::from_parts(registry, model_visible_specs)
+}
+
+fn build_tool_specs_and_registry(
+    turn_context: &TurnContext,
+    params: ToolRouterParams<'_>,
+) -> (Vec<ToolSpec>, ToolRegistry) {
+    let ToolRouterParams {
+        mcp_tools,
+        deferred_mcp_tools,
+        discoverable_tools,
+        extension_tool_executors,
+        dynamic_tools,
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state,
+    } = params;
+    let default_agent_type_description =
+        crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
+    let context = CoreToolPlanContext {
+        turn_context,
+        mcp_tools: mcp_tools.as_deref(),
+        deferred_mcp_tools: deferred_mcp_tools.as_deref(),
+        discoverable_tools: discoverable_tools.as_deref(),
+        extension_tool_executors: &extension_tool_executors,
+        dynamic_tools,
+        default_agent_type_description: &default_agent_type_description,
+        wait_agent_timeouts: wait_agent_timeout_options(turn_context),
+        #[cfg(any(feature = "lsp", feature = "treesitter"))]
+        multi_root_state: multi_root_state.as_ref(),
+    };
+    let mut planned_tools = PlannedTools::default();
+    add_tool_sources(&context, &mut planned_tools);
+    append_tool_search_executor(&context, &mut planned_tools);
+    prepend_code_mode_executors(&context, &mut planned_tools);
+    build_model_visible_specs_and_registry(turn_context, planned_tools)
+}
+
+fn build_model_visible_specs_and_registry(
+    turn_context: &TurnContext,
+    planned_tools: PlannedTools,
+) -> (Vec<ToolSpec>, ToolRegistry) {
+    let PlannedTools {
+        runtimes,
+        hosted_specs,
+    } = planned_tools;
+    let mut specs = Vec::new();
+    let mut seen_tool_names = HashSet::new();
+    for runtime in &runtimes {
+        let tool_name = runtime.tool_name();
+        if !seen_tool_names.insert(tool_name.clone()) {
+            continue;
+        }
+        let exposure = runtime.exposure();
+        if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
+        {
+            let spec = runtime.spec();
+            specs.push(spec_for_model_request(turn_context, exposure, spec));
+        }
+    }
+    for spec in hosted_specs {
+        if !is_hidden_by_code_mode_only(
+            turn_context,
+            &ToolName::plain(spec.name()),
+            ToolExposure::Direct,
+        ) {
+            specs.push(spec);
         }
     }
 
-    if config.environment_mode.has_environment()
-        && config.shell_type != ConfigShellToolType::Disabled
+    let registry = ToolRegistry::from_tools(runtimes);
+    let model_visible_specs = merge_into_namespaces(specs)
+        .into_iter()
+        .filter(|spec| {
+            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
+        })
+        .collect();
+
+    (model_visible_specs, registry)
+}
+
+fn spec_for_model_request(
+    turn_context: &TurnContext,
+    exposure: ToolExposure,
+    spec: ToolSpec,
+) -> ToolSpec {
+    if code_mode_enabled(turn_context)
+        && exposure != ToolExposure::DirectModelOnly
+        && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
-        match &config.shell_type {
-            ConfigShellToolType::Default => {
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
-                builder.register_handler(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
-            }
-            ConfigShellToolType::Local => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
-            }
-            ConfigShellToolType::UnifiedExec => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
-                builder.register_handler(Arc::new(ShellCommandHandler::from(
-                    config.shell_command_backend,
-                )));
-            }
-            ConfigShellToolType::ShellCommand => {
-                builder.register_handler(Arc::new(ShellHandler::default()));
-                builder.register_handler(Arc::new(ContainerExecHandler));
-                builder.register_handler(Arc::new(LocalShellHandler::default()));
-            }
-            ConfigShellToolType::Disabled => {}
-        }
+        codex_tools::augment_tool_spec_for_code_mode(spec)
+    } else {
+        spec
     }
+}
 
-    if params.mcp_tools.is_some() {
-        builder.register_handler(Arc::new(ListMcpResourcesHandler));
-        builder.register_handler(Arc::new(ListMcpResourceTemplatesHandler));
-        builder.register_handler(Arc::new(ReadMcpResourceHandler));
-    }
-
-    builder.register_handler(Arc::new(PlanHandler));
-    if config.goal_tools {
-        builder.register_handler(Arc::new(GetGoalHandler));
-        builder.register_handler(Arc::new(CreateGoalHandler));
-        builder.register_handler(Arc::new(UpdateGoalHandler));
-    }
-    if config.scheduling_enabled {
-        builder.push_spec(
-            create_cron_create_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronCreateHandler));
-        builder.push_spec(
-            create_cron_list_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronListHandler));
-        builder.push_spec(
-            create_cron_delete_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronDeleteHandler));
-        builder.push_spec(
-            create_cron_session_create_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronSessionCreateHandler));
-        builder.push_spec(
-            create_cron_session_list_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronSessionListHandler));
-        builder.push_spec(
-            create_cron_session_delete_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CronSessionDeleteHandler));
-        builder.push_spec(
-            create_monitor_start_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(MonitorStartHandler));
-        builder.push_spec(
-            create_monitor_list_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(MonitorListHandler));
-        builder.push_spec(
-            create_monitor_stop_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(MonitorStopHandler));
-        builder.push_spec(
-            create_monitor_wait_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(MonitorWaitHandler));
-        builder.push_spec(
-            create_monitor_watch_for_tool(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(MonitorWatchForHandler));
-    }
-
-    if config.reading_view_tools_enabled {
-        for (tool_static, name) in [
-            (&*PRESENT_DOCUMENT_TOOL, "present_reading_view"),
-            (&*UPDATE_DOCUMENT_SECTION_TOOL, "update_document_section"),
-            (&*APPEND_TO_SECTION_TOOL, "append_to_section"),
-            (&*ADD_DOCUMENT_SECTION_TOOL, "add_document_section"),
-            (&*PATCH_DOCUMENT_SECTION_TOOL, "patch_document_section"),
-        ] {
-            builder.push_spec(
-                tool_static.clone(),
-                /*supports_parallel_tool_calls*/ false,
-            );
-            builder.register_handler(Arc::new(DocumentReaderHandler::new(ToolName::plain(name))));
-        }
-
-        builder.push_spec(
-            ATTACH_URL_FILES_TOOL.clone(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(AttachUrlFilesHandler));
-
-        builder.push_spec(
-            CROP_FIGURE_TOOL.clone(),
-            /*supports_parallel_tool_calls*/ false,
-        );
-        builder.register_handler(Arc::new(CropFigureHandler));
-    }
-
-    builder.push_spec(
-        create_js_repl_tool(),
-        /*supports_parallel_tool_calls*/ false,
-    );
-    builder.register_handler(Arc::new(JsReplHandler));
-
-    builder.register_handler(Arc::new(RequestUserInputHandler {
-        available_modes: config.request_user_input_available_modes.clone(),
-    }));
-
-    #[cfg(feature = "lsp")]
-    if config.lsp_enabled
-        && let Some(multi_root_state) = params.multi_root_state
-    {
-        builder.register_handler(Arc::new(crate::tools::handlers::lsp::LspToolHandler {
-            state: Arc::clone(multi_root_state),
-            warmed_files: tokio::sync::Mutex::new(HashSet::new()),
-            warmed_workspaces: tokio::sync::Mutex::new(HashMap::new()),
-        }));
-    }
-
-    #[cfg(feature = "treesitter")]
-    if config.code_intel_enabled
-        && let Some(multi_root_state) = params.multi_root_state
-    {
-        builder.register_handler(Arc::new(
-            crate::tools::handlers::code_intel::CodeIntelToolHandler {
-                state: Arc::clone(multi_root_state),
-            },
-        ));
-    }
-
-    if config.request_permissions_tool_enabled {
-        builder.register_handler(Arc::new(RequestPermissionsHandler));
-    }
-
-    if config.research_tools_enabled
-        && let Some(toolkit) = params.research_toolkit
-    {
-        for def in codex_research_tools::tool_specs::all_tool_defs() {
-            if !toolkit.is_tool_configured(def.id) || !config.is_research_tool_enabled(def.id) {
-                continue;
-            }
-
-            let parameters = match codex_tools::parse_tool_input_schema(&def.input_schema) {
-                Ok(schema) => schema,
-                Err(err) => {
-                    tracing::warn!(
-                        tool = def.native_name,
-                        error = %err,
-                        "skipping research tool with unparsable schema"
-                    );
-                    continue;
-                }
-            };
-
-            builder.push_spec(
-                ToolSpec::Function(ResponsesApiTool {
-                    name: def.native_name.to_string(),
-                    description: def.description.to_string(),
-                    strict: false,
-                    parameters,
-                    output_schema: None,
-                    defer_loading: None,
-                }),
-                /*supports_parallel_tool_calls*/ false,
-            );
-            builder.register_handler(Arc::new(ResearchBridgeHandler::new(
-                def.native_name,
-                Arc::clone(toolkit),
-            )));
-        }
-    }
-
-    if config.data_tools_enabled
-        && let Some(toolkit) = params.data_toolkit
-    {
-        for def in codex_data_tools::tool_specs::all_tool_defs() {
-            if !toolkit.is_tool_configured(def.id) {
-                continue;
-            }
-
-            let parameters = match codex_tools::parse_tool_input_schema(&def.input_schema) {
-                Ok(schema) => schema,
-                Err(err) => {
-                    tracing::warn!(
-                        tool = def.native_name,
-                        error = %err,
-                        "skipping data tool with unparsable schema"
-                    );
-                    continue;
-                }
-            };
-
-            builder.push_spec(
-                ToolSpec::Function(ResponsesApiTool {
-                    name: def.native_name.to_string(),
-                    description: def.description.to_string(),
-                    strict: false,
-                    parameters,
-                    output_schema: None,
-                    defer_loading: None,
-                }),
-                /*supports_parallel_tool_calls*/ false,
-            );
-            builder.register_handler(Arc::new(crate::tools::handlers::DataBridgeHandler::new(
-                def.native_name,
-                Arc::clone(toolkit),
-            )));
-        }
-    }
-
-    let deferred_dynamic_tools = params
-        .dynamic_tools
-        .iter()
-        .filter(|tool| tool.defer_loading && (config.namespace_tools || tool.namespace.is_none()))
-        .collect::<Vec<_>>();
-    let deferred_mcp_tools_for_search = if config.namespace_tools {
-        params.deferred_mcp_tools
+pub(crate) fn hosted_model_tool_specs(turn_context: &TurnContext) -> Vec<ToolSpec> {
+    let mut specs = Vec::new();
+    let provider_capabilities = turn_context.provider.capabilities();
+    let web_search_mode = provider_capabilities
+        .web_search
+        .then_some(turn_context.config.web_search_mode.value());
+    let web_search_config = if provider_capabilities.web_search {
+        turn_context.config.web_search_config.as_ref()
     } else {
         None
     };
+    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
+        web_search_mode,
+        web_search_config,
+        web_search_tool_type: turn_context.model_info.web_search_tool_type,
+    }) {
+        specs.push(web_search_tool);
+    }
+    if image_generation_tool_enabled(turn_context) {
+        specs.push(create_image_generation_tool("png"));
+    }
+    specs
+}
 
-    if config.search_tool
-        && (deferred_mcp_tools_for_search.is_some() || !deferred_dynamic_tools.is_empty())
-    {
-        let mut search_source_infos = deferred_mcp_tools_for_search
-            .map(|deferred_mcp_tools| {
-                collect_tool_search_source_infos(deferred_mcp_tools.iter().map(|tool| {
-                    ToolSearchSource {
-                        server_name: tool.server_name,
-                        connector_name: tool.connector_name,
-                        description: tool.description,
-                    }
-                }))
-            })
-            .unwrap_or_default();
+pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.model_info.supports_search_tool
+}
 
-        if !deferred_dynamic_tools.is_empty() {
-            search_source_infos.push(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            });
+pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
+    let features = turn_context.features.get();
+    features.enabled(Feature::ToolSuggest)
+        && features.enabled(Feature::Apps)
+        && features.enabled(Feature::Plugins)
+}
+
+fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.provider.capabilities().namespace_tools
+}
+
+fn code_mode_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.features.get().enabled(Feature::CodeMode)
+}
+
+fn code_mode_only_enabled(turn_context: &TurnContext) -> bool {
+    code_mode_enabled(turn_context) && turn_context.features.get().enabled(Feature::CodeModeOnly)
+}
+
+fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.features.get().enabled(Feature::MultiAgentV2)
+}
+
+fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
+    multi_agent_v2_enabled(turn_context) || turn_context.features.get().enabled(Feature::Collab)
+}
+
+fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.goal_tools_enabled()
+        && !matches!(
+            turn_context.session_source,
+            SessionSource::SubAgent(SubAgentSource::Review)
+        )
+}
+
+fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.features.get().enabled(Feature::SpawnCsv)
+}
+
+fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
+    agent_jobs_tools_enabled(turn_context)
+        && matches!(
+            &turn_context.session_source,
+            SessionSource::SubAgent(SubAgentSource::Other(label))
+                if label.starts_with("agent_job:")
+        )
+}
+
+fn image_generation_tool_enabled(turn_context: &TurnContext) -> bool {
+    turn_context
+        .auth_manager
+        .as_deref()
+        .is_some_and(AuthManager::current_auth_uses_codex_backend)
+        && turn_context.provider.capabilities().image_generation
+        && turn_context
+            .features
+            .get()
+            .enabled(Feature::ImageGeneration)
+        && turn_context
+            .model_info
+            .input_modalities
+            .contains(&InputModality::Image)
+}
+
+fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
+    if multi_agent_v2_enabled(turn_context) {
+        return WaitAgentTimeoutOptions {
+            default_timeout_ms: turn_context.config.multi_agent_v2.default_wait_timeout_ms,
+            min_timeout_ms: turn_context.config.multi_agent_v2.min_wait_timeout_ms,
+            max_timeout_ms: turn_context.config.multi_agent_v2.max_wait_timeout_ms,
+        };
+    }
+
+    WaitAgentTimeoutOptions {
+        default_timeout_ms: DEFAULT_WAIT_TIMEOUT_MS,
+        min_timeout_ms: MIN_WAIT_TIMEOUT_MS,
+        max_timeout_ms: MAX_WAIT_TIMEOUT_MS,
+    }
+}
+
+fn max_concurrent_threads_per_session(turn_context: &TurnContext) -> Option<usize> {
+    multi_agent_v2_enabled(turn_context).then_some(
+        turn_context
+            .config
+            .multi_agent_v2
+            .max_concurrent_threads_per_session,
+    )
+}
+
+fn agent_type_description(
+    turn_context: &TurnContext,
+    default_agent_type_description: &str,
+) -> String {
+    let agent_type_description =
+        crate::agent::role::spawn_tool_spec::build(&turn_context.config.agent_roles);
+    if agent_type_description.is_empty() {
+        default_agent_type_description.to_string()
+    } else {
+        agent_type_description
+    }
+}
+
+fn is_hidden_by_code_mode_only(
+    turn_context: &TurnContext,
+    tool_name: &ToolName,
+    exposure: ToolExposure,
+) -> bool {
+    code_mode_only_enabled(turn_context)
+        && exposure != ToolExposure::DirectModelOnly
+        && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
+            tool_name,
+        ))
+}
+
+fn build_code_mode_executors(
+    turn_context: &TurnContext,
+    executors: &[Arc<dyn CoreToolRuntime>],
+    deferred_tools_available: bool,
+) -> Vec<Arc<dyn CoreToolRuntime>> {
+    if !code_mode_enabled(turn_context) {
+        return vec![];
+    }
+
+    let mut code_mode_nested_tool_specs = Vec::new();
+    let mut exec_prompt_tool_specs = Vec::new();
+    for executor in executors {
+        let exposure = executor.exposure();
+        if exposure == ToolExposure::DirectModelOnly {
+            continue;
         }
 
-        builder.register_handler(Arc::new(ToolSearchHandler::new(
-            params.tool_search_entries.to_vec(),
-            search_source_infos,
-        )));
+        if exposure == ToolExposure::Hidden {
+            continue;
+        }
+        let spec = executor.spec();
+
+        if exposure != ToolExposure::Deferred {
+            exec_prompt_tool_specs.push(spec.clone());
+        }
+        code_mode_nested_tool_specs.push(spec);
     }
 
-    if config.tool_suggest
+    let namespace_descriptions = code_mode_namespace_descriptions(&exec_prompt_tool_specs);
+    let mut enabled_tools =
+        collect_code_mode_exec_prompt_tool_definitions(exec_prompt_tool_specs.iter());
+    enabled_tools
+        .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+
+    vec![
+        Arc::new(CodeModeExecuteHandler::new(
+            create_code_mode_tool(
+                &enabled_tools,
+                &namespace_descriptions,
+                code_mode_only_enabled(turn_context),
+                deferred_tools_available,
+            ),
+            code_mode_nested_tool_specs,
+        )),
+        Arc::new(CodeModeWaitHandler),
+    ]
+}
+
+fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
+    let mut merged_specs = Vec::with_capacity(specs.len());
+    let mut namespace_indices = BTreeMap::<String, usize>::new();
+    for spec in specs {
+        match spec {
+            ToolSpec::Namespace(mut namespace) => {
+                if let Some(index) = namespace_indices.get(&namespace.name).copied() {
+                    let ToolSpec::Namespace(existing_namespace) = &mut merged_specs[index] else {
+                        unreachable!("namespace index must point to a namespace spec");
+                    };
+                    if existing_namespace.description.trim().is_empty()
+                        && !namespace.description.trim().is_empty()
+                    {
+                        existing_namespace.description = namespace.description;
+                    }
+                    existing_namespace.tools.append(&mut namespace.tools);
+                    continue;
+                }
+
+                namespace_indices.insert(namespace.name.clone(), merged_specs.len());
+                merged_specs.push(ToolSpec::Namespace(namespace));
+            }
+            spec => merged_specs.push(spec),
+        }
+    }
+
+    for spec in &mut merged_specs {
+        let ToolSpec::Namespace(namespace) = spec else {
+            continue;
+        };
+
+        namespace.tools.sort_by(|left, right| match (left, right) {
+            (
+                ResponsesApiNamespaceTool::Function(left),
+                ResponsesApiNamespaceTool::Function(right),
+            ) => left.name.cmp(&right.name),
+        });
+
+        if namespace.description.trim().is_empty() {
+            namespace.description = default_namespace_description(&namespace.name);
+        }
+    }
+
+    merged_specs
+}
+
+fn code_mode_namespace_descriptions(
+    specs: &[ToolSpec],
+) -> BTreeMap<String, codex_code_mode::ToolNamespaceDescription> {
+    let mut namespace_descriptions = BTreeMap::new();
+    for spec in specs {
+        let ToolSpec::Namespace(namespace) = spec else {
+            continue;
+        };
+
+        let entry = namespace_descriptions
+            .entry(namespace.name.clone())
+            .or_insert_with(|| codex_code_mode::ToolNamespaceDescription {
+                name: namespace.name.clone(),
+                description: namespace.description.clone(),
+            });
+        if entry.description.trim().is_empty() && !namespace.description.trim().is_empty() {
+            entry.description = namespace.description.clone();
+        }
+    }
+    namespace_descriptions
+}
+
+fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    add_shell_tools(context, planned_tools);
+    add_mcp_resource_tools(context, planned_tools);
+    add_core_utility_tools(context, planned_tools);
+    add_collaboration_tools(context, planned_tools);
+    add_scheduling_tools(context, planned_tools);
+    add_reading_view_tools(context, planned_tools);
+    add_artifacts_tools(context, planned_tools);
+    add_js_repl_tools(context, planned_tools);
+    add_data_tools(context, planned_tools);
+    add_research_tools(context, planned_tools);
+    #[cfg(any(feature = "lsp", feature = "treesitter"))]
+    add_code_intel_tools(context, planned_tools);
+    add_mcp_runtime_tools(context, planned_tools);
+    add_dynamic_tools(context, planned_tools);
+    add_extension_tools(context, planned_tools);
+    for spec in hosted_model_tool_specs(context.turn_context) {
+        planned_tools.add_hosted_spec(spec);
+    }
+}
+
+/// Register the ATA reading-view tool family: the five `DocumentReaderHandler`
+/// tools (`present_reading_view`, `update_document_section`, `append_to_section`,
+/// `add_document_section`, `patch_document_section`) plus the two companion
+/// PDF tools (`attach_url_files`, `crop_figure`). All gated together by
+/// `reading_view_tools_enabled` so a single `[reading_view] mode = "disabled"`
+/// hides the whole surface from the model.
+fn add_reading_view_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !reading_view_tools_enabled(&context.turn_context.config) {
+        return;
+    }
+    for (name, spec_lazy) in [
+        ("present_reading_view", &*PRESENT_DOCUMENT_TOOL),
+        ("update_document_section", &*UPDATE_DOCUMENT_SECTION_TOOL),
+        ("append_to_section", &*APPEND_TO_SECTION_TOOL),
+        ("add_document_section", &*ADD_DOCUMENT_SECTION_TOOL),
+        ("patch_document_section", &*PATCH_DOCUMENT_SECTION_TOOL),
+    ] {
+        planned_tools.add(DocumentReaderHandler::new(
+            ToolName::plain(name),
+            spec_lazy.clone(),
+        ));
+    }
+    planned_tools.add(AttachUrlFilesHandler::new(ATTACH_URL_FILES_TOOL.clone()));
+    planned_tools.add(CropFigureHandler::new(CROP_FIGURE_TOOL.clone()));
+}
+
+/// Register the freeform `artifacts` tool when `Feature::Artifact` is on.
+/// The runtime delegates to the preinstalled `@oai/artifact-tool` Node
+/// package (handler dispatches via `ArtifactsHandler`).
+fn add_artifacts_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::Artifact)
+    {
+        return;
+    }
+    planned_tools.add(ArtifactsHandler::new(create_artifacts_tool()));
+}
+
+/// Register the `js_repl` tool when `Feature::JsRepl` is on. The handler
+/// evaluates JavaScript snippets in an embedded V8 isolate (codex-v8-poc);
+/// it does not yet expose the broader data/research bridge surface that
+/// the dead `tools/js_repl/mod.rs` module sketches.
+fn add_js_repl_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::JsRepl)
+    {
+        return;
+    }
+    planned_tools.add(JsReplHandler::new(create_js_repl_tool()));
+}
+
+/// Register the agent-direct data tools (`dataset_search`, `dataset_get`)
+/// when `Feature::DataTools` is on. The handler is the same
+/// `DataBridgeHandler` that the dead `tools/js_repl` runtime would have
+/// driven, but exposed here as plain `ToolSpec::Function` tools so the
+/// model can call them directly without going through `js_repl`.
+///
+/// Each tool gets its own `DataBridgeHandler` instance sharing a single
+/// `Arc<DataToolkit>` so all data tool calls reuse the same rate-limited
+/// HTTP client + response cache for the session.
+fn add_data_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::DataTools)
+    {
+        return;
+    }
+    let config = &context.turn_context.config;
+    let data_config = build_data_config(None, config.codex_home.as_path(), config.cwd.as_path());
+    let http_client = codex_login::default_client::build_reqwest_client();
+    let toolkit = Arc::new(codex_data_tools::DataToolkit::new(http_client, data_config));
+    for (name, spec) in [
+        ("dataset_search", create_dataset_search_tool()),
+        ("dataset_get", create_dataset_get_tool()),
+        ("dataset_list_files", create_dataset_list_files_tool()),
+        ("dataset_download", create_dataset_download_tool()),
+        ("hf_dataset_info", create_hf_dataset_info_tool()),
+        ("kaggle_dataset_info", create_kaggle_dataset_info_tool()),
+        ("kaggle_competitions", create_kaggle_competitions_tool()),
+        (
+            "kaggle_competition_list_files",
+            create_kaggle_competition_list_files_tool(),
+        ),
+        (
+            "kaggle_competition_download",
+            create_kaggle_competition_download_tool(),
+        ),
+    ] {
+        planned_tools.add(DataBridgeHandler::new(name, spec, toolkit.clone()));
+    }
+}
+
+/// Register the full agent-direct research tool surface. All tools are
+/// gated by the master `Feature::Research` flag plus their per-family
+/// flag:
+///
+/// - `Feature::ResearchPaperSearch` →
+///   paper_search / paper_get / paper_citations / paper_references /
+///   paper_recommendations
+/// - `Feature::ResearchHackerNews` → hn_search / hn_get_thread
+/// - `Feature::ResearchPatents` → patent_search / patent_get
+/// - `Feature::ResearchZotero` → the 21 zotero_* tools
+/// - `Feature::ResearchRepoAnalysis` → the 9 repo_* tools (shallow-clone +
+///   static analysis over GitHub/GitLab repos, plus GitHub-API health)
+///
+/// All registrations share a single `Arc<ResearchToolkit>` per session so
+/// the rate-limited HTTP client, response cache, EPO auth, and Zotero
+/// session state are reused across every call.
+fn add_research_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let features = context.turn_context.features.get();
+    // Note: the master `Feature::Research` flag is NOT a precondition. The
+    // `/research` slash command deliberately clears it (see
+    // `tui/src/bottom_pane/research_tools_view.rs`), treating the per-family
+    // flags as the sole source of truth. Gate on those directly: if none are
+    // on, register nothing; otherwise register only the families the user
+    // opted into.
+    let paper_search_on = features.enabled(Feature::ResearchPaperSearch);
+    let hn_search_on = features.enabled(Feature::ResearchHackerNews);
+    let patents_on = features.enabled(Feature::ResearchPatents);
+    let zotero_on = features.enabled(Feature::ResearchZotero);
+    let repo_analysis_on = features.enabled(Feature::ResearchRepoAnalysis);
+    if !paper_search_on && !hn_search_on && !patents_on && !zotero_on && !repo_analysis_on {
+        return;
+    }
+    let config = &context.turn_context.config;
+    let research_config =
+        build_research_config(None, config.codex_home.as_path(), config.cwd.as_path());
+    let http_client = codex_login::default_client::build_reqwest_client();
+    let toolkit = Arc::new(codex_research_tools::ResearchToolkit::new(
+        http_client,
+        research_config,
+    ));
+    if paper_search_on {
+        for (name, spec) in [
+            ("paper_search", create_paper_search_tool()),
+            ("paper_get", create_paper_get_tool()),
+            ("paper_citations", create_paper_citations_tool()),
+            ("paper_references", create_paper_references_tool()),
+            ("paper_recommendations", create_paper_recommendations_tool()),
+        ] {
+            planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
+        }
+    }
+    if hn_search_on {
+        for (name, spec) in [
+            ("hn_search", create_hn_search_tool()),
+            ("hn_get_thread", create_hn_get_thread_tool()),
+        ] {
+            planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
+        }
+    }
+    if patents_on {
+        for (name, spec) in [
+            ("patent_search", create_patent_search_tool()),
+            ("patent_get", create_patent_get_tool()),
+        ] {
+            planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
+        }
+    }
+    if zotero_on {
+        for (name, spec) in [
+            ("zotero_search", create_zotero_search_tool()),
+            ("zotero_get_tags", create_zotero_get_tags_tool()),
+            ("zotero_get_recent", create_zotero_get_recent_tool()),
+            ("zotero_advanced_search", create_zotero_advanced_search_tool()),
+            ("zotero_grep_text", create_zotero_grep_text_tool()),
+            ("zotero_search_notes", create_zotero_search_notes_tool()),
+            ("zotero_get_item", create_zotero_get_item_tool()),
+            ("zotero_get_item_citation", create_zotero_get_item_citation_tool()),
+            ("zotero_get_fulltext", create_zotero_get_fulltext_tool()),
+            ("zotero_get_notes", create_zotero_get_notes_tool()),
+            ("zotero_get_annotations", create_zotero_get_annotations_tool()),
+            ("zotero_get_attachments", create_zotero_get_attachments_tool()),
+            ("zotero_get_collections", create_zotero_get_collections_tool()),
+            ("zotero_list_groups", create_zotero_list_groups_tool()),
+            ("zotero_get_collection_items", create_zotero_get_collection_items_tool()),
+            ("zotero_create_collection", create_zotero_create_collection_tool()),
+            ("zotero_find_or_create_collection", create_zotero_find_or_create_collection_tool()),
+            ("zotero_create_items", create_zotero_create_items_tool()),
+            ("zotero_update_items", create_zotero_update_items_tool()),
+            ("zotero_add_items_to_collection", create_zotero_add_items_to_collection_tool()),
+            ("zotero_create_attachment_link", create_zotero_create_attachment_link_tool()),
+        ] {
+            planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
+        }
+    }
+    if repo_analysis_on {
+        for (name, spec) in [
+            ("repo_clone_and_summarize", create_repo_clone_and_summarize_tool()),
+            ("repo_find_models", create_repo_find_models_tool()),
+            ("repo_extract_requirements", create_repo_extract_requirements_tool()),
+            ("repo_find_entrypoints", create_repo_find_entrypoints_tool()),
+            ("repo_extract_io_shapes", create_repo_extract_io_shapes_tool()),
+            ("repo_get_health", create_repo_get_health_tool()),
+            ("repo_find_export_paths", create_repo_find_export_paths_tool()),
+            ("repo_extract_config_schema", create_repo_extract_config_schema_tool()),
+            ("repo_diff_requirements", create_repo_diff_requirements_tool()),
+        ] {
+            planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
+        }
+    }
+}
+
+/// Register the ATA code-intel tools (`code_intel` via treesitter,
+/// `lsp` via the LSP client). Both are gated by:
+/// 1. the matching cargo feature on this crate (`treesitter` / `lsp`),
+/// 2. the matching `Feature::TreeSitter` / `Feature::Lsp` runtime flag
+///    (both `Stage::Stable`, default on, so off only if explicitly
+///    disabled in `~/.ata/config.toml`),
+/// 3. the per-session `MultiRootState` having been constructed
+///    (`session::code_intel::init_multi_root_state` returns `None` when
+///    no workspace root has indexable code).
+///
+/// All three must be satisfied; otherwise the handler is silently
+/// skipped so the model doesn't see a tool that would fail at call time.
+#[cfg(any(feature = "lsp", feature = "treesitter"))]
+fn add_code_intel_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let Some(state) = context.multi_root_state else {
+        return;
+    };
+    let features = context.turn_context.features.get();
+    #[cfg(feature = "treesitter")]
+    if features.enabled(Feature::TreeSitter) {
+        planned_tools.add(CodeIntelToolHandler::new(
+            state.clone(),
+            create_code_intel_tool(),
+        ));
+    }
+    #[cfg(feature = "lsp")]
+    if features.enabled(Feature::Lsp) {
+        planned_tools.add(LspToolHandler::new(state.clone(), create_lsp_tool()));
+    }
+    // Both `if` arms read `features` even when the matching cargo feature
+    // is off, so silence the unused-variable warning in that build.
+    let _ = features;
+}
+
+fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::Scheduling)
+    {
+        return;
+    }
+    planned_tools.add(CronCreateHandler::new(create_cron_create_tool()));
+    planned_tools.add(CronListHandler::new(create_cron_list_tool()));
+    planned_tools.add(CronDeleteHandler::new(create_cron_delete_tool()));
+    planned_tools.add(CronSessionCreateHandler::new(
+        create_cron_session_create_tool(),
+    ));
+    planned_tools.add(CronSessionListHandler::new(create_cron_session_list_tool()));
+    planned_tools.add(CronSessionDeleteHandler::new(
+        create_cron_session_delete_tool(),
+    ));
+    planned_tools.add(MonitorStartHandler::new(create_monitor_start_tool()));
+    planned_tools.add(MonitorListHandler::new(create_monitor_list_tool()));
+    planned_tools.add(MonitorStopHandler::new(create_monitor_stop_tool()));
+    planned_tools.add(MonitorWaitHandler::new(create_monitor_wait_tool()));
+    planned_tools.add(MonitorWatchForHandler::new(create_monitor_watch_for_tool()));
+}
+
+fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let turn_context = context.turn_context;
+    let features = turn_context.features.get();
+    let environment_mode = turn_context.tool_environment_mode();
+    if !environment_mode.has_environment() {
+        return;
+    }
+
+    let allow_login_shell = turn_context.config.permissions.allow_login_shell;
+    let exec_permission_approvals_enabled = features.enabled(Feature::ExecPermissionApprovals);
+    let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+    let shell_command_options = ShellCommandHandlerOptions {
+        backend_config: shell_command_backend_for_features(features),
+        allow_login_shell,
+        exec_permission_approvals_enabled,
+    };
+
+    match shell_type_for_model_and_features(&turn_context.model_info, features) {
+        ConfigShellToolType::UnifiedExec => {
+            planned_tools.add(ExecCommandHandler::new(ExecCommandHandlerOptions {
+                allow_login_shell,
+                exec_permission_approvals_enabled,
+                include_environment_id,
+            }));
+            planned_tools.add(WriteStdinHandler);
+
+            // Keep the legacy shell tool registered while unified exec is
+            // model-visible.
+            planned_tools.add_dispatch_only(ShellCommandHandler::new(shell_command_options));
+        }
+        ConfigShellToolType::Disabled => {}
+        ConfigShellToolType::Default
+        | ConfigShellToolType::Local
+        | ConfigShellToolType::ShellCommand => {
+            planned_tools.add(ShellCommandHandler::new(shell_command_options));
+        }
+    }
+}
+
+fn add_mcp_resource_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if context.mcp_tools.is_some() {
+        planned_tools.add(ListMcpResourcesHandler);
+        planned_tools.add(ListMcpResourceTemplatesHandler);
+        planned_tools.add(ReadMcpResourceHandler);
+    }
+}
+
+fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let turn_context = context.turn_context;
+    let features = turn_context.features.get();
+    let environment_mode = turn_context.tool_environment_mode();
+
+    planned_tools.add(PlanHandler);
+    if goal_tools_enabled(turn_context) {
+        planned_tools.add(GetGoalHandler);
+        planned_tools.add(CreateGoalHandler);
+        planned_tools.add(UpdateGoalHandler);
+    }
+
+    planned_tools.add(RequestUserInputHandler {
+        available_modes: request_user_input_available_modes(features),
+    });
+
+    if features.enabled(Feature::RequestPermissionsTool) {
+        planned_tools.add(RequestPermissionsHandler);
+    }
+
+    if tool_suggest_enabled(turn_context)
         && let Some(discoverable_tools) =
-            params.discoverable_tools.filter(|tools| !tools.is_empty())
+            context.discoverable_tools.filter(|tools| !tools.is_empty())
     {
-        builder.register_handler(Arc::new(RequestPluginInstallHandler::new(
-            discoverable_tools,
-        )));
+        planned_tools.add(ListAvailablePluginsToInstallHandler::new(
+            collect_request_plugin_install_entries(discoverable_tools),
+        ));
+        planned_tools.add(RequestPluginInstallHandler);
     }
 
-    if config.environment_mode.has_environment()
-        && let Some(apply_patch_tool_type) = &config.apply_patch_tool_type
+    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
     {
-        builder.register_handler(Arc::new(ApplyPatchHandler::new(
-            apply_patch_tool_type.clone(),
-        )));
+        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+        planned_tools.add(ApplyPatchHandler::new(include_environment_id));
     }
 
-    if config
+    if turn_context
+        .model_info
         .experimental_supported_tools
         .iter()
         .any(|tool| tool == "test_sync_tool")
     {
-        builder.register_handler(Arc::new(TestSyncHandler));
+        planned_tools.add(TestSyncHandler);
     }
 
-    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
-        web_search_mode: config.web_search_mode,
-        web_search_config: config.web_search_config.as_ref(),
-        web_search_tool_type: config.web_search_tool_type,
-    }) {
-        builder.push_spec(web_search_tool, /*supports_parallel_tool_calls*/ false);
-    }
-
-    if config.image_gen_tool {
-        builder.push_spec(
-            create_image_generation_tool("png"),
-            /*supports_parallel_tool_calls*/ false,
-        );
-    }
-
-    if config.environment_mode.has_environment() {
-        let include_environment_id =
-            matches!(config.environment_mode, ToolEnvironmentMode::Multiple);
-        builder.register_handler(Arc::new(ViewImageHandler::new(ViewImageToolOptions {
-            can_request_original_image_detail: config.can_request_original_image_detail,
+    if environment_mode.has_environment() {
+        let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
+        planned_tools.add(ViewImageHandler::new(ViewImageToolOptions {
+            can_request_original_image_detail: can_request_original_image_detail(
+                &turn_context.model_info,
+            ),
             include_environment_id,
-        })));
+        }));
     }
+}
 
-    if config.collab_tools {
-        if config.multi_agent_v2 {
+fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let turn_context = context.turn_context;
+    if collab_tools_enabled(turn_context) {
+        if multi_agent_v2_enabled(turn_context) {
+            let exposure = if turn_context.config.multi_agent_v2.non_code_mode_only {
+                ToolExposure::DirectModelOnly
+            } else {
+                ToolExposure::Direct
+            };
+            let tool_namespace = namespace_tools_enabled(turn_context)
+                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
+                .flatten();
             let agent_type_description =
-                agent_type_description(config, params.default_agent_type_description);
-            builder.register_handler(Arc::new(SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            builder.register_handler(Arc::new(SendMessageHandlerV2));
-            builder.register_handler(Arc::new(FollowupTaskHandlerV2));
-            builder.register_handler(Arc::new(WaitAgentHandlerV2::new(
-                params.wait_agent_timeouts,
-            )));
-            builder.register_handler(Arc::new(CloseAgentHandlerV2));
-            builder.register_handler(Arc::new(ListAgentsHandlerV2));
+                agent_type_description(turn_context, context.default_agent_type_description);
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(
+                    SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
+                        available_models: turn_context.available_models.clone(),
+                        agent_type_description,
+                        hide_agent_type_model_reasoning: turn_context
+                            .config
+                            .multi_agent_v2
+                            .hide_spawn_agent_metadata,
+                        include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
+                        usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                        max_concurrent_threads_per_session: max_concurrent_threads_per_session(
+                            turn_context,
+                        ),
+                    }),
+                    tool_namespace,
+                ),
+                exposure,
+            ));
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(SendMessageHandlerV2, tool_namespace),
+                exposure,
+            ));
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
+                exposure,
+            ));
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(
+                    WaitAgentHandlerV2::new(context.wait_agent_timeouts),
+                    tool_namespace,
+                ),
+                exposure,
+            ));
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(CloseAgentHandlerV2, tool_namespace),
+                exposure,
+            ));
+            planned_tools.add_arc(override_tool_exposure(
+                multi_agent_v2_handler(ListAgentsHandlerV2, tool_namespace),
+                exposure,
+            ));
         } else {
             let agent_type_description =
-                agent_type_description(config, params.default_agent_type_description);
-            builder.register_handler(Arc::new(SpawnAgentHandler::new(SpawnAgentToolOptions {
-                available_models: config.available_models.clone(),
-                agent_type_description,
-                hide_agent_type_model_reasoning: config.hide_spawn_agent_metadata,
-                include_usage_hint: config.spawn_agent_usage_hint,
-                usage_hint_text: config.spawn_agent_usage_hint_text.clone(),
-                max_concurrent_threads_per_session: config.max_concurrent_threads_per_session,
-            })));
-            builder.register_handler(Arc::new(SendInputHandler));
-            builder.register_handler(Arc::new(ResumeAgentHandler));
-            builder.register_handler(Arc::new(WaitAgentHandler::new(params.wait_agent_timeouts)));
-            builder.register_handler(Arc::new(CloseAgentHandler));
+                agent_type_description(turn_context, context.default_agent_type_description);
+            let exposure =
+                if search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context) {
+                    ToolExposure::Deferred
+                } else {
+                    ToolExposure::Direct
+                };
+            planned_tools.add_with_exposure(
+                SpawnAgentHandler::new(SpawnAgentToolOptions {
+                    available_models: turn_context.available_models.clone(),
+                    agent_type_description,
+                    hide_agent_type_model_reasoning: turn_context
+                        .config
+                        .multi_agent_v2
+                        .hide_spawn_agent_metadata,
+                    include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
+                    usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+                    max_concurrent_threads_per_session: max_concurrent_threads_per_session(
+                        turn_context,
+                    ),
+                }),
+                exposure,
+            );
+            planned_tools.add_with_exposure(SendInputHandler, exposure);
+            planned_tools.add_with_exposure(ResumeAgentHandler, exposure);
+            planned_tools
+                .add_with_exposure(WaitAgentHandler::new(context.wait_agent_timeouts), exposure);
+            planned_tools.add_with_exposure(CloseAgentHandler, exposure);
         }
     }
 
-    if config.agent_jobs_tools {
-        builder.register_handler(Arc::new(SpawnAgentsOnCsvHandler));
-        if config.agent_jobs_worker_tools {
-            builder.register_handler(Arc::new(ReportAgentJobResultHandler));
+    if agent_jobs_tools_enabled(turn_context) {
+        planned_tools.add(SpawnAgentsOnCsvHandler);
+        if agent_jobs_worker_tools_enabled(turn_context) {
+            planned_tools.add(ReportAgentJobResultHandler);
         }
     }
+}
 
-    if let Some(mcp_tools) = params.mcp_tools {
-        let mut entries = mcp_tools.to_vec();
-        entries.sort_by_key(|tool| tool.name.display());
-        let mut namespace_entries = BTreeMap::new();
-
-        for tool in entries {
-            let Some(namespace) = tool.name.namespace.as_ref() else {
-                let tool_name = &tool.name;
-                tracing::error!("Skipping MCP tool `{tool_name}`: MCP tools must be namespaced");
-                continue;
-            };
-            namespace_entries
-                .entry(namespace.clone())
-                .or_insert_with(Vec::new)
-                .push(tool);
-        }
-
-        for (namespace, mut entries) in namespace_entries {
-            entries.sort_by_key(|tool| tool.name.name.clone());
-            let tool_namespace = params
-                .tool_namespaces
-                .and_then(|namespaces| namespaces.get(&namespace));
-            let description = tool_namespace
-                .and_then(|namespace| namespace.description.as_deref())
-                .map(str::trim)
-                .filter(|description| !description.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| {
-                    let namespace_name = tool_namespace
-                        .map(|namespace| namespace.name.as_str())
-                        .unwrap_or(namespace.as_str());
-                    default_namespace_description(namespace_name)
-                });
-            let mut tools = Vec::new();
-            for tool in entries {
-                match mcp_tool_to_responses_api_tool(&tool.name, tool.tool) {
-                    Ok(converted_tool) => {
-                        tools.push(ResponsesApiNamespaceTool::Function(converted_tool));
-                        builder.register_handler(Arc::new(McpHandler::new(tool.name)));
-                    }
-                    Err(error) => {
-                        let tool_name = &tool.name;
-                        tracing::error!(
-                            "Failed to convert `{tool_name}` MCP tool to OpenAI tool: {error:?}"
-                        );
-                    }
-                }
-            }
-
-            if config.namespace_tools && !tools.is_empty() {
-                builder.push_spec(
-                    ToolSpec::Namespace(ResponsesApiNamespace {
-                        name: namespace,
-                        description,
-                        tools,
-                    }),
-                    /*supports_parallel_tool_calls*/ false,
-                );
+fn add_mcp_runtime_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if let Some(mcp_tools) = context.mcp_tools {
+        for tool in mcp_tools {
+            match McpHandler::new(tool.clone()) {
+                Ok(handler) => planned_tools.add(handler),
+                Err(err) => warn!(
+                    "Skipping MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
             }
         }
     }
 
-    let mut dynamic_tool_specs = Vec::new();
-    for tool in params.dynamic_tools {
-        match dynamic_tool_to_loadable_tool_spec(tool) {
-            Ok(loadable_tool) => {
-                let handler_name = ToolName::new(tool.namespace.clone(), tool.name.clone());
-                dynamic_tool_specs.push(loadable_tool);
-                builder.register_handler(Arc::new(DynamicToolHandler::new(handler_name)));
-            }
-            Err(error) => {
-                tracing::error!(
-                    "Failed to convert dynamic tool {:?} to OpenAI tool: {error:?}",
-                    tool.name
-                );
-            }
-        }
-    }
-    for spec in coalesce_loadable_tool_specs(dynamic_tool_specs) {
-        let spec = spec.into();
-        if config.namespace_tools || !matches!(spec, ToolSpec::Namespace(_)) {
-            builder.push_spec(spec, /*supports_parallel_tool_calls*/ false);
-        }
-    }
-
-    if let Some(deferred_mcp_tools) = params.deferred_mcp_tools {
-        let directly_registered_mcp_tools = params
-            .mcp_tools
-            .into_iter()
-            .flatten()
-            .map(|direct| direct.name.clone())
-            .collect::<HashSet<_>>();
+    if let Some(deferred_mcp_tools) = context.deferred_mcp_tools {
         for tool in deferred_mcp_tools {
-            if !directly_registered_mcp_tools.contains(&tool.name) {
-                builder.register_handler(Arc::new(McpHandler::new(tool.name.clone())));
+            match McpHandler::new(tool.clone()) {
+                Ok(handler) => planned_tools.add_with_exposure(handler, ToolExposure::Deferred),
+                Err(err) => warn!(
+                    "Skipping deferred MCP tool `{}`: failed to build tool spec: {err}",
+                    tool.canonical_tool_name()
+                ),
             }
         }
     }
+}
 
-    builder
+fn add_dynamic_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    for tool in context.dynamic_tools {
+        let Some(handler) = DynamicToolHandler::new(tool) else {
+            tracing::error!(
+                "Failed to convert dynamic tool {:?} to OpenAI tool",
+                tool.name
+            );
+            continue;
+        };
+
+        planned_tools.add(handler);
+    }
+}
+
+fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    // Extension ToolContributor implementations are resolved into executors
+    // before planning. Core only adapts those executors into its runtime set.
+    append_extension_tool_executors(
+        context.turn_context,
+        context.extension_tool_executors,
+        planned_tools,
+    );
+}
+
+fn append_tool_search_executor(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    let turn_context = context.turn_context;
+    if !(search_tool_enabled(turn_context) && namespace_tools_enabled(turn_context)) {
+        return;
+    }
+
+    let search_infos = planned_tools
+        .runtimes()
+        .iter()
+        .filter(|executor| executor.exposure() == ToolExposure::Deferred)
+        .filter_map(|executor| executor.search_info())
+        .collect::<Vec<_>>();
+    if search_infos.is_empty() {
+        return;
+    }
+
+    planned_tools.add(ToolSearchHandler::new(search_infos));
+}
+
+fn prepend_code_mode_executors(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    let turn_context = context.turn_context;
+    let deferred_tools_available = search_tool_enabled(turn_context)
+        && planned_tools
+            .runtimes()
+            .iter()
+            .any(|executor| executor.exposure() == ToolExposure::Deferred);
+    let code_mode_executors = build_code_mode_executors(
+        turn_context,
+        planned_tools.runtimes(),
+        deferred_tools_available,
+    );
+    planned_tools.runtimes.splice(0..0, code_mode_executors);
+}
+
+fn append_extension_tool_executors(
+    turn_context: &TurnContext,
+    executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
+    planned_tools: &mut PlannedTools,
+) {
+    if executors.is_empty() {
+        return;
+    }
+
+    let mut reserved_tool_names = planned_tools
+        .runtimes()
+        .iter()
+        .map(|executor| executor.tool_name())
+        .collect::<HashSet<_>>();
+    if code_mode_enabled(turn_context) {
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
+    }
+    if search_tool_enabled(turn_context)
+        && namespace_tools_enabled(turn_context)
+        && planned_tools
+            .runtimes()
+            .iter()
+            .any(|executor| executor.exposure() == ToolExposure::Deferred)
+    {
+        reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
+    }
+
+    for executor in executors.iter().cloned() {
+        let tool_name = executor.tool_name();
+        if !reserved_tool_names.insert(tool_name.clone()) {
+            warn!("Skipping extension tool `{tool_name}`: tool already registered");
+            continue;
+        }
+        planned_tools.add(ExtensionToolAdapter::new(executor));
+    }
+}
+
+fn multi_agent_v2_handler(
+    handler: impl CoreToolRuntime + 'static,
+    namespace: Option<&str>,
+) -> Arc<dyn CoreToolRuntime> {
+    match namespace {
+        Some(namespace) => Arc::new(MultiAgentV2NamespaceOverride {
+            handler: Arc::new(handler),
+            namespace: namespace.to_string(),
+        }),
+        None => Arc::new(handler),
+    }
+}
+
+struct MultiAgentV2NamespaceOverride {
+    handler: Arc<dyn CoreToolRuntime>,
+    namespace: String,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced(self.namespace.clone(), self.handler.tool_name().name)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        match self.handler.spec() {
+            ToolSpec::Function(tool) => ToolSpec::Namespace(ResponsesApiNamespace {
+                name: self.namespace.clone(),
+                description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),
+                tools: vec![ResponsesApiNamespaceTool::Function(tool)],
+            }),
+            spec => spec,
+        }
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.handler.exposure()
+    }
+
+    fn supports_parallel_tool_calls(&self) -> bool {
+        self.handler.supports_parallel_tool_calls()
+    }
+
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        self.handler.handle(invocation).await
+    }
+}
+
+impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
+    fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
+        self.handler.matches_kind(payload)
+    }
+
+    fn search_info(&self) -> Option<crate::tools::tool_search_entry::ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
+    fn create_diff_consumer(
+        &self,
+    ) -> Option<Box<dyn crate::tools::registry::ToolArgumentDiffConsumer>> {
+        self.handler.create_diff_consumer()
+    }
 }
 
 fn compare_code_mode_tools(

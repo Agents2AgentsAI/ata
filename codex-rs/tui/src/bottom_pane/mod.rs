@@ -31,7 +31,7 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 pub(crate) use bottom_pane_view::BottomPaneView;
-use bottom_pane_view::ViewCompletion;
+pub(crate) use bottom_pane_view::ViewCompletion;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_core_skills::model::SkillMetadata;
 use codex_features::Features;
@@ -48,14 +48,12 @@ use ratatui::text::Line;
 use std::time::Duration;
 use std::time::Instant;
 
-mod account_view;
 mod action_required_title;
 mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
 mod multi_select_picker;
 mod request_user_input;
-mod research_tools_view;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
@@ -91,37 +89,30 @@ pub(crate) struct MentionBinding {
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
+mod scheduling_view;
+pub(crate) use scheduling_view::SchedulingView;
+mod supabase_login_view;
+pub(crate) use supabase_login_view::SupabaseLoginPhase;
+pub(crate) use supabase_login_view::SupabaseLoginState;
+pub(crate) use supabase_login_view::SupabaseLoginView;
 pub(crate) mod custom_prompt_view;
-pub(crate) mod document_reader;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
 mod list_selection_view;
 mod memories_settings_view;
+mod mentions_v2;
 pub(crate) mod prompt_args;
-mod scheduling_view;
 mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
-#[cfg(not(target_os = "linux"))]
-mod voice_setup_view;
-pub(crate) use account_view::AccountView;
-pub(crate) use research_tools_view::ResearchToolsView;
-pub(crate) use research_tools_view::build_reading_view_tool_items;
-pub(crate) use research_tools_view::build_research_tool_items;
-#[cfg(not(target_os = "linux"))]
-pub(crate) use voice_setup_view::VoiceSetupView;
-// ATA: re-export the voice context type so voice_mode can refer to it via
-// `crate::bottom_pane::ReadingViewVoiceContext` (the canonical path).
-#[cfg(not(target_os = "linux"))]
-pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 pub(crate) use footer::CollaborationModeIndicator;
 pub(crate) use footer::GoalStatusIndicator;
 #[cfg(test)]
 pub(crate) use footer::goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
-#[cfg(test)]
 pub(crate) use list_selection_view::ListSelectionView;
+pub(crate) use list_selection_view::OnSelectionChangedCallback;
 pub(crate) use list_selection_view::SelectionRowDisplay;
 pub(crate) use list_selection_view::SelectionToggle;
 pub(crate) use list_selection_view::SelectionViewParams;
@@ -129,6 +120,7 @@ pub(crate) use list_selection_view::SideContentWidth;
 pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
+use slash_commands::ServiceTierCommand;
 mod feedback_view;
 mod hooks_browser_view;
 pub(crate) use feedback_view::FeedbackAudience;
@@ -147,6 +139,15 @@ pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
+mod voice_setup_view;
+pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
+pub(crate) use voice_setup_view::VoiceSetupView;
+mod document_reader;
+mod research_tools_view;
+pub(crate) use research_tools_view::ResearchToolItem;
+pub(crate) use research_tools_view::ResearchToolsView;
+pub(crate) use research_tools_view::build_reading_view_tool_items;
+pub(crate) use research_tools_view::build_research_tool_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
@@ -201,7 +202,6 @@ pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
-pub(crate) use scheduling_view::SchedulingView;
 
 struct DelayedApprovalRequest {
     request: ApprovalRequest,
@@ -248,6 +248,16 @@ pub(crate) struct BottomPane {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     keymap: RuntimeKeymap,
+    /// Document IDs the user has closed in this session. The document
+    /// reader uses this to suppress replayed `PresentDocumentEvent`s after
+    /// an agent switch — a live re-presentation always opens and clears
+    /// the marker (see `show_document_reader`).
+    closed_document_ids: std::collections::HashSet<String>,
+    /// When true, the composer cursor is suppressed regardless of focus
+    /// state. Set during voice mode so the recording UI is the only
+    /// visible focus indicator; released by a matching
+    /// `set_force_hide_cursor(false)` call.
+    force_hide_cursor: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -305,6 +315,8 @@ impl BottomPane {
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
+            closed_document_ids: std::collections::HashSet::new(),
+            force_hide_cursor: false,
         }
     }
 
@@ -333,6 +345,11 @@ impl BottomPane {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_mentions_v2_enabled(&mut self, enabled: bool) {
+        self.composer.set_mentions_v2_enabled(enabled);
         self.request_redraw();
     }
 
@@ -411,8 +428,13 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_fast_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_fast_command_enabled(enabled);
+    pub fn set_service_tier_commands_enabled(&mut self, enabled: bool) {
+        self.composer.set_service_tier_commands_enabled(enabled);
+        self.request_redraw();
+    }
+
+    pub fn set_service_tier_commands(&mut self, commands: Vec<ServiceTierCommand>) {
+        self.composer.set_service_tier_commands(commands);
         self.request_redraw();
     }
 
@@ -438,6 +460,17 @@ impl BottomPane {
 
     pub(crate) fn set_placeholder_text(&mut self, placeholder: String) {
         self.composer.set_placeholder_text(placeholder);
+        self.request_redraw();
+    }
+
+    /// Force-hide the composer cursor while voice mode is active so the
+    /// recording UI is the only visible focus indicator. Releasing the
+    /// lock requires a matching `set_force_hide_cursor(false)` call.
+    pub(crate) fn set_force_hide_cursor(&mut self, hidden: bool) {
+        if self.force_hide_cursor == hidden {
+            return;
+        }
+        self.force_hide_cursor = hidden;
         self.request_redraw();
     }
 
@@ -716,7 +749,6 @@ impl BottomPane {
             if has_pasted_text {
                 self.record_composer_activity_at(Instant::now());
             }
-            self.composer.sync_popups();
             if needs_redraw {
                 self.request_redraw();
             }
@@ -725,7 +757,6 @@ impl BottomPane {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
-        self.composer.sync_popups();
         self.request_redraw();
     }
 
@@ -796,6 +827,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn show_shutdown_in_progress(&mut self) {
+        self.view_stack.clear();
+        self.composer.show_shutdown_in_progress();
+        self.request_redraw();
+    }
+
     pub(crate) fn clear_composer_for_ctrl_c(&mut self) {
         if let Some(text) = self.composer.clear_for_ctrl_c() {
             if let Some(thread_id) = self.thread_id {
@@ -815,16 +852,18 @@ impl BottomPane {
         self.composer.current_text()
     }
 
+    pub(crate) fn composer_draft_snapshot(&self) -> chat_composer::ComposerDraftSnapshot {
+        self.composer.draft_snapshot()
+    }
+
+    #[cfg(test)]
     pub(crate) fn composer_text_elements(&self) -> Vec<TextElement> {
         self.composer.text_elements()
     }
 
+    #[cfg(test)]
     pub(crate) fn composer_local_images(&self) -> Vec<LocalImageAttachment> {
         self.composer.local_images()
-    }
-
-    pub(crate) fn composer_mention_bindings(&self) -> Vec<MentionBinding> {
-        self.composer.mention_bindings()
     }
 
     #[cfg(test)]
@@ -872,6 +911,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
         self.composer.remote_image_urls()
     }
@@ -997,6 +1037,10 @@ impl BottomPane {
         }
     }
 
+    pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
+        self.composer.set_queue_submissions(queue_submissions);
+    }
+
     /// Hide the status indicator while leaving task-running state untouched.
     pub(crate) fn hide_status_indicator(&mut self) {
         if self.status.take().is_some() {
@@ -1087,6 +1131,10 @@ impl BottomPane {
         popup_consts::standard_popup_hint_line_for_keymap(&self.keymap.list)
     }
 
+    pub(crate) fn list_keymap(&self) -> crate::keymap::ListKeymap {
+        self.keymap.list.clone()
+    }
+
     /// Replace one or more active views whose IDs are in `view_ids` with a
     /// generic list selection view.
     pub(crate) fn replace_active_views_with_selection_view(
@@ -1133,6 +1181,20 @@ impl BottomPane {
             .last()
             .filter(|view| view.view_id() == Some(view_id))
             .and_then(|view| view.active_tab_id())
+    }
+
+    pub(crate) fn dismiss_active_view_if_id(&mut self, view_id: &'static str) -> bool {
+        let is_match = self
+            .view_stack
+            .last()
+            .is_some_and(|view| view.view_id() == Some(view_id));
+        if !is_match {
+            return false;
+        }
+
+        self.view_stack.pop();
+        self.request_redraw();
+        true
     }
 
     /// Update the pending-input preview shown above the composer.
@@ -1237,252 +1299,6 @@ impl BottomPane {
         self.push_view(view);
     }
 
-    // ─── ATA reading-view convenience hooks ─────────────────────────────
-    // The reading view overlay extends BottomPaneView with a handful of
-    // optional methods for receiving section updates + voice mode state.
-    // These are thin shims that find the active document reader (if any)
-    // and forward the call. Voice methods are gated to non-Linux platforms.
-
-    /// Forward a "turn complete" signal to the active view. Reading-view
-    /// overlays use this to clear pending follow-up indicators if the agent
-    /// finished without calling an update tool.
-    pub(crate) fn notify_turn_complete(&mut self) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_turn_complete();
-            self.request_redraw();
-        }
-    }
-
-    /// Forward a `/scheduling` snapshot to the active view (if it owns the
-    /// scheduling panel). Non-scheduling views ignore the call via the
-    /// `BottomPaneView` default impl.
-    pub(crate) fn notify_scheduling_snapshot(
-        &mut self,
-        snapshot: codex_protocol::protocol::SchedulingTasksSnapshotEvent,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_scheduling_snapshot(snapshot);
-            self.request_redraw();
-        }
-    }
-
-    /// If the active view is a document reader that just closed, return the
-    /// document id so the host can release any cached state for it.
-    /// (Wired during the closed-document-tracking follow-up.)
-    #[allow(dead_code)]
-    pub(crate) fn closed_document_id(&self) -> Option<String> {
-        self.view_stack
-            .last()
-            .and_then(|v| v.closed_document_id())
-            .map(std::string::ToString::to_string)
-    }
-
-    pub(crate) fn show_document_reader(
-        &mut self,
-        ev: codex_protocol::document_reader::PresentDocumentEvent,
-        _from_replay: bool,
-    ) {
-        // If a document reader is already on the stack, don't push another
-        // one. A subsequent `PresentDocument` with `is_reopen: true` is sent
-        // by `add_document_section`, `append_to_section`, and
-        // `patch_document_section` so a closed reader can re-open with the
-        // updated content. When the reader is still open, pushing a fresh
-        // view on top would (a) duplicate content because the following
-        // action event would apply on top of an already-up-to-date view, and
-        // (b) wipe fold history because the new view starts from scratch.
-        if let Some(view) = self.view_stack.last()
-            && view.view_id() == Some(document_reader::DOCUMENT_READER_VIEW_ID)
-        {
-            return;
-        }
-        // Open the document_reader view, wired to the BottomPane's real
-        // `app_event_tx`. The previous `new_from_event` constructor created
-        // a dummy `AppEventSender` whose receiver was immediately dropped,
-        // so follow-up questions submitted from the reading view (selection
-        // + question + Enter) were sent into a closed channel and never
-        // reached the agent — the answer therefore never came back and
-        // never updated the reading view.
-        let view = crate::bottom_pane::document_reader::DocumentReaderView::new(
-            ev.document_id,
-            ev.title,
-            ev.content,
-            self.app_event_tx.clone(),
-            self.animations_enabled,
-            self.frame_requester.clone(),
-        );
-        self.push_view(Box::new(view));
-    }
-
-    pub(crate) fn is_document_reader_active(&self) -> bool {
-        self.view_stack
-            .last()
-            .and_then(|v| v.view_id())
-            .is_some_and(|id| id == document_reader::DOCUMENT_READER_VIEW_ID)
-    }
-
-    pub(crate) fn update_document_section(
-        &mut self,
-        ev: &codex_protocol::document_reader::UpdateDocumentSectionEvent,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_document_section_update(
-                &ev.document_id,
-                ev.section_index,
-                ev.content.clone(),
-            );
-            self.request_redraw();
-        }
-    }
-
-    pub(crate) fn append_document_section(
-        &mut self,
-        ev: &codex_protocol::document_reader::AppendDocumentSectionEvent,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_document_section_append(
-                &ev.document_id,
-                ev.section_index,
-                ev.content.clone(),
-                ev.foldable,
-                ev.summary.clone(),
-            );
-            self.request_redraw();
-        }
-    }
-
-    pub(crate) fn add_document_section(
-        &mut self,
-        ev: &codex_protocol::document_reader::AddDocumentSectionEvent,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_document_section_add(
-                &ev.document_id,
-                ev.after_section_index,
-                ev.heading.clone(),
-                ev.content.clone(),
-                ev.foldable,
-                ev.summary.clone(),
-            );
-            self.request_redraw();
-        }
-    }
-
-    pub(crate) fn patch_document_section(
-        &mut self,
-        ev: &codex_protocol::document_reader::PatchDocumentSectionEvent,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.handle_document_section_patch(
-                &ev.document_id,
-                ev.section_index,
-                &ev.old_text,
-                &ev.new_text,
-                ev.foldable,
-                ev.summary.clone(),
-            );
-            self.request_redraw();
-        }
-    }
-
-    /// Forward a `force_hide_cursor` toggle to the active view. Currently a
-    /// no-op since v0.129.0's BottomPane doesn't track cursor hiding —
-    /// reading view manages cursor visibility via its own focus state.
-    /// Voice-mode wires this once PTT key handling lands.
-    #[allow(dead_code)]
-    pub(crate) fn set_force_hide_cursor(&mut self, _hide: bool) {}
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn reading_view_voice_context(
-        &self,
-    ) -> Option<bottom_pane_view::ReadingViewVoiceContext> {
-        self.view_stack.last().and_then(|v| v.voice_context())
-    }
-
-    /// True iff a Space press should be intercepted as push-to-talk rather
-    /// than forwarded to the composer or active view. PTT is allowed when no
-    /// view is active (normal chat) or when the active view supports voice
-    /// (e.g. the document reader). Composer popups block PTT so Space can
-    /// operate toggles/steppers.
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn ptt_space_allowed(&self) -> bool {
-        if self.composer.popup_active() {
-            return false;
-        }
-        match self.view_stack.last() {
-            None => true,
-            Some(view) => view.voice_context().is_some(),
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    #[allow(dead_code)]
-    pub(crate) fn is_view_composer_focused(&self) -> bool {
-        self.view_stack
-            .last()
-            .map(|v| v.is_composer_focused())
-            .unwrap_or(false)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_voice_status(status);
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_tts_flash_msg(&mut self, msg: Option<String>) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_tts_flash_msg(msg);
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_tts_paused(&mut self, paused: bool) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_voice_tts_paused(paused);
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_pending_voice_question(
-        &mut self,
-        section: usize,
-        question: String,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_pending_voice_question(section, question);
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_karaoke_lines(
-        &mut self,
-        lines: Option<Vec<ratatui::text::Line<'static>>>,
-        append: bool,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_voice_karaoke_lines(lines, append);
-            self.request_redraw();
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    pub(crate) fn set_document_reader_reading_progress(
-        &mut self,
-        word_idx: Option<usize>,
-        heading_words_to_skip: usize,
-    ) {
-        if let Some(view) = self.view_stack.last_mut() {
-            view.set_voice_reading_progress(word_idx, heading_words_to_skip);
-            self.request_redraw();
-        }
-    }
-
     /// Called when the agent requests user approval.
     pub fn push_approval_request(&mut self, request: ApprovalRequest, features: &Features) {
         let request = if let Some(view) = self.view_stack.last_mut() {
@@ -1535,12 +1351,13 @@ impl BottomPane {
             request
         };
 
-        let modal = RequestUserInputOverlay::new(
+        let modal = RequestUserInputOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
+            self.keymap.clone(),
         );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
@@ -1579,7 +1396,7 @@ impl BottomPane {
                 tool_suggestion.suggest_type,
                 mcp_server_elicitation::ToolSuggestionType::Enable
             );
-            let view = AppLinkView::new(
+            let view = AppLinkView::new_with_keymap(
                 AppLinkViewParams {
                     app_id: tool_suggestion.tool_id.clone(),
                     title: tool_suggestion.tool_name.clone(),
@@ -1610,6 +1427,7 @@ impl BottomPane {
                     }),
                 },
                 self.app_event_tx.clone(),
+                self.keymap.list.clone(),
             );
             self.pause_status_timer_for_modal();
             self.set_composer_input_enabled(
@@ -1620,12 +1438,13 @@ impl BottomPane {
             return;
         }
 
-        let modal = McpServerElicitationOverlay::new(
+        let modal = McpServerElicitationOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
             self.has_input_focus,
             self.enhanced_keys_supported,
             self.disable_paste_burst,
+            self.keymap.list.clone(),
         );
         self.pause_status_timer_for_modal();
         self.set_composer_input_enabled(
@@ -1781,14 +1600,16 @@ impl BottomPane {
     }
 
     fn as_renderable(&'_ self) -> RenderableItem<'_> {
+        self.as_renderable_with_composer_right_reserve(/*composer_right_reserve*/ 0)
+    }
+
+    fn as_renderable_with_composer_right_reserve(
+        &'_ self,
+        composer_right_reserve: u16,
+    ) -> RenderableItem<'_> {
         if let Some(view) = self.active_view() {
-            tracing::info!(
-                "[BOTTOM-PANE] rendering active_view id={:?}",
-                view.view_id()
-            );
             RenderableItem::Borrowed(view)
         } else {
-            tracing::info!("[BOTTOM-PANE] no active_view, rendering composer flex");
             let mut flex = FlexRenderable::new();
             if let Some(status) = &self.status {
                 flex.push(/*flex*/ 0, RenderableItem::Borrowed(status));
@@ -1827,9 +1648,57 @@ impl BottomPane {
             }
             let mut flex2 = FlexRenderable::new();
             flex2.push(/*flex*/ 1, RenderableItem::Owned(flex.into()));
-            flex2.push(/*flex*/ 0, RenderableItem::Borrowed(&self.composer));
+            let composer: RenderableItem<'_> = if composer_right_reserve == 0 {
+                RenderableItem::Borrowed(&self.composer)
+            } else {
+                RenderableItem::Owned(Box::new(ChatComposerRightReserveRenderable {
+                    composer: &self.composer,
+                    right_reserve: composer_right_reserve,
+                }))
+            };
+            flex2.push(/*flex*/ 0, composer);
             RenderableItem::Owned(Box::new(flex2))
         }
+    }
+
+    pub(crate) fn render_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        composer_right_reserve: u16,
+    ) {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .render(area, buf);
+    }
+
+    pub(crate) fn desired_height_with_composer_right_reserve(
+        &self,
+        width: u16,
+        composer_right_reserve: u16,
+    ) -> u16 {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .desired_height(width)
+    }
+
+    pub(crate) fn cursor_pos_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        composer_right_reserve: u16,
+    ) -> Option<(u16, u16)> {
+        if self.force_hide_cursor {
+            return None;
+        }
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .cursor_pos(area)
+    }
+
+    pub(crate) fn cursor_style_with_composer_right_reserve(
+        &self,
+        area: Rect,
+        composer_right_reserve: u16,
+    ) -> crossterm::cursor::SetCursorStyle {
+        self.as_renderable_with_composer_right_reserve(composer_right_reserve)
+            .cursor_style(area)
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {
@@ -1864,6 +1733,38 @@ impl BottomPane {
         if self.composer.set_side_conversation_context_label(label) {
             self.request_redraw();
         }
+    }
+}
+
+include!("document_reader_ext.rs");
+
+struct ChatComposerRightReserveRenderable<'a> {
+    composer: &'a chat_composer::ChatComposer,
+    right_reserve: u16,
+}
+
+impl Renderable for ChatComposerRightReserveRenderable<'_> {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        self.composer.render_with_mask_and_textarea_right_reserve(
+            area,
+            buf,
+            /*mask_char*/ None,
+            self.right_reserve,
+        );
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        self.composer
+            .desired_height_with_textarea_right_reserve(width, self.right_reserve)
+    }
+
+    fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
+        self.composer
+            .cursor_pos_with_textarea_right_reserve(area, self.right_reserve)
+    }
+
+    fn cursor_style(&self, area: Rect) -> crossterm::cursor::SetCursorStyle {
+        self.composer.cursor_style(area)
     }
 }
 

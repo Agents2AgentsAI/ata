@@ -8,6 +8,7 @@ use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::path_utils;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
@@ -15,95 +16,12 @@ use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
-use codex_protocol::models::FileSystemPermissions;
-use codex_protocol::permissions::FileSystemAccessMode;
-use codex_protocol::permissions::FileSystemPath;
-use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_sandboxing::SandboxCommand;
+use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
-use std::path::Path;
-
-/// When set on a shell exec environment, tells the child `ata` invocation
-/// to skip its `prepend_path_entry_for_codex_aliases` PATH munging — we
-/// already rewrote the program to the fully-qualified current_exe path,
-/// so the PATH helper would just add a redundant entry (and on some
-/// runners can recurse into itself).
-pub(crate) const CODEX_SKIP_ARG0_PATH_HELPER_ENV_VAR: &str = "CODEX_SKIP_ARG0_PATH_HELPER";
-
-fn is_ata_program(program: &str) -> bool {
-    let name = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program);
-    name.eq_ignore_ascii_case("ata") || name.eq_ignore_ascii_case("ata.exe")
-}
-
-fn command_with_current_exe(args: &[String]) -> Option<Vec<String>> {
-    let current_exe = std::env::current_exe().ok()?;
-    Some(
-        std::iter::once(current_exe.to_string_lossy().to_string())
-            .chain(args.iter().cloned())
-            .collect(),
-    )
-}
-
-fn command_with_ata_shell_wrapper(command: &[String]) -> Option<Vec<String>> {
-    let (_, script) = codex_shell_command::bash::extract_bash_command(command)?;
-    let current_exe = std::env::current_exe().ok()?;
-    let current_exe = shell_single_quote(current_exe.to_string_lossy().as_ref());
-    let rewritten_script = format!("ata() {{ '{current_exe}' \"$@\"; }}\n\n{script}");
-    let mut rewritten = command.to_vec();
-    rewritten[2] = rewritten_script;
-    Some(rewritten)
-}
-
-/// Resolve model-invoked `ata` commands to the current executable so agent
-/// shell commands always target the same binary as the running session.
-///
-/// The agent has no reliable PATH lookup for `ata` — it might be
-/// installed under `~/.cargo/bin`, `~/.local/bin`, or via a wrapper
-/// script — and the workspace-write sandbox often strips the user's
-/// shell-init PATH entries. Three rewrite paths:
-///
-/// 1. **Direct**: `ata <args>` -> `<current_exe> <args>`
-/// 2. **Single shell wrap**: `bash -lc "ata <args>"` (only one command in
-///    the script) -> `<current_exe> <args>`
-/// 3. **Compound shell wrap**: `bash -lc "foo; ata <args>; bar"` -> inject
-///    a shell function `ata() { '<current_exe>' "$@"; }` before the
-///    script so every `ata` reference in the chain resolves correctly.
-///
-/// Returns `(rewritten_command, did_rewrite)`. Callers set
-/// `CODEX_SKIP_ARG0_PATH_HELPER=1` in the child env when `did_rewrite` is
-/// true, so the child binary doesn't run its PATH-prepend helper a
-/// second time.
-pub(crate) fn resolve_agent_ata_command(command: &[String]) -> (Vec<String>, bool) {
-    if let Some((program, args)) = command.split_first()
-        && is_ata_program(program)
-        && let Some(updated) = command_with_current_exe(args)
-    {
-        return (updated, true);
-    }
-
-    if let Some(commands) = codex_shell_command::bash::parse_shell_lc_plain_commands(command)
-        && let [single] = commands.as_slice()
-        && let Some((program, args)) = single.split_first()
-        && is_ata_program(program)
-        && let Some(updated) = command_with_current_exe(args)
-    {
-        return (updated, true);
-    }
-
-    if let Some(command_names) = codex_shell_command::bash::parse_shell_lc_command_names(command)
-        && command_names.iter().any(|name| is_ata_program(name))
-        && let Some(updated) = command_with_ata_shell_wrapper(command)
-    {
-        return (updated, true);
-    }
-
-    (command.to_vec(), false)
-}
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
@@ -111,61 +29,24 @@ pub(crate) mod unified_exec;
 
 /// Shared helper to construct sandbox transform inputs from a tokenized command line.
 /// Validates that at least a program is present.
-///
-/// `workspace_kb_root`, when `Some`, is appended to the command's
-/// `additional_permissions.file_system.write` list so the agent can
-/// freely write into its per-workspace knowledge-base directory
-/// (`~/.ata/<workspace_id>/knowledge-base/...`) without an approval
-/// prompt. Resolved by `crate::workspace_kb::kb_writable_root` from the
-/// per-turn `CODEX_KB_PATH` env var; threaded through `TurnContext`.
 pub(crate) fn build_sandbox_command(
     command: &[String],
     cwd: &AbsolutePathBuf,
     env: &HashMap<String, String>,
     additional_permissions: Option<AdditionalPermissionProfile>,
-    workspace_kb_root: Option<&AbsolutePathBuf>,
+    workspace_kb_root: Option<AbsolutePathBuf>,
 ) -> Result<SandboxCommand, ToolError> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| ToolError::Rejected("command args are empty".to_string()))?;
-    let additional_permissions =
-        merge_workspace_kb_root(additional_permissions, workspace_kb_root.cloned());
     Ok(SandboxCommand {
         program: program.clone().into(),
         args: args.to_vec(),
         cwd: cwd.clone(),
         env: env.clone(),
         additional_permissions,
+        workspace_kb_root,
     })
-}
-
-fn merge_workspace_kb_root(
-    additional_permissions: Option<AdditionalPermissionProfile>,
-    workspace_kb_root: Option<AbsolutePathBuf>,
-) -> Option<AdditionalPermissionProfile> {
-    let Some(workspace_kb_root) = workspace_kb_root else {
-        return additional_permissions;
-    };
-
-    let mut additional_permissions = additional_permissions.unwrap_or_default();
-    let file_system = additional_permissions
-        .file_system
-        .get_or_insert_with(FileSystemPermissions::default);
-    let already_present = file_system.entries.iter().any(|entry| match &entry.path {
-        FileSystemPath::Path { path } => {
-            path == &workspace_kb_root && entry.access == FileSystemAccessMode::Write
-        }
-        FileSystemPath::GlobPattern { .. } | FileSystemPath::Special { .. } => false,
-    });
-    if !already_present {
-        file_system.entries.push(FileSystemSandboxEntry {
-            path: FileSystemPath::Path {
-                path: workspace_kb_root,
-            },
-            access: FileSystemAccessMode::Write,
-        });
-    }
-    Some(additional_permissions)
 }
 
 pub(crate) fn exec_env_for_sandbox_permissions(
@@ -189,6 +70,35 @@ pub(crate) fn exec_env_for_sandbox_permissions(
         }
     }
     env
+}
+
+pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
+    command: &[String],
+    shell_type: Option<&ShellType>,
+    sandbox: SandboxType,
+    windows_sandbox_level: WindowsSandboxLevel,
+) -> Vec<String> {
+    if shell_type != Some(&ShellType::PowerShell)
+        || sandbox != SandboxType::WindowsRestrictedToken
+        || windows_sandbox_level != WindowsSandboxLevel::Elevated
+        || command.is_empty()
+    {
+        return command.to_vec();
+    }
+
+    if command[1..]
+        .iter()
+        .any(|arg| arg.eq_ignore_ascii_case("-NoProfile"))
+    {
+        return command.to_vec();
+    }
+
+    // The elevated Windows sandbox runs as a dedicated sandbox account while
+    // HOME/USERPROFILE may still point at the real user profile. Loading
+    // PowerShell profiles in that mixed context is not a valid login shell.
+    let mut command = command.to_vec();
+    command.insert(1, "-NoProfile".to_string());
+    command
 }
 
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
@@ -379,6 +289,137 @@ fn is_valid_shell_variable_name(name: &str) -> bool {
 
 fn shell_single_quote(input: &str) -> String {
     input.replace('\'', r#"'"'"'"#)
+}
+
+#[cfg(test)]
+mod disable_powershell_profile_tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn inserts_no_profile_for_elevated_windows_sandbox() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        );
+
+        assert_eq!(
+            rewritten,
+            vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "Write-Output ok".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn inserts_no_profile_before_encoded_command() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-EncodedCommand".to_string(),
+            "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABvAGsA".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        );
+
+        assert_eq!(
+            rewritten,
+            vec![
+                "powershell.exe".to_string(),
+                "-NoProfile".to_string(),
+                "-EncodedCommand".to_string(),
+                "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABvAGsA".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_existing_no_profile() {
+        let command = vec![
+            "pwsh.exe".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        );
+
+        assert_eq!(rewritten, command);
+    }
+
+    #[test]
+    fn leaves_legacy_restricted_token_backend_alone() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::RestrictedToken,
+        );
+
+        assert_eq!(rewritten, command);
+    }
+
+    #[test]
+    fn leaves_unsandboxed_attempts_alone() {
+        let command = vec![
+            "powershell.exe".to_string(),
+            "-Command".to_string(),
+            "Write-Output ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::PowerShell),
+            SandboxType::None,
+            WindowsSandboxLevel::Elevated,
+        );
+
+        assert_eq!(rewritten, command);
+    }
+
+    #[test]
+    fn leaves_non_powershell_alone() {
+        let command = vec![
+            "/bin/bash".to_string(),
+            "-lc".to_string(),
+            "echo ok".to_string(),
+        ];
+
+        let rewritten = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&ShellType::Bash),
+            SandboxType::WindowsRestrictedToken,
+            WindowsSandboxLevel::Elevated,
+        );
+
+        assert_eq!(rewritten, command);
+    }
 }
 
 #[cfg(all(test, unix))]

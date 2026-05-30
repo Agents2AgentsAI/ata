@@ -15,6 +15,8 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::Widget;
 use std::cell::Cell;
+use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -34,6 +36,10 @@ use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Cap per-monitor live tail buffer. Matches MonitorRegistry::MONITOR_TAIL_CAPACITY
+/// so a delta-only viewer sees the same tail depth as a snapshot would carry.
+const LIVE_TAIL_CAPACITY: usize = 40;
 
 /// Phase 3, Slice 1b: scheduling-inspection panel backed by a real snapshot.
 ///
@@ -55,6 +61,12 @@ pub(crate) struct SchedulingView {
     /// `None` = list view (default); `Some(_)` = drill-down detail for one
     /// selected row. Esc returns to list, Enter on a row enters detail.
     detail: Option<DetailState>,
+    /// Per-monitor live tail (task_id → ring buffer of recent `"stream | line"`
+    /// entries). Populated by `SchedulingMonitorOutputDeltaEvent`s arriving
+    /// between snapshot refreshes. The detail pane prefers this over the
+    /// snapshot's `row.tail` when it has at least one entry, so the user sees
+    /// the freshest streamed output without waiting for the next snapshot.
+    live_tail: HashMap<String, VecDeque<String>>,
 }
 
 /// Drill-down state for the `/scheduling` detail view. Captures the row
@@ -89,7 +101,27 @@ impl SchedulingView {
             auto_refresh: None,
             selected_index: 0,
             detail: None,
+            live_tail: HashMap::new(),
         }
+    }
+
+    /// Append a streamed monitor output line (carried by
+    /// `SchedulingMonitorOutputDeltaEvent`) to the per-task live tail buffer.
+    /// Bounded to `LIVE_TAIL_CAPACITY` lines; older lines drop off the front.
+    fn append_monitor_output_line(&mut self, task_id: &str, stream: &str, line: &str) {
+        let entry = self
+            .live_tail
+            .entry(task_id.to_string())
+            .or_default();
+        if entry.len() >= LIVE_TAIL_CAPACITY {
+            entry.pop_front();
+        }
+        let rendered = if stream == "stderr" {
+            format!("[stderr] {line}")
+        } else {
+            line.to_string()
+        };
+        entry.push_back(rendered);
     }
 
     /// Flatten the snapshot into a `(kind, task_id)` list in display order
@@ -417,10 +449,19 @@ impl SchedulingView {
                 body.push(Line::from(format!("command: {}", row.command)));
                 body.push(Line::from(""));
                 body.push(Line::from("Recent output tail:".bold()));
-                if row.tail.is_empty() {
+                let live = self.live_tail.get(&row.task_id);
+                let live_lines: Vec<String> = live
+                    .map(|q| q.iter().cloned().collect())
+                    .unwrap_or_default();
+                let tail_source: &[String] = if live_lines.is_empty() {
+                    &row.tail
+                } else {
+                    &live_lines
+                };
+                if tail_source.is_empty() {
                     body.push(Line::from("  (no lines captured yet)".dim()));
                 } else {
-                    let joined = row.tail.join("\n");
+                    let joined = tail_source.join("\n");
                     push_scrolled_lines(body, &joined, state.scroll);
                 }
             }
@@ -581,6 +622,15 @@ impl BottomPaneView for SchedulingView {
 
     fn handle_scheduling_snapshot(&mut self, snapshot: SchedulingTasksSnapshotEvent) {
         self.set_snapshot(snapshot);
+    }
+
+    fn handle_scheduling_monitor_output_delta(
+        &mut self,
+        task_id: &str,
+        stream: &str,
+        line: &str,
+    ) {
+        self.append_monitor_output_line(task_id, stream, line);
     }
 }
 

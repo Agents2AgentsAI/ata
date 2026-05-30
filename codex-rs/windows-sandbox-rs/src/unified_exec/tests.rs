@@ -5,6 +5,7 @@ use crate::ipc_framed::Message;
 use crate::ipc_framed::decode_bytes;
 use crate::ipc_framed::read_frame;
 use crate::run_windows_sandbox_capture;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ProcessDriver;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -34,42 +35,6 @@ fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
     LEGACY_PROCESS_TEST_LOCK
         .lock()
         .expect("legacy Windows sandbox process test lock poisoned")
-}
-
-/// Returns `Some(guard)` only when the current process token has a logon
-/// SID — i.e. when running under an interactive Windows session. CI
-/// runners and Windows services launch tasks with a token that lacks
-/// `SE_GROUP_LOGON_ID`, so `create_workspace_write_token_with_caps_from`
-/// (called by `spawn_windows_sandbox_session_legacy`) bails with
-/// `Logon SID not present on token` and the test panics. Returning `None`
-/// from this helper lets the test exit early so the suite passes on
-/// non-interactive hosts while still exercising the legacy path on
-/// developer machines.
-fn legacy_process_test_guard_or_skip(name: &str) -> Option<MutexGuard<'static, ()>> {
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::Security::TOKEN_QUERY;
-    use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    use windows_sys::Win32::System::Threading::OpenProcessToken;
-
-    let mut token: HANDLE = 0;
-    let opened = unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) };
-    if opened == 0 {
-        eprintln!(
-            "skipping legacy Windows sandbox test {name}: OpenProcessToken failed (likely sandboxed CI)"
-        );
-        return None;
-    }
-    let result = unsafe { crate::token::get_logon_sid_bytes(token) };
-    unsafe {
-        windows_sys::Win32::Foundation::CloseHandle(token);
-    }
-    if result.is_err() {
-        eprintln!(
-            "skipping legacy Windows sandbox test {name}: process token has no logon SID (typical for CI runners)"
-        );
-        return None;
-    }
-    Some(legacy_process_test_guard())
 }
 
 fn current_thread_runtime() -> tokio::runtime::Runtime {
@@ -105,7 +70,7 @@ fn sandbox_home(name: &str) -> TempDir {
 }
 
 fn sandbox_log(codex_home: &Path) -> String {
-    let log_path = codex_home.join(".sandbox").join("sandbox.log");
+    let log_path = crate::current_log_file_path(&codex_home.join(".sandbox"));
     fs::read_to_string(&log_path)
         .unwrap_or_else(|err| format!("failed to read {}: {err}", log_path.display()))
 }
@@ -178,9 +143,7 @@ async fn collect_stdout_and_exit(
 
 #[test]
 fn legacy_non_tty_cmd_emits_output() {
-    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_non_tty_cmd_emits_output") else {
-        return;
-    };
+    let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -198,6 +161,8 @@ fn legacy_non_tty_cmd_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -215,14 +180,49 @@ fn legacy_non_tty_cmd_emits_output() {
 }
 
 #[test]
+fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
+    let _guard = legacy_process_test_guard();
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let cwd = sandbox_cwd();
+        let codex_home = sandbox_home("legacy-non-tty-deny-read");
+        let secret_path =
+            AbsolutePathBuf::from_absolute_path(cwd.join("legacy-non-tty-deny-read-secret.env"))
+                .expect("absolute deny-read fixture path");
+        let err = spawn_windows_sandbox_session_legacy(
+            "workspace-write",
+            cwd.as_path(),
+            codex_home.path(),
+            vec![
+                "C:\\Windows\\System32\\cmd.exe".to_string(),
+                "/c".to_string(),
+                "echo deny-read".to_string(),
+            ],
+            cwd.as_path(),
+            HashMap::new(),
+            Some(5_000),
+            std::slice::from_ref(&secret_path),
+            &[],
+            /*tty*/ false,
+            /*stdin_open*/ false,
+            /*use_private_desktop*/ true,
+        )
+        .await
+        .expect_err("legacy deny-read should require the elevated backend");
+        assert!(
+            err.to_string()
+                .contains("deny-read overrides require the elevated Windows sandbox backend"),
+            "unexpected error: {err:#}"
+        );
+    });
+}
+
+#[test]
 fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_non_tty_powershell_emits_output")
-    else {
-        return;
-    };
+    let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -241,6 +241,8 @@ fn legacy_non_tty_powershell_emits_output() {
             cwd.as_path(),
             HashMap::new(),
             Some(5_000),
+            &[],
+            &[],
             /*tty*/ false,
             /*stdin_open*/ false,
             /*use_private_desktop*/ true,
@@ -407,10 +409,7 @@ fn legacy_capture_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let Some(_guard) = legacy_process_test_guard_or_skip("legacy_capture_powershell_emits_output")
-    else {
-        return;
-    };
+    let _guard = legacy_process_test_guard();
     let cwd = sandbox_cwd();
     let codex_home = sandbox_home("legacy-capture-pwsh");
     println!("capture pwsh codex_home={}", codex_home.path().display());
@@ -447,11 +446,7 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;
     };
-    let Some(_guard) =
-        legacy_process_test_guard_or_skip("legacy_tty_powershell_emits_output_and_accepts_input")
-    else {
-        return;
-    };
+    let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
         let cwd = sandbox_cwd();
@@ -472,6 +467,8 @@ fn legacy_tty_powershell_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -520,6 +517,8 @@ fn legacy_tty_cmd_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ true,
@@ -571,6 +570,8 @@ fn legacy_tty_cmd_default_desktop_emits_output_and_accepts_input() {
             cwd.as_path(),
             HashMap::new(),
             Some(10_000),
+            &[],
+            &[],
             /*tty*/ true,
             /*stdin_open*/ true,
             /*use_private_desktop*/ false,

@@ -1,26 +1,42 @@
 use std::path::Path;
-use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use anyhow::Result;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-static ATA_BIN: OnceLock<PathBuf> = OnceLock::new();
-
-fn ata_bin() -> &'static PathBuf {
-    ATA_BIN.get_or_init(|| match codex_utils_cargo_bin::cargo_bin("ata") {
-        Ok(path) => path,
-        Err(error) => panic!("failed to locate ata binary: {error}"),
-    })
-}
-
 fn codex_command(codex_home: &Path) -> Result<assert_cmd::Command> {
-    let bin = ata_bin();
-    let mut cmd = assert_cmd::Command::new(bin);
+    let mut cmd = assert_cmd::Command::new(codex_utils_cargo_bin::cargo_bin("ata")?);
     cmd.env("CODEX_HOME", codex_home);
     Ok(cmd)
+}
+
+#[test]
+fn strict_config_rejects_unknown_config_override() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["--strict-config", "-c", "foo=bar", "mcp-server"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown configuration field"));
+
+    Ok(())
+}
+
+#[test]
+fn strict_config_is_not_supported_for_cloud_command() -> Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let mut cmd = codex_command(codex_home.path())?;
+    cmd.args(["--strict-config", "-c", "foo=bar", "cloud", "list"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "`--strict-config` is not supported for `codex cloud`",
+        ));
+
+    Ok(())
 }
 
 #[tokio::test]

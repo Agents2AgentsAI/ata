@@ -7,6 +7,7 @@ export type { AppendDocumentSectionEvent } from "./AppendDocumentSectionEvent";
 export type { ApplyPatchApprovalParams } from "./ApplyPatchApprovalParams";
 export type { ApplyPatchApprovalResponse } from "./ApplyPatchApprovalResponse";
 export type { AuthMode } from "./AuthMode";
+export type { AutoCompactTokenLimitScope } from "./AutoCompactTokenLimitScope";
 export type { ClientInfo } from "./ClientInfo";
 export type { ClientNotification } from "./ClientNotification";
 export type { ClientRequest } from "./ClientRequest";

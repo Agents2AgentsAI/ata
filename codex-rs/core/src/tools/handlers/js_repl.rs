@@ -17,18 +17,28 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::js_repl_spec::JS_REPL_TOOL_NAME;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_v8_poc::JsEvalOutcome;
 use codex_v8_poc::js_eval;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
-pub struct JsReplHandler;
+pub struct JsReplHandler {
+    pub(crate) spec: ToolSpec,
+}
+
+impl JsReplHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct JsReplArgs {
@@ -82,18 +92,20 @@ impl ToolOutput for JsReplToolOutput {
     }
 }
 
-impl ToolHandler for JsReplHandler {
-    type Output = JsReplToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for JsReplHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(JS_REPL_TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let arguments = match invocation.payload {
             ToolPayload::Function { arguments } => arguments,
             _ => {
@@ -117,9 +129,11 @@ impl ToolHandler for JsReplHandler {
                 FunctionCallError::RespondToModel(format!("js_repl execution panicked: {err}"))
             })?;
 
-        Ok(JsReplToolOutput { outcome })
+        Ok(boxed_tool_output(JsReplToolOutput { outcome }))
     }
 }
+
+impl CoreToolRuntime for JsReplHandler {}
 
 #[cfg(test)]
 mod tests {

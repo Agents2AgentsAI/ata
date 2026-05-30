@@ -2,6 +2,7 @@ use super::*;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+// The override is intentionally available only in debug builds, matching the login path below.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
 
@@ -224,9 +225,6 @@ impl AccountRequestProcessor {
             LoginAccountParams::ChatgptDeviceCode => {
                 self.login_chatgpt_device_code_v2(request_id).await;
             }
-            LoginAccountParams::CopilotDeviceCode => {
-                self.login_copilot_device_code_v2(request_id).await;
-            }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
                 chatgpt_account_id,
@@ -240,7 +238,9 @@ impl AccountRequestProcessor {
                 )
                 .await;
             }
-            // === ATA: provider-specific login flows ===
+            LoginAccountParams::CopilotDeviceCode => {
+                self.login_copilot_device_code_v2(request_id).await;
+            }
             LoginAccountParams::ProviderApiKey {
                 provider_id,
                 api_key,
@@ -453,168 +453,6 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
     }
 
-    async fn login_copilot_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_copilot_device_code_response().await;
-        self.outgoing.send_result(request_id, result).await;
-    }
-
-    async fn login_copilot_device_code_response(
-        &self,
-    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        // Cancel any active login (mirrors the ChatGPT device-code path).
-        {
-            let mut guard = self.active_login.lock().await;
-            if let Some(existing) = guard.take() {
-                drop(existing);
-            }
-        }
-
-        let device = start_copilot_device_flow()
-            .await
-            .map_err(|err| internal_error(format!("failed to start GitHub device flow: {err}")))?;
-
-        let login_id = Uuid::new_v4();
-        let cancel = CancellationToken::new();
-
-        {
-            let mut guard = self.active_login.lock().await;
-            *guard = Some(ActiveLogin::DeviceCode {
-                cancel: cancel.clone(),
-                login_id,
-            });
-        }
-
-        let user_code = device.user_code.clone();
-        let verification_uri = device.verification_uri.clone();
-
-        let outgoing_clone = self.outgoing.clone();
-        let auth_manager = Arc::clone(&self.auth_manager);
-        let codex_home = self.config.codex_home.clone();
-        let store_mode = self.config.cli_auth_credentials_store_mode;
-        let active_login = self.active_login.clone();
-        let device_for_task = device.clone();
-        // Captured so the spawned completion task can rebuild the
-        // models_manager once `model_provider = "copilot"` lands in
-        // config.toml. Without this, the picker keeps showing the OpenAI
-        // catalog this session — only the next launch picks up Copilot.
-        let thread_manager_for_task = Arc::clone(&self.thread_manager);
-        let config_manager_for_task = self.config_manager.clone();
-
-        tokio::spawn(async move {
-            let (mut success, mut error_msg) = tokio::select! {
-                _ = cancel.cancelled() => {
-                    (false, Some("Login was not completed".to_string()))
-                }
-                result = async {
-                    let token = poll_copilot_access_token(&device_for_task).await?;
-                    complete_copilot_login(&codex_home, store_mode, token).await
-                } => {
-                    match result {
-                        Ok(()) => (true, None),
-                        Err(err) => (false, Some(err.to_string())),
-                    }
-                }
-            };
-
-            if success {
-                // Persist `model = "gpt-4.1"` and `model_provider = "copilot"`
-                // so the next launch defaults to Copilot without manual
-                // `-c model=...` flags. `gpt-4.1` is GitHub's current
-                // recommended default and appears in the bundled Copilot
-                // catalog (see codex-models-manager/copilot_models.json) —
-                // `gpt-4o` is no longer listed on
-                // https://docs.github.com/en/copilot/reference/ai-models/supported-models
-                // so newly logged-in users were landing on a slug that
-                // wasn't in the /model picker.
-                //
-                // If this write fails we *must* roll back the just-saved
-                // Copilot OAuth credential. Leaving creds without the
-                // matching provider config strands the user: the next launch
-                // re-enters bootstrap with `model_provider = "openai"`,
-                // `requires_openai_auth = true`, and an auth.json holding
-                // only `providers.copilot` — which used to surface as
-                // "email and plan type are required for chatgpt
-                // authentication" during TUI bootstrap.
-                let codex_home_for_edit = codex_home.clone();
-                let edit_result = tokio::task::spawn_blocking(move || {
-                    ConfigEditsBuilder::new(&codex_home_for_edit)
-                        .set_model(Some("gpt-4.1"), None, Some("copilot".to_string()))
-                        .apply_blocking()
-                })
-                .await;
-                let edit_err = match edit_result {
-                    Ok(Ok(())) => None,
-                    Ok(Err(err)) => Some(err.to_string()),
-                    Err(join_err) => Some(format!("config edit task panicked: {join_err}")),
-                };
-                if let Some(err) = edit_err {
-                    warn!(
-                        "failed to persist model_provider=copilot to config.toml after login: {err}"
-                    );
-                    if let Err(rollback_err) = copilot_logout(&codex_home, store_mode) {
-                        warn!(
-                            "failed to roll back Copilot credentials after config write failure: {rollback_err}"
-                        );
-                    }
-                    success = false;
-                    error_msg = Some(format!(
-                        "Signed in to GitHub Copilot but could not update config: {err}. Please retry."
-                    ));
-                }
-
-                // Reload regardless: on success the manager picks up new
-                // creds; on rollback it picks up the now-empty auth.json.
-                auth_manager.reload().await;
-
-                // === ATA: rebuild the in-memory models catalog so the
-                // `/model` picker shows Copilot models *this* session,
-                // instead of waiting for the next ata launch. Re-reads
-                // config.toml (now `model_provider = "copilot"`) and
-                // installs a fresh `models_manager` on the live
-                // `ThreadManager`. Best-effort: failures here are
-                // non-fatal (the picker will catch up on relaunch).
-                if success {
-                    match config_manager_for_task
-                        .load_latest_config(/*fallback_cwd*/ None)
-                        .await
-                    {
-                        Ok(fresh_config) => {
-                            let new_manager = codex_core::build_models_manager(
-                                &fresh_config,
-                                Arc::clone(&auth_manager),
-                            );
-                            thread_manager_for_task.set_models_manager(new_manager);
-                        }
-                        Err(err) => {
-                            warn!("failed to reload config for models_manager refresh: {err}");
-                        }
-                    }
-                }
-            }
-
-            outgoing_clone
-                .send_server_notification(ServerNotification::AccountLoginCompleted(
-                    AccountLoginCompletedNotification {
-                        login_id: Some(login_id.to_string()),
-                        success,
-                        error: error_msg,
-                    },
-                ))
-                .await;
-
-            let mut guard = active_login.lock().await;
-            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                *guard = None;
-            }
-        });
-
-        Ok(LoginAccountResponse::CopilotDeviceCode {
-            login_id: login_id.to_string(),
-            verification_uri,
-            user_code,
-        })
-    }
-
     async fn login_chatgpt_device_code_response(
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
@@ -754,11 +592,11 @@ impl AccountRequestProcessor {
             }
         }
 
-        if let Some(expected_workspace) = self.config.forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_account_id != expected_workspace
+        if let Some(expected_workspaces) = self.config.forced_chatgpt_workspace_id.as_deref()
+            && !expected_workspaces.contains(&chatgpt_account_id)
         {
             return Err(invalid_request(format!(
-                "External auth must use workspace {expected_workspace}, but received {chatgpt_account_id:?}."
+                "External auth must use one of workspace(s) {expected_workspaces:?}, but received {chatgpt_account_id:?}.",
             )));
         }
 
@@ -867,61 +705,12 @@ impl AccountRequestProcessor {
             }
         }
 
-        // For providers that don't use OpenAI-style auth (today: GitHub
-        // Copilot), the TUI's login screen is gated behind
-        // `requires_openai_auth`. Leaving `model_provider = "copilot"` in
-        // config.toml after logout means the next launch skips onboarding
-        // entirely and drops the user into chat with no credentials — they
-        // observe this as "/logout didn't log me out". Clearing `model` and
-        // `model_provider` here lets the default provider take over so the
-        // login screen surfaces and the user can re-pick their provider
-        // (including Copilot again).
-        if !self.config.model_provider.requires_openai_auth {
-            let codex_home = self.config.codex_home.clone();
-            let edit_result = tokio::task::spawn_blocking(move || {
-                ConfigEditsBuilder::new(&codex_home)
-                    .clear_model_and_provider()
-                    .apply_blocking()
-            })
-            .await;
-            match edit_result {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    warn!(
-                        "failed to clear model/model_provider from config.toml after logout: {err}"
-                    );
-                }
-                Err(join_err) => {
-                    warn!("config-clear task panicked during logout: {join_err}");
-                }
-            }
-        }
-
         Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
         )
         .await;
-
-        // === ATA: rebuild the in-memory models catalog so a Copilot
-        // logout (which just cleared `model_provider="copilot"`) reverts
-        // the `/model` picker to the default OpenAI catalog this session.
-        // Best-effort — failures here are non-fatal.
-        match self
-            .config_manager
-            .load_latest_config(/*fallback_cwd*/ None)
-            .await
-        {
-            Ok(fresh_config) => {
-                let new_manager =
-                    codex_core::build_models_manager(&fresh_config, Arc::clone(&self.auth_manager));
-                self.thread_manager.set_models_manager(new_manager);
-            }
-            Err(err) => {
-                warn!("failed to reload config for models_manager refresh after logout: {err}");
-            }
-        }
 
         // Reflect the current auth method after logout (likely None).
         Ok(self
@@ -1055,26 +844,7 @@ impl AccountRequestProcessor {
                 ));
             }
         };
-        let mut account = account_state.account.map(Account::from);
-
-        // The standard ChatGPT/ApiKey/Bedrock account_state path doesn't know
-        // about Copilot. If the active provider is Copilot and the OAuth
-        // credential is present, surface that as the active account so the
-        // TUI's "Signed in with GitHub Copilot" view survives a restart.
-        if account.is_none()
-            && matches!(
-                self.config.model_provider.wire_api,
-                codex_model_provider_info::WireApi::CopilotInline
-            )
-            && get_provider_oauth_credential(
-                &self.config.codex_home,
-                PROVIDER_COPILOT,
-                self.config.cli_auth_credentials_store_mode,
-            )
-            .is_some()
-        {
-            account = Some(Account::Copilot {});
-        }
+        let account = account_state.account.map(Account::from);
 
         Ok(GetAccountResponse {
             account,
@@ -1203,20 +973,161 @@ impl AccountRequestProcessor {
 
         Ok((primary, rate_limits_by_limit_id))
     }
-}
 
-// === ATA: provider-specific login flows ===
-//
-// Handlers backing the four-option onboarding picker: per-provider API key
-// (OpenAI/Anthropic/Gemini/Copilot), Gemini OAuth (Code Assist), and the
-// Supabase email-OTP "Sign in with ATA account" flow.
-//
-// Kept in a separate impl block so future upstream changes to the main
-// `impl AccountRequestProcessor` block above merge cleanly. Each `_v2`
-// method follows the same convention as the existing `login_*_v2` methods:
-// run the underlying work, send a JSON-RPC result, and fire
-// `AccountUpdated` / `AccountLoginCompleted` notifications where relevant.
-impl AccountRequestProcessor {
+    // ─── ATA-specific login flows ────────────────────────────────────────
+    //
+    // Restored after upstream merge: see commit 543b649c1c (supabase mod
+    // wired) and 73e0b9724b (original stubs introduced).
+
+    async fn login_copilot_device_code_v2(&self, request_id: ConnectionRequestId) {
+        let result = self.login_copilot_device_code_response().await;
+        self.outgoing.send_result(request_id, result).await;
+    }
+
+    async fn login_copilot_device_code_response(
+        &self,
+    ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(existing) = guard.take() {
+                drop(existing);
+            }
+        }
+
+        let device = start_copilot_device_flow()
+            .await
+            .map_err(|err| internal_error(format!("failed to start GitHub device flow: {err}")))?;
+
+        let login_id = Uuid::new_v4();
+        let cancel = CancellationToken::new();
+        {
+            let mut guard = self.active_login.lock().await;
+            *guard = Some(ActiveLogin::DeviceCode {
+                cancel: cancel.clone(),
+                login_id,
+            });
+        }
+
+        let user_code = device.user_code.clone();
+        let verification_uri = device.verification_uri.clone();
+
+        let outgoing_clone = self.outgoing.clone();
+        let auth_manager = Arc::clone(&self.auth_manager);
+        let codex_home = self.config.codex_home.clone();
+        let store_mode = self.config.cli_auth_credentials_store_mode;
+        let active_login = self.active_login.clone();
+        let device_for_task = device.clone();
+        // Captured so the spawned completion task can rebuild the
+        // models_manager once `model_provider = "copilot"` lands in
+        // config.toml. Without this, the picker keeps showing the
+        // OpenAI catalog this session — only the next launch picks up
+        // Copilot.
+        let thread_manager_for_task = Arc::clone(&self.thread_manager);
+        let config_manager_for_task = self.config_manager.clone();
+
+        tokio::spawn(async move {
+            let (mut success, mut error_msg) = tokio::select! {
+                _ = cancel.cancelled() => {
+                    (false, Some("Login was not completed".to_string()))
+                }
+                result = async {
+                    let token = poll_copilot_access_token(&device_for_task).await?;
+                    complete_copilot_login(&codex_home, store_mode, token).await
+                } => {
+                    match result {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(err.to_string())),
+                    }
+                }
+            };
+
+            if success {
+                let codex_home_for_edit = codex_home.clone();
+                let edit_result = tokio::task::spawn_blocking(move || {
+                    ConfigEditsBuilder::new(&codex_home_for_edit)
+                        .set_model(Some("gpt-4.1"), None)
+                        .with_edits([ConfigEdit::SetPath {
+                            segments: vec!["model_provider".to_string()],
+                            value: toml_edit::value("copilot"),
+                        }])
+                        .apply_blocking()
+                })
+                .await;
+                let edit_err = match edit_result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(err)) => Some(err.to_string()),
+                    Err(join_err) => Some(format!("config edit task panicked: {join_err}")),
+                };
+                if let Some(err) = edit_err {
+                    warn!(
+                        "failed to persist model_provider=copilot to config.toml after login: {err}"
+                    );
+                    if let Err(rollback_err) = copilot_logout(&codex_home, store_mode) {
+                        warn!(
+                            "failed to roll back Copilot credentials after config write failure: {rollback_err}"
+                        );
+                    }
+                    success = false;
+                    error_msg = Some(format!(
+                        "Signed in to GitHub Copilot but could not update config: {err}. Please retry."
+                    ));
+                }
+
+                // Reload regardless: on success the manager picks up new
+                // creds; on rollback it picks up the now-empty auth.json.
+                auth_manager.reload().await;
+
+                // === ATA: rebuild the in-memory models catalog so the
+                // `/model` picker shows Copilot models *this* session,
+                // instead of waiting for the next ata launch. Re-reads
+                // config.toml (now `model_provider = "copilot"`) and
+                // installs a fresh `models_manager` on the live
+                // `ThreadManager`. Best-effort: failures here are
+                // non-fatal (the picker will catch up on relaunch).
+                if success {
+                    match config_manager_for_task
+                        .load_latest_config(/*fallback_cwd*/ None)
+                        .await
+                    {
+                        Ok(fresh_config) => {
+                            let new_manager = codex_core::build_models_manager(
+                                &fresh_config,
+                                Arc::clone(&auth_manager),
+                            );
+                            thread_manager_for_task.set_models_manager(new_manager);
+                        }
+                        Err(err) => {
+                            warn!(
+                                "failed to reload config for models_manager refresh: {err}"
+                            );
+                        }
+                    }
+                }
+            }
+
+            outgoing_clone
+                .send_server_notification(ServerNotification::AccountLoginCompleted(
+                    AccountLoginCompletedNotification {
+                        login_id: Some(login_id.to_string()),
+                        success,
+                        error: error_msg,
+                    },
+                ))
+                .await;
+
+            let mut guard = active_login.lock().await;
+            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
+                *guard = None;
+            }
+        });
+
+        Ok(LoginAccountResponse::CopilotDeviceCode {
+            login_id: login_id.to_string(),
+            verification_uri,
+            user_code,
+        })
+    }
+
     async fn login_provider_api_key_v2(
         &self,
         request_id: ConnectionRequestId,
@@ -1231,8 +1142,7 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
 
         if logged_in {
-            self.send_login_success_notifications(/*login_id*/ None)
-                .await;
+            self.send_login_success_notifications(/*login_id*/ None).await;
         }
     }
 
@@ -1256,32 +1166,20 @@ impl AccountRequestProcessor {
         }
         self.auth_manager.reload().await;
 
-        // For non-OpenAI providers we also flip `model_provider` in
-        // config.toml so the next launch (and the rest of this session)
-        // actually routes through the provider the user just signed into.
-        // Without this, Anthropic/Gemini logins would persist the key but
-        // the TUI would keep using the OpenAI provider — the picker would
-        // show OpenAI models and runtime calls would fail because the
-        // OpenAI key isn't set. Skipped for OpenAI itself since it's
-        // already the default; touching the config in that case is churn
-        // for no behavior change.
-        //
-        // `model` is intentionally cleared too: the previous selection was
-        // tied to the old provider's catalog (e.g. "gpt-5.5" for OpenAI)
-        // and won't exist in the new provider's catalog. The runtime
-        // falls back to the new provider's default until the user picks
-        // one via /model.
         if provider_id != PROVIDER_OPENAI {
             let codex_home = self.config.codex_home.clone();
             let provider_for_edit = provider_id.to_string();
             let edit_result = tokio::task::spawn_blocking(move || {
                 ConfigEditsBuilder::new(&codex_home)
-                    .clear_model_and_provider()
-                    .with_edits([ConfigEdit::SetModel {
-                        model: None,
-                        effort: None,
-                        model_provider: Some(provider_for_edit),
-                    }])
+                    .with_edits([
+                        ConfigEdit::ClearPath {
+                            segments: vec!["model".to_string()],
+                        },
+                        ConfigEdit::SetPath {
+                            segments: vec!["model_provider".to_string()],
+                            value: toml_edit::value(provider_for_edit),
+                        },
+                    ])
                     .apply_blocking()
             })
             .await;
@@ -1325,16 +1223,11 @@ impl AccountRequestProcessor {
     }
 
     async fn login_gemini_oauth_v2(&self, request_id: ConnectionRequestId) {
-        // Boots the Gemini Code Assist OAuth callback server. The TUI opens
-        // the returned `auth_url` in a browser; the user finishes the OAuth
-        // flow there; the server persists the resulting credential and the
-        // task below fires `AccountLoginCompleted` with the matching
-        // `login_id`. Mirrors the Copilot device-code path.
-        let opts = codex_login::GeminiServerOptions::new(
+        let opts = GeminiServerOptions::new(
             self.config.codex_home.to_path_buf(),
             self.config.cli_auth_credentials_store_mode,
         );
-        let server = match codex_login::run_gemini_login_server(opts) {
+        let server = match run_gemini_login_server(opts) {
             Ok(server) => server,
             Err(err) => {
                 let resp: Result<LoginAccountResponse, JSONRPCErrorError> = Err(internal_error(
@@ -1354,9 +1247,6 @@ impl AccountRequestProcessor {
         let result: Result<LoginAccountResponse, JSONRPCErrorError> = Ok(response);
         self.outgoing.send_result(request_id, result).await;
 
-        // Drive the server to completion in a background task so the request
-        // returns immediately. Completion / failure fires
-        // AccountLoginCompletedNotification with the same login_id.
         let outgoing = self.outgoing.clone();
         tokio::spawn(async move {
             let (success, error_msg) = match server.block_until_done().await {
@@ -1399,7 +1289,12 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn ata_verify_otp_v2(&self, request_id: ConnectionRequestId, email: String, otp: String) {
+    async fn ata_verify_otp_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        email: String,
+        otp: String,
+    ) {
         let result = self
             .ata_verify_otp_common(email.as_str(), otp.as_str())
             .await
@@ -1407,9 +1302,6 @@ impl AccountRequestProcessor {
         let verified = result.is_ok();
         self.outgoing.send_result(request_id, result).await;
         if verified {
-            // Reuse the existing account-updated emit so the TUI's
-            // /account view and onboarding success screen see the new
-            // ATA session immediately.
             let payload = self.current_account_updated_notification();
             self.outgoing
                 .send_server_notification(ServerNotification::AccountUpdated(payload))
@@ -1439,6 +1331,12 @@ impl AccountRequestProcessor {
                         "failed to persist ATA session: {err}"
                     )));
                 }
+                // Refresh the in-memory AuthManager so the next call to
+                // `auth_cached()` returns the freshly-persisted
+                // `CodexAuth::Ata` — without this reload, the account
+                // status panel would keep showing the pre-sign-in state
+                // until the next `ata` restart.
+                self.auth_manager.reload().await;
                 Ok(user_email)
             }
             Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
@@ -1450,7 +1348,13 @@ impl AccountRequestProcessor {
 
     async fn ata_logout_v2(&self, request_id: ConnectionRequestId) {
         let result = match delete_ata_session(&self.config.codex_home) {
-            Ok(_) => Ok(LoginAccountResponse::AtaLogout {}),
+            Ok(_) => {
+                // Reload so the in-memory AuthManager drops the cached
+                // `CodexAuth::Ata`; otherwise voice mode / status would
+                // keep behaving as if the user were signed in.
+                self.auth_manager.reload().await;
+                Ok(LoginAccountResponse::AtaLogout {})
+            }
             Err(err) => Err(internal_error(format!(
                 "failed to clear ATA session: {err}"
             ))),
