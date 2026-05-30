@@ -469,13 +469,13 @@ impl ChatWidget {
                 );
             }
             SlashCommand::Research => {
-                self.add_info_message(
-                    "The /research panel is not yet wired in this build (TUI Wave 8 \
-                     follow-up). Configure research tools via `~/.ata/config.toml` \
-                     `[research]` for now."
-                        .to_string(),
-                    /*hint*/ None,
+                let items = crate::bottom_pane::build_research_tool_items(&self.config.features);
+                let view = crate::bottom_pane::ResearchToolsView::new(
+                    items,
+                    self.app_event_tx.clone(),
                 );
+                self.bottom_pane.show_view(Box::new(view));
+                self.request_redraw();
             }
             SlashCommand::Scheduling => {
                 self.app_event_tx

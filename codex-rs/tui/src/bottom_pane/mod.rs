@@ -143,6 +143,7 @@ mod research_tools_view;
 pub(crate) use research_tools_view::ResearchToolItem;
 pub(crate) use research_tools_view::ResearchToolsView;
 pub(crate) use research_tools_view::build_reading_view_tool_items;
+pub(crate) use research_tools_view::build_research_tool_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
