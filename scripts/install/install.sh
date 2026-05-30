@@ -4,8 +4,8 @@ set -eu
 
 RELEASE="latest"
 
-BIN_DIR="${CODEX_INSTALL_DIR:-$HOME/.local/bin}"
-BIN_PATH="$BIN_DIR/codex"
+BIN_DIR="${ATA_INSTALL_DIR:-${CODEX_INSTALL_DIR:-$HOME/.local/bin}}"
+BIN_PATH="$BIN_DIR/ata"
 CODEX_HOME_DIR="${CODEX_HOME:-$HOME/.codex}"
 STANDALONE_ROOT="$CODEX_HOME_DIR/packages/standalone"
 RELEASES_DIR="$STANDALONE_ROOT/releases"
@@ -33,9 +33,6 @@ normalize_version() {
   case "$1" in
     "" | latest)
       printf 'latest\n'
-      ;;
-    rust-v*)
-      printf '%s\n' "${1#rust-v}"
       ;;
     v*)
       printf '%s\n' "${1#v}"
@@ -86,7 +83,7 @@ download_file() {
     return
   fi
 
-  echo "curl or wget is required to install Codex." >&2
+  echo "curl or wget is required to install Ata." >&2
   exit 1
 }
 
@@ -103,7 +100,7 @@ download_text() {
     return
   fi
 
-  echo "curl or wget is required to install Codex." >&2
+  echo "curl or wget is required to install Ata." >&2
   exit 1
 }
 
@@ -111,38 +108,33 @@ release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
 
-  printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+  printf 'https://github.com/Agents2AgentsAI/ata/releases/download/v%s/%s\n' "$resolved_version" "$asset"
 }
 
 release_metadata_url() {
   resolved_version="$1"
 
-  printf 'https://api.github.com/repos/openai/codex/releases/tags/rust-v%s\n' "$resolved_version"
+  printf 'https://api.github.com/repos/Agents2AgentsAI/ata/releases/tags/v%s\n' "$resolved_version"
 }
 
-release_asset_digest_or_empty() {
+release_asset_digest() {
   asset="$1"
   resolved_version="$2"
   release_json="$(download_text "$(release_metadata_url "$resolved_version")")"
 
   digest="$(printf '%s\n' "$release_json" | awk -v asset="$asset" '
-    /"name":[[:space:]]*"[^"]+"/ {
-      name = $0
-      sub(/^.*"name":[[:space:]]*"/, "", name)
-      sub(/".*$/, "", name)
-      if (name == asset) {
+    {
+      if ($0 ~ "\"name\":[[:space:]]*\"" asset "\"") {
         in_asset = 1
         asset_depth = depth
       }
-    }
 
-    in_asset && /"digest":[[:space:]]*"[^"]+"/ {
-      digest = $0
-      sub(/^.*"digest":[[:space:]]*"/, "", digest)
-      sub(/".*$/, "", digest)
-    }
+      if (in_asset && /"digest":[[:space:]]*"[^"]+"/) {
+        sub(/^.*"digest":[[:space:]]*"/, "")
+        sub(/".*$/, "")
+        digest = $0
+      }
 
-    {
       line = $0
       opens = gsub(/\{/, "{", line)
       closes = gsub(/\}/, "}", line)
@@ -152,7 +144,6 @@ release_asset_digest_or_empty() {
         in_asset = 0
       }
     }
-
     END {
       if (digest != "") {
         print digest
@@ -165,54 +156,10 @@ release_asset_digest_or_empty() {
       printf '%s\n' "${digest#sha256:}"
       ;;
     *)
-      return 1
+      echo "Could not find SHA-256 digest for release asset $asset." >&2
+      exit 1
       ;;
   esac
-}
-
-release_asset_exists() {
-  asset="$1"
-  resolved_version="$2"
-
-  release_asset_digest_or_empty "$asset" "$resolved_version" >/dev/null 2>&1
-}
-
-release_asset_digest() {
-  asset="$1"
-  resolved_version="$2"
-
-  digest="$(release_asset_digest_or_empty "$asset" "$resolved_version" || true)"
-  if [ -z "$digest" ]; then
-    echo "Could not find SHA-256 digest for release asset $asset." >&2
-    exit 1
-  fi
-
-  printf '%s\n' "$digest"
-}
-
-package_archive_digest() {
-  asset="$1"
-  manifest_path="$2"
-
-  digest="$(awk -v asset="$asset" '
-    $2 == asset && $1 ~ /^[0-9a-fA-F]{64}$/ {
-      print tolower($1)
-      found = 1
-      exit
-    }
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  ' "$manifest_path" 2>/dev/null || true)"
-
-  if [ -z "$digest" ]; then
-    echo "Could not find SHA-256 digest for $asset in codex-package_SHA256SUMS." >&2
-    exit 1
-  fi
-
-  printf '%s\n' "$digest"
 }
 
 file_sha256() {
@@ -233,7 +180,7 @@ file_sha256() {
     return
   fi
 
-  echo "sha256sum, shasum, or openssl is required to verify the Codex download." >&2
+  echo "sha256sum, shasum, or openssl is required to verify the Ata download." >&2
   exit 1
 }
 
@@ -243,7 +190,7 @@ verify_archive_digest() {
   actual_digest="$(file_sha256 "$archive_path")"
 
   if [ "$actual_digest" != "$expected_digest" ]; then
-    echo "Downloaded Codex archive checksum did not match expected digest." >&2
+    echo "Downloaded Ata archive checksum did not match release metadata." >&2
     echo "expected: $expected_digest" >&2
     echo "actual:   $actual_digest" >&2
     exit 1
@@ -252,7 +199,7 @@ verify_archive_digest() {
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "$1 is required to install Codex." >&2
+    echo "$1 is required to install Ata." >&2
     exit 1
   fi
 }
@@ -265,11 +212,11 @@ resolve_version() {
     return
   fi
 
-  release_json="$(download_text "https://api.github.com/repos/openai/codex/releases/latest")"
-  resolved="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"rust-v\([^"]*\)".*/\1/p' | head -n 1)"
+  release_json="$(download_text "https://api.github.com/repos/Agents2AgentsAI/ata/releases/latest")"
+  resolved="$(printf '%s\n' "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"v\([^"]*\)".*/\1/p' | head -n 1)"
 
   if [ -z "$resolved" ]; then
-    echo "Failed to resolve the latest Codex release version." >&2
+    echo "Failed to resolve the latest Ata release version." >&2
     exit 1
   fi
 
@@ -310,8 +257,8 @@ add_to_path() {
 
   profile="$(pick_profile)"
   path_profile="$profile"
-  begin_marker="# >>> Codex installer >>>"
-  end_marker="# <<< Codex installer <<<"
+  begin_marker="# >>> Ata installer >>>"
+  end_marker="# <<< Ata installer <<<"
   path_line="export PATH=\"$BIN_DIR:\$PATH\""
 
   if [ -f "$profile" ] && grep -F "$begin_marker" "$profile" >/dev/null 2>&1; then
@@ -456,7 +403,7 @@ cleanup_stale_install_artifacts() {
   find "$STANDALONE_ROOT" -mindepth 1 -maxdepth 1 -name '.current.*' -exec rm -f {} +
 
   if [ -d "$BIN_DIR" ]; then
-    find "$BIN_DIR" -mindepth 1 -maxdepth 1 -name '.codex.*' -exec rm -f {} +
+    find "$BIN_DIR" -mindepth 1 -maxdepth 1 -name '.ata.*' -exec rm -f {} +
   fi
 }
 
@@ -481,23 +428,17 @@ replace_path_with_symlink() {
 }
 
 version_from_binary() {
-  codex_path="$1"
+  ata_path="$1"
 
-  if [ ! -x "$codex_path" ]; then
+  if [ ! -x "$ata_path" ]; then
     return 1
   fi
 
-  "$codex_path" --version 2>/dev/null | sed -n 's/.* \([0-9][0-9A-Za-z.+-]*\)$/\1/p' | head -n 1
+  "$ata_path" --version 2>/dev/null | sed -n 's/.* \([0-9][0-9A-Za-z.+-]*\)$/\1/p' | head -n 1
 }
 
 current_installed_version() {
-  version="$(version_from_binary "$CURRENT_LINK/bin/codex" || true)"
-  if [ -n "$version" ]; then
-    printf '%s\n' "$version"
-    return 0
-  fi
-
-  version="$(version_from_binary "$CURRENT_LINK/codex" || true)"
+  version="$(version_from_binary "$CURRENT_LINK/ata" || true)"
   if [ -n "$version" ]; then
     printf '%s\n' "$version"
     return 0
@@ -506,11 +447,11 @@ current_installed_version() {
   return 0
 }
 
-resolve_existing_codex() {
-  command -v codex 2>/dev/null || true
+resolve_existing_ata() {
+  command -v ata 2>/dev/null || true
 }
 
-classify_existing_codex() {
+classify_existing_ata() {
   existing_path="$1"
 
   if [ -z "$existing_path" ] || [ "$existing_path" = "$BIN_PATH" ]; then
@@ -571,37 +512,37 @@ prompt_yes_no() {
 print_launch_instructions() {
   case "$path_action" in
     added)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && ata"
+      step "Future terminals: open a new terminal and run: ata"
       step "PATH was added to $path_profile"
       ;;
     updated)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && ata"
+      step "Future terminals: open a new terminal and run: ata"
       step "PATH was updated in $path_profile"
       ;;
     configured)
-      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && codex"
-      step "Future terminals: open a new terminal and run: codex"
+      step "Current terminal: export PATH=\"$BIN_DIR:\$PATH\" && ata"
+      step "Future terminals: open a new terminal and run: ata"
       step "PATH is already configured in $path_profile"
       ;;
     *)
-      step "Current terminal: codex"
-      step "Future terminals: open a new terminal and run: codex"
+      step "Current terminal: ata"
+      step "Future terminals: open a new terminal and run: ata"
       ;;
   esac
 }
 
-maybe_launch_codex_now() {
-  if prompt_yes_no "Start Codex now?"; then
-    step "Launching Codex"
+maybe_launch_ata_now() {
+  if prompt_yes_no "Start Ata now?"; then
+    step "Launching Ata"
     "$BIN_PATH"
   fi
 }
 
 detect_conflicting_install() {
-  existing_path="$(resolve_existing_codex)"
-  manager="$(classify_existing_codex "$existing_path" || true)"
+  existing_path="$(resolve_existing_ata)"
+  manager="$(classify_existing_ata "$existing_path" || true)"
 
   if [ -z "$manager" ]; then
     return
@@ -609,8 +550,8 @@ detect_conflicting_install() {
 
   conflict_manager="$manager"
   conflict_path="$existing_path"
-  step "Detected existing $manager-managed Codex at $existing_path"
-  warn "Multiple managed Codex installs can be ambiguous because PATH order decides which one runs."
+  step "Detected existing $manager-managed Ata at $existing_path"
+  warn "Multiple managed Ata installs can be ambiguous because PATH order decides which one runs."
 }
 
 handle_conflicting_install() {
@@ -620,63 +561,38 @@ handle_conflicting_install() {
 
   case "$conflict_manager" in
     brew)
-      uninstall_cmd="brew uninstall --cask codex"
+      uninstall_cmd="brew uninstall --cask ata"
       ;;
     bun)
-      uninstall_cmd="bun remove -g @openai/codex"
+      uninstall_cmd="bun remove -g @a2a-ai/ata"
       ;;
     *)
-      uninstall_cmd="npm uninstall -g @openai/codex"
+      uninstall_cmd="npm uninstall -g @a2a-ai/ata"
       ;;
   esac
 
-  if prompt_yes_no "Uninstall the existing $conflict_manager-managed Codex now?"; then
+  if prompt_yes_no "Uninstall the existing $conflict_manager-managed Ata now?"; then
     step "Running: $uninstall_cmd"
     if ! sh -c "$uninstall_cmd"; then
-      warn "Failed to uninstall the existing $conflict_manager-managed Codex. Continuing with the standalone install."
+      warn "Failed to uninstall the existing $conflict_manager-managed Ata. Continuing with the standalone install."
     fi
   else
-    warn "Leaving the existing $conflict_manager-managed Codex installed. PATH order will determine which codex runs."
+    warn "Leaving the existing $conflict_manager-managed Ata installed. PATH order will determine which ata runs."
   fi
 }
 
-install_package_release() {
+install_release() {
   release_dir="$1"
-  archive_path="$2"
+  vendor_root="$2"
   stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
 
   mkdir -p "$RELEASES_DIR"
   rm -rf "$stage_release"
-  mkdir -p "$stage_release"
-  tar -xzf "$archive_path" -C "$stage_release"
-  chmod 0755 "$stage_release/bin/codex" "$stage_release/codex-path/rg"
-  if [ -f "$stage_release/codex-resources/bwrap" ]; then
-    chmod 0755 "$stage_release/codex-resources/bwrap"
-  fi
-  ln -sf "bin/codex" "$stage_release/codex"
-
-  if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
-    rm -rf "$release_dir"
-  fi
-  mv "$stage_release" "$release_dir"
-}
-
-install_legacy_platform_npm_release() {
-  release_dir="$1"
-  archive_path="$2"
-  target="$3"
-  stage_release="$RELEASES_DIR/.staging.$(basename "$release_dir").$$"
-  extract_dir="$tmp_dir/extract"
-  vendor_root="$extract_dir/package/vendor/$target"
-
-  mkdir -p "$RELEASES_DIR"
-  rm -rf "$stage_release" "$extract_dir"
-  mkdir -p "$stage_release/codex-resources" "$extract_dir"
-  tar -xzf "$archive_path" -C "$extract_dir"
-
-  cp "$vendor_root/codex/codex" "$stage_release/codex"
+  mkdir -p "$stage_release/codex-resources"
+  cp "$vendor_root/ata/ata" "$stage_release/ata"
   cp "$vendor_root/path/rg" "$stage_release/codex-resources/rg"
-  chmod 0755 "$stage_release/codex" "$stage_release/codex-resources/rg"
+  chmod 0755 "$stage_release/ata"
+  chmod 0755 "$stage_release/codex-resources/rg"
   if [ -f "$vendor_root/codex-resources/bwrap" ]; then
     cp "$vendor_root/codex-resources/bwrap" "$stage_release/codex-resources/bwrap"
     chmod 0755 "$stage_release/codex-resources/bwrap"
@@ -692,34 +608,15 @@ release_dir_is_complete() {
   release_dir="$1"
   expected_version="$2"
   expected_target="$3"
-  layout="$4"
 
   [ -d "$release_dir" ] &&
-    [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ] ||
-    return 1
-
-  case "$layout" in
-    package)
-      [ -f "$release_dir/codex-package.json" ] &&
-        [ -x "$release_dir/bin/codex" ] &&
-        [ -x "$release_dir/codex" ] &&
-        [ -x "$release_dir/codex-path/rg" ] ||
-        return 1
-      ;;
-    legacy-platform-npm)
-      [ -x "$release_dir/codex" ] &&
-        [ -x "$release_dir/codex-resources/rg" ] ||
-        return 1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-
-  case "$layout:$expected_target" in
-    package:*linux* | legacy-platform-npm:*linux*) [ -x "$release_dir/codex-resources/bwrap" ] ;;
-    *) true ;;
-  esac
+    [ -x "$release_dir/ata" ] &&
+    [ -x "$release_dir/codex-resources/rg" ] &&
+    [ "$(basename "$release_dir")" = "$expected_version-$expected_target" ] &&
+    case "$expected_target" in
+      *linux*) [ -x "$release_dir/codex-resources/bwrap" ] ;;
+      *) true ;;
+    esac
 }
 
 update_current_link() {
@@ -729,23 +626,11 @@ update_current_link() {
   replace_path_with_symlink "$CURRENT_LINK" "$release_dir" "$tmp_link"
 }
 
-release_codex_relative_path() {
-  release_dir="$1"
-
-  if [ -x "$release_dir/bin/codex" ]; then
-    printf 'bin/codex\n'
-  else
-    printf 'codex\n'
-  fi
-}
-
 update_visible_command() {
-  release_dir="$1"
   mkdir -p "$BIN_DIR"
-  tmp_link="$BIN_DIR/.codex.$$"
-  codex_relative_path="$(release_codex_relative_path "$release_dir")"
+  tmp_link="$BIN_DIR/.ata.$$"
 
-  replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/$codex_relative_path" "$tmp_link"
+  replace_path_with_symlink "$BIN_PATH" "$CURRENT_LINK/ata" "$tmp_link"
 }
 
 verify_visible_command() {
@@ -812,31 +697,18 @@ else
 fi
 
 resolved_version="$(resolve_version)"
-package_asset="codex-package-$vendor_target.tar.gz"
-checksum_asset="codex-package_SHA256SUMS"
-if release_asset_exists "$package_asset" "$resolved_version" &&
-  release_asset_exists "$checksum_asset" "$resolved_version"; then
-  install_layout="package"
-  asset="$package_asset"
-elif release_asset_exists "codex-npm-$npm_tag-$resolved_version.tgz" "$resolved_version"; then
-  install_layout="legacy-platform-npm"
-  asset="codex-npm-$npm_tag-$resolved_version.tgz"
-else
-  echo "Could not find Codex package or platform npm release assets for Codex $resolved_version." >&2
-  exit 1
-fi
+asset="ata-npm-$npm_tag-$resolved_version.tgz"
 download_url="$(release_url_for_asset "$asset" "$resolved_version")"
-checksum_url="$(release_url_for_asset "$checksum_asset" "$resolved_version")"
 release_name="$resolved_version-$vendor_target"
 release_dir="$RELEASES_DIR/$release_name"
 current_version="$(current_installed_version)"
 
 if [ -n "$current_version" ] && [ "$current_version" != "$resolved_version" ]; then
-  step "Updating Codex CLI from $current_version to $resolved_version"
+  step "Updating Ata CLI from $current_version to $resolved_version"
 elif [ -n "$current_version" ]; then
-  step "Updating Codex CLI"
+  step "Updating Ata CLI"
 else
-  step "Installing Codex CLI"
+  step "Installing Ata CLI"
 fi
 step "Detected platform: $platform_label"
 step "Resolved version: $resolved_version"
@@ -855,35 +727,27 @@ trap cleanup EXIT INT TERM
 acquire_install_lock
 cleanup_stale_install_artifacts
 
-if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target" "$install_layout"; then
+if ! release_dir_is_complete "$release_dir" "$resolved_version" "$vendor_target"; then
   if [ -e "$release_dir" ] || [ -L "$release_dir" ]; then
     warn "Found incomplete existing release at $release_dir; reinstalling."
   fi
 
   archive_path="$tmp_dir/$asset"
-  checksum_path="$tmp_dir/$checksum_asset"
+  extract_dir="$tmp_dir/extract"
 
-  step "Downloading Codex CLI"
-  if [ "$install_layout" = "package" ]; then
-    checksum_digest="$(release_asset_digest "$checksum_asset" "$resolved_version")"
-    download_file "$checksum_url" "$checksum_path"
-    verify_archive_digest "$checksum_path" "$checksum_digest"
-    expected_digest="$(package_archive_digest "$asset" "$checksum_path")"
-  else
-    expected_digest="$(release_asset_digest "$asset" "$resolved_version")"
-  fi
+  step "Downloading Ata CLI"
+  expected_digest="$(release_asset_digest "$asset" "$resolved_version")"
   download_file "$download_url" "$archive_path"
   verify_archive_digest "$archive_path" "$expected_digest"
 
+  mkdir -p "$extract_dir"
+  tar -xzf "$archive_path" -C "$extract_dir"
+
   step "Installing standalone package to $release_dir"
-  if [ "$install_layout" = "package" ]; then
-    install_package_release "$release_dir" "$archive_path"
-  else
-    install_legacy_platform_npm_release "$release_dir" "$archive_path" "$vendor_target"
-  fi
+  install_release "$release_dir" "$extract_dir/package/vendor/$vendor_target"
 fi
 update_current_link "$release_dir"
-update_visible_command "$release_dir"
+update_visible_command
 add_to_path
 verify_visible_command
 release_install_lock
@@ -905,5 +769,5 @@ case "$path_action" in
     ;;
 esac
 
-printf 'Codex CLI %s installed successfully.\n' "$resolved_version"
-maybe_launch_codex_now
+printf 'Ata CLI %s installed successfully.\n' "$resolved_version"
+maybe_launch_ata_now
