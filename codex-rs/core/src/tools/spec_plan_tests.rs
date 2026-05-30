@@ -955,3 +955,105 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     unsupported_provider.assert_visible_lacks(&["web_search"]);
 }
+
+// ---------------------------------------------------------------------------
+// ATA tool registration safety net
+//
+// The v0.130 upstream merge migrated tool registration from the legacy
+// `builder.register_handler(Arc::new(X))` path to `planned_tools.add(X)`
+// but only covered upstream's handlers — every ATA handler was left
+// behind in the source tree without a registration. The orphan test file
+// `spec_tests.rs` (since deleted) would have caught it but was itself not
+// declared as a module, so the safety net was silently disconnected.
+//
+// These tests live in the active `spec_plan_tests` module specifically so
+// the next time someone refactors the tool plumbing, an unregistered ATA
+// handler fails the build instead of slipping through to ship.
+// ---------------------------------------------------------------------------
+
+const READING_VIEW_AGENT_TOOLS: &[&str] = &[
+    "present_reading_view",
+    "update_document_section",
+    "append_to_section",
+    "add_document_section",
+    "patch_document_section",
+    "attach_url_files",
+    "crop_figure",
+];
+
+const SCHEDULING_AGENT_TOOLS: &[&str] = &[
+    "cron_create",
+    "cron_list",
+    "cron_delete",
+    "cron_create_session",
+    "cron_list_session",
+    "cron_delete_session",
+    "monitor_start",
+    "monitor_list",
+    "monitor_stop",
+    "monitor_wait",
+    "monitor_watch_for",
+];
+
+#[tokio::test]
+async fn reading_view_tools_registered_when_enabled() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::ReadingView, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(READING_VIEW_AGENT_TOOLS);
+    plan.assert_registered_contains(READING_VIEW_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn reading_view_tools_omitted_when_disabled() {
+    // With the feature off and no [reading_view].mode override, the backward
+    // compat branch in reading_view_config_mode_from_config() resolves to
+    // Disabled and the tools must drop out of both surfaces.
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::ReadingView, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(READING_VIEW_AGENT_TOOLS);
+    plan.assert_registered_lacks(READING_VIEW_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn artifacts_tool_registered_when_feature_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Artifact, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(&["artifacts"]);
+    plan.assert_registered_contains(&["artifacts"]);
+}
+
+#[tokio::test]
+async fn artifacts_tool_omitted_when_feature_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Artifact, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(&["artifacts"]);
+    plan.assert_registered_lacks(&["artifacts"]);
+}
+
+#[tokio::test]
+async fn scheduling_tools_registered_when_feature_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Scheduling, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(SCHEDULING_AGENT_TOOLS);
+    plan.assert_registered_contains(SCHEDULING_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn scheduling_tools_omitted_when_feature_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Scheduling, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(SCHEDULING_AGENT_TOOLS);
+    plan.assert_registered_lacks(SCHEDULING_AGENT_TOOLS);
+}
