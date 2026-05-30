@@ -1080,7 +1080,17 @@ async fn js_repl_tool_omitted_when_feature_off() {
     plan.assert_registered_lacks(&["js_repl"]);
 }
 
-const DATA_AGENT_TOOLS: &[&str] = &["dataset_search", "dataset_get"];
+const DATA_AGENT_TOOLS: &[&str] = &[
+    "dataset_search",
+    "dataset_get",
+    "dataset_list_files",
+    "dataset_download",
+    "hf_dataset_info",
+    "kaggle_dataset_info",
+    "kaggle_competitions",
+    "kaggle_competition_list_files",
+    "kaggle_competition_download",
+];
 
 #[tokio::test]
 async fn data_tools_registered_when_feature_on() {
@@ -1138,6 +1148,164 @@ async fn research_tools_omitted_when_per_tool_flags_off() {
     .await;
     plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);
     plan.assert_registered_lacks(RESEARCH_AGENT_TOOLS);
+}
+
+const RESEARCH_PAPER_AGENT_TOOLS: &[&str] = &[
+    "paper_search",
+    "paper_get",
+    "paper_citations",
+    "paper_references",
+    "paper_recommendations",
+];
+
+#[tokio::test]
+async fn research_paper_family_registered_when_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_PAPER_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_PAPER_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_paper_family_omitted_when_paper_flag_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_PAPER_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_PAPER_AGENT_TOOLS);
+}
+
+const RESEARCH_HN_AGENT_TOOLS: &[&str] = &["hn_search", "hn_get_thread"];
+
+#[tokio::test]
+async fn research_hn_family_registered_when_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_HN_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_HN_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_hn_family_omitted_when_hn_flag_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_HN_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_HN_AGENT_TOOLS);
+}
+
+const RESEARCH_PATENT_AGENT_TOOLS: &[&str] = &["patent_search", "patent_get"];
+
+#[tokio::test]
+async fn research_patent_family_registered_when_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPatents, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_PATENT_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_PATENT_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_patent_family_omitted_when_patent_flag_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPatents, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_PATENT_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_PATENT_AGENT_TOOLS);
+}
+
+const RESEARCH_ZOTERO_AGENT_TOOLS: &[&str] = &[
+    "zotero_search",
+    "zotero_get_tags",
+    "zotero_get_recent",
+    "zotero_advanced_search",
+    "zotero_grep_text",
+    "zotero_search_notes",
+    "zotero_get_item",
+    "zotero_get_item_citation",
+    "zotero_get_fulltext",
+    "zotero_get_notes",
+    "zotero_get_annotations",
+    "zotero_get_attachments",
+    "zotero_get_collections",
+    "zotero_list_groups",
+    "zotero_get_collection_items",
+    "zotero_create_collection",
+    "zotero_find_or_create_collection",
+    "zotero_create_items",
+    "zotero_update_items",
+    "zotero_add_items_to_collection",
+    "zotero_create_attachment_link",
+];
+
+#[tokio::test]
+async fn research_zotero_family_registered_when_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchZotero, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_ZOTERO_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_ZOTERO_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_zotero_family_omitted_when_zotero_flag_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchZotero, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_ZOTERO_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_ZOTERO_AGENT_TOOLS);
+}
+
+const RESEARCH_REPO_ANALYSIS_AGENT_TOOLS: &[&str] = &[
+    "repo_clone_and_summarize",
+    "repo_find_models",
+    "repo_extract_requirements",
+    "repo_find_entrypoints",
+    "repo_extract_io_shapes",
+    "repo_get_health",
+    "repo_find_export_paths",
+    "repo_extract_config_schema",
+    "repo_diff_requirements",
+];
+
+#[tokio::test]
+async fn research_repo_analysis_family_registered_when_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchRepoAnalysis, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_REPO_ANALYSIS_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_REPO_ANALYSIS_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_repo_analysis_family_omitted_when_repo_flag_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchRepoAnalysis, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_REPO_ANALYSIS_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_REPO_ANALYSIS_AGENT_TOOLS);
 }
 
 #[cfg(any(feature = "lsp", feature = "treesitter"))]

@@ -56,6 +56,8 @@ pub struct CacheTtls {
     pub zotero_items: Duration,
     pub hn_search: Duration,
     pub patent_search: Duration,
+    pub repo_analysis: Duration,
+    pub repo_health: Duration,
     pub negative: Duration,
 }
 
@@ -85,6 +87,8 @@ impl Default for CacheTtls {
             zotero_items: Duration::from_secs(2 * 60),
             hn_search: Duration::from_secs(5 * 60),
             patent_search: Duration::from_secs(10 * 60),
+            repo_analysis: Duration::from_secs(30 * 60),
+            repo_health: Duration::from_secs(15 * 60),
             negative: Duration::from_secs(30),
         }
     }

@@ -236,6 +236,41 @@ impl ResearchBridgeHandler {
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
             }
+            "repo_clone_and_summarize" => dispatch_with_params!(RepoUrlAndBranchArgs, |params| self
+                .toolkit
+                .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
+            "repo_find_models" => dispatch_with_params!(RepoUrlAndFrameworkArgs, |params| self
+                .toolkit
+                .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),
+            "repo_extract_requirements" => {
+                dispatch_with_params!(RepoUrlArgs, |params| self
+                    .toolkit
+                    .repo_extract_requirements(params.repo_url.as_str()))
+            }
+            "repo_find_entrypoints" => dispatch_with_params!(RepoUrlAndTaskHintArgs, |params| self
+                .toolkit
+                .repo_find_entrypoints(params.repo_url.as_str(), params.task_hint.as_deref())),
+            "repo_extract_io_shapes" => dispatch_with_params!(RepoUrlAndModelClassArgs, |params| {
+                self.toolkit
+                    .repo_extract_io_shapes(params.repo_url.as_str(), params.model_class.as_deref())
+            }),
+            "repo_get_health" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_get_health(params.repo_url.as_str())),
+            "repo_find_export_paths" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_find_export_paths(params.repo_url.as_str())),
+            "repo_extract_config_schema" => dispatch_with_params!(RepoUrlArgs, |params| self
+                .toolkit
+                .repo_extract_config_schema(params.repo_url.as_str())),
+            "repo_diff_requirements" => {
+                dispatch_with_params!(RepoDiffRequirementsArgs, |params| self
+                    .toolkit
+                    .repo_diff_requirements(
+                        params.repo_url.as_str(),
+                        params.local_requirements_path.as_str()
+                    ))
+            }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "unknown research tool: {tool_name}"
             ))),
@@ -436,6 +471,41 @@ struct PaperPaginationArgs {
     limit: Option<u32>,
     fields: Option<Vec<String>>,
     max_chars_per_item: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlArgs {
+    repo_url: String,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndBranchArgs {
+    repo_url: String,
+    branch: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndFrameworkArgs {
+    repo_url: String,
+    framework: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndTaskHintArgs {
+    repo_url: String,
+    task_hint: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoUrlAndModelClassArgs {
+    repo_url: String,
+    model_class: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoDiffRequirementsArgs {
+    repo_url: String,
+    local_requirements_path: String,
 }
 
 #[cfg(test)]
