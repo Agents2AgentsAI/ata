@@ -1126,24 +1126,33 @@ async fn research_tools_registered_when_master_and_per_tool_on() {
     plan.assert_registered_contains(RESEARCH_AGENT_TOOLS);
 }
 
+// Master `Feature::Research` is no longer a precondition (see comment in
+// `add_research_tools`). With master OFF but per-family flags ON, the
+// tools must still register — the `/research` slash command deliberately
+// clears master and treats per-family as the source of truth.
 #[tokio::test]
-async fn research_tools_omitted_when_master_off() {
+async fn research_tools_registered_when_per_family_on_regardless_of_master() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::Research, /*enabled*/ false);
         set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ true);
         set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ true);
     })
     .await;
-    plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);
-    plan.assert_registered_lacks(RESEARCH_AGENT_TOOLS);
+    plan.assert_visible_contains(RESEARCH_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_AGENT_TOOLS);
 }
 
 #[tokio::test]
 async fn research_tools_omitted_when_per_tool_flags_off() {
     let plan = probe(|turn| {
+        // Master ON, all per-family OFF — nothing registers because the
+        // per-family flags are now the sole authority.
         set_feature(turn, Feature::Research, /*enabled*/ true);
         set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ false);
         set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ false);
+        set_feature(turn, Feature::ResearchPatents, /*enabled*/ false);
+        set_feature(turn, Feature::ResearchZotero, /*enabled*/ false);
+        set_feature(turn, Feature::ResearchRepoAnalysis, /*enabled*/ false);
     })
     .await;
     plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);

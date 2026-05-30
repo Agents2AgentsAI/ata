@@ -726,9 +726,12 @@ fn add_data_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Planned
 /// session state are reused across every call.
 fn add_research_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     let features = context.turn_context.features.get();
-    if !features.enabled(Feature::Research) {
-        return;
-    }
+    // Note: the master `Feature::Research` flag is NOT a precondition. The
+    // `/research` slash command deliberately clears it (see
+    // `tui/src/bottom_pane/research_tools_view.rs`), treating the per-family
+    // flags as the sole source of truth. Gate on those directly: if none are
+    // on, register nothing; otherwise register only the families the user
+    // opted into.
     let paper_search_on = features.enabled(Feature::ResearchPaperSearch);
     let hn_search_on = features.enabled(Feature::ResearchHackerNews);
     let patents_on = features.enabled(Feature::ResearchPatents);
