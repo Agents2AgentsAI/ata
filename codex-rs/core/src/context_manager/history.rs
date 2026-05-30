@@ -197,6 +197,76 @@ impl ContextManager {
         self.history_version = self.history_version.saturating_add(1);
     }
 
+    /// Drops up to `max_count` URL/inline file attachments from user messages
+    /// in the most recent turn. Returns metadata for each dropped attachment so
+    /// the caller can attempt cache-based recovery (e.g., re-inject the cached
+    /// bytes when the provider rejected the live URL fetch).
+    ///
+    /// `max_count == 0` is a no-op and returns an empty vec. Empty user
+    /// message content blocks are removed once their attachments are stripped.
+    pub(crate) fn drop_last_turn_url_files(
+        &mut self,
+        max_count: usize,
+    ) -> Vec<DroppedUrlFileInfo> {
+        if max_count == 0 {
+            return Vec::new();
+        }
+
+        let last_turn_start = self
+            .items
+            .iter()
+            .rposition(is_user_turn_boundary)
+            .unwrap_or(self.items.len());
+
+        let mut dropped = Vec::new();
+        let mut bumped = false;
+        for item in self.items[last_turn_start..].iter_mut() {
+            let ResponseItem::Message { role, content, .. } = item else {
+                continue;
+            };
+            if role != "user" {
+                continue;
+            }
+            content.retain_mut(|c| {
+                if dropped.len() >= max_count {
+                    return true;
+                }
+                match c {
+                    ContentItem::UrlFile { url, filename, .. } => {
+                        dropped.push(DroppedUrlFileInfo {
+                            url: Some(std::mem::take(url)),
+                            filename: filename.take(),
+                        });
+                        bumped = true;
+                        false
+                    }
+                    ContentItem::InputFile { filename, .. } => {
+                        dropped.push(DroppedUrlFileInfo {
+                            url: None,
+                            filename: filename.take(),
+                        });
+                        bumped = true;
+                        false
+                    }
+                    _ => true,
+                }
+            });
+        }
+
+        let len_before = self.items.len();
+        self.items.retain(|item| match item {
+            ResponseItem::Message { role, content, .. } if role == "user" => {
+                !content.is_empty()
+            }
+            _ => true,
+        });
+        if bumped || self.items.len() != len_before {
+            self.history_version = self.history_version.saturating_add(1);
+        }
+
+        dropped
+    }
+
     /// Replace image content in the last turn if it originated from a tool output.
     /// Returns true when a tool image was replaced, false otherwise.
     pub(crate) fn replace_last_turn_images(&mut self, placeholder: &str) -> bool {

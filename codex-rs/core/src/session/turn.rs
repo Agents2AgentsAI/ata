@@ -921,6 +921,12 @@ async fn run_sampling_request(
         .await;
     let mut retries = 0;
     let mut initial_input = Some(input);
+    // Tracks per-turn url-file recovery attempts so the loop can drop URL
+    // attachments and retry on context-window / file-rejection errors. Each
+    // recovery flavor only fires once per turn — repeated failures with no
+    // more attachments to drop propagate the error as before.
+    let mut url_recovery =
+        crate::session::url_file_recovery::UrlFileRecoveryState::default();
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -952,6 +958,15 @@ async fn run_sampling_request(
                 return Ok(output);
             }
             Err(CodexErr::ContextWindowExceeded) => {
+                if url_recovery
+                    .maybe_recover_context_window_exceeded(&sess, &turn_context)
+                    .await
+                {
+                    // Drop a URL-file attachment from the last user turn and
+                    // re-send the request. Loop back to rebuild the prompt
+                    // from the now-trimmed history.
+                    continue;
+                }
                 sess.set_total_tokens_full(&turn_context).await;
                 return Err(CodexErr::ContextWindowExceeded);
             }
@@ -961,6 +976,32 @@ async fn run_sampling_request(
                     sess.update_rate_limits(&turn_context, *rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
+            }
+            Err(CodexErr::InvalidRequest(msg)) => {
+                if url_recovery
+                    .maybe_recover_file_related_invalid_request(
+                        &sess,
+                        &turn_context,
+                        &msg,
+                    )
+                    .await
+                {
+                    continue;
+                }
+                return Err(CodexErr::InvalidRequest(msg));
+            }
+            Err(CodexErr::Api(msg)) => {
+                if url_recovery
+                    .maybe_recover_file_related_invalid_request(
+                        &sess,
+                        &turn_context,
+                        &msg,
+                    )
+                    .await
+                {
+                    continue;
+                }
+                return Err(CodexErr::Api(msg));
             }
             Err(err) => err,
         };
