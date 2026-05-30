@@ -13,6 +13,7 @@ pub(crate) mod cron_spec;
 pub(crate) mod cron;
 pub(crate) mod cron_session;
 pub(crate) mod data;
+pub(crate) mod data_bridge_spec;
 pub(crate) mod document_reader;
 mod dynamic;
 pub(crate) mod js_repl;
@@ -22,6 +23,7 @@ pub(crate) mod lsp;
 #[cfg(feature = "lsp")]
 pub(crate) mod lsp_workspace_edit;
 pub(crate) mod research;
+pub(crate) mod research_bridge_spec;
 pub(crate) mod extension_tools;
 mod goal;
 pub(crate) mod goal_spec;

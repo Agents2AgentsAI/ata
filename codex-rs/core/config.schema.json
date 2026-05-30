@@ -425,6 +425,9 @@
             "connectors": {
               "type": "boolean"
             },
+            "data_tools": {
+              "type": "boolean"
+            },
             "default_mode_request_user_input": {
               "type": "boolean"
             },
@@ -576,6 +579,9 @@
               "type": "boolean"
             },
             "runtime_metrics": {
+              "type": "boolean"
+            },
+            "scheduling": {
               "type": "boolean"
             },
             "search_tool": {
@@ -4459,6 +4465,9 @@
         "connectors": {
           "type": "boolean"
         },
+        "data_tools": {
+          "type": "boolean"
+        },
         "default_mode_request_user_input": {
           "type": "boolean"
         },
@@ -4610,6 +4619,9 @@
           "type": "boolean"
         },
         "runtime_metrics": {
+          "type": "boolean"
+        },
+        "scheduling": {
           "type": "boolean"
         },
         "search_tool": {

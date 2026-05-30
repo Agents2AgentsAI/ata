@@ -1077,3 +1077,63 @@ async fn js_repl_tool_omitted_when_feature_off() {
     plan.assert_visible_lacks(&["js_repl"]);
     plan.assert_registered_lacks(&["js_repl"]);
 }
+
+const DATA_AGENT_TOOLS: &[&str] = &["dataset_search", "dataset_get"];
+
+#[tokio::test]
+async fn data_tools_registered_when_feature_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::DataTools, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(DATA_AGENT_TOOLS);
+    plan.assert_registered_contains(DATA_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn data_tools_omitted_when_feature_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::DataTools, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(DATA_AGENT_TOOLS);
+    plan.assert_registered_lacks(DATA_AGENT_TOOLS);
+}
+
+const RESEARCH_AGENT_TOOLS: &[&str] = &["paper_search", "hn_search"];
+
+#[tokio::test]
+async fn research_tools_registered_when_master_and_per_tool_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(RESEARCH_AGENT_TOOLS);
+    plan.assert_registered_contains(RESEARCH_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_tools_omitted_when_master_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ false);
+        set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_AGENT_TOOLS);
+}
+
+#[tokio::test]
+async fn research_tools_omitted_when_per_tool_flags_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::Research, /*enabled*/ true);
+        set_feature(turn, Feature::ResearchPaperSearch, /*enabled*/ false);
+        set_feature(turn, Feature::ResearchHackerNews, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(RESEARCH_AGENT_TOOLS);
+    plan.assert_registered_lacks(RESEARCH_AGENT_TOOLS);
+}

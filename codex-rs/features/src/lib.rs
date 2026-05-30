@@ -279,6 +279,10 @@ pub enum Feature {
     /// `monitor_wait`, `monitor_watch_for`). Backed by `codex-scheduling`
     /// CronRegistry + MonitorRuntime on the Session.
     Scheduling,
+    /// ATA-private: agent-callable data tools (`dataset_search`, `dataset_get`).
+    /// Backed by `codex-data-tools::DataToolkit`. HuggingFace works without
+    /// credentials; Kaggle paths are gated separately by env-var presence.
+    DataTools,
 }
 
 impl Feature {
@@ -1309,6 +1313,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceMode,
         key: "voice_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::DataTools,
+        key: "data_tools",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

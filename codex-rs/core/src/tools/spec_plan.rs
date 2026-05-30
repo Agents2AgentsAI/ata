@@ -29,8 +29,16 @@ use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::artifacts::ArtifactsHandler;
 use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+use crate::tools::handlers::data::DataBridgeHandler;
+use crate::tools::handlers::data::build_data_config;
+use crate::tools::handlers::data_bridge_spec::create_dataset_get_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_search_tool;
 use crate::tools::handlers::js_repl::JsReplHandler;
 use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
+use crate::tools::handlers::research::ResearchBridgeHandler;
+use crate::tools::handlers::research::build_research_config;
+use crate::tools::handlers::research_bridge_spec::create_hn_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_search_tool;
 use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
 use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
 use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
@@ -542,6 +550,8 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_reading_view_tools(context, planned_tools);
     add_artifacts_tools(context, planned_tools);
     add_js_repl_tools(context, planned_tools);
+    add_data_tools(context, planned_tools);
+    add_research_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
@@ -614,6 +624,75 @@ fn add_js_repl_tools(
         return;
     }
     planned_tools.add(JsReplHandler::new(create_js_repl_tool()));
+}
+
+/// Register the agent-direct data tools (`dataset_search`, `dataset_get`)
+/// when `Feature::DataTools` is on. The handler is the same
+/// `DataBridgeHandler` that the dead `tools/js_repl` runtime would have
+/// driven, but exposed here as plain `ToolSpec::Function` tools so the
+/// model can call them directly without going through `js_repl`.
+///
+/// Each tool gets its own `DataBridgeHandler` instance sharing a single
+/// `Arc<DataToolkit>` so all data tool calls reuse the same rate-limited
+/// HTTP client + response cache for the session.
+fn add_data_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::DataTools)
+    {
+        return;
+    }
+    let config = &context.turn_context.config;
+    let data_config = build_data_config(None, config.codex_home.as_path(), config.cwd.as_path());
+    let http_client = codex_login::default_client::build_reqwest_client();
+    let toolkit = Arc::new(codex_data_tools::DataToolkit::new(http_client, data_config));
+    for (name, spec) in [
+        ("dataset_search", create_dataset_search_tool()),
+        ("dataset_get", create_dataset_get_tool()),
+    ] {
+        planned_tools.add(DataBridgeHandler::new(name, spec, toolkit.clone()));
+    }
+}
+
+/// Register the agent-direct research tools (`paper_search`, `hn_search`)
+/// when `Feature::Research` is on plus the relevant per-tool flag. Built
+/// against a single shared `Arc<ResearchToolkit>` so all research calls
+/// share the same rate-limited HTTP client + response cache + Zotero
+/// session state for the duration of the agent session.
+fn add_research_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    let features = context.turn_context.features.get();
+    if !features.enabled(Feature::Research) {
+        return;
+    }
+    let paper_search_on = features.enabled(Feature::ResearchPaperSearch);
+    let hn_search_on = features.enabled(Feature::ResearchHackerNews);
+    if !paper_search_on && !hn_search_on {
+        return;
+    }
+    let config = &context.turn_context.config;
+    let research_config =
+        build_research_config(None, config.codex_home.as_path(), config.cwd.as_path());
+    let http_client = codex_login::default_client::build_reqwest_client();
+    let toolkit = Arc::new(codex_research_tools::ResearchToolkit::new(
+        http_client,
+        research_config,
+    ));
+    if paper_search_on {
+        planned_tools.add(ResearchBridgeHandler::new(
+            "paper_search",
+            create_paper_search_tool(),
+            toolkit.clone(),
+        ));
+    }
+    if hn_search_on {
+        planned_tools.add(ResearchBridgeHandler::new(
+            "hn_search",
+            create_hn_search_tool(),
+            toolkit.clone(),
+        ));
+    }
 }
 
 fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
