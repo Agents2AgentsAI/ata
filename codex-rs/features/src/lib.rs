@@ -274,6 +274,11 @@ pub enum Feature {
     /// ATA-private: voice mode (push-to-talk STT, TTS narration, reading-view
     /// karaoke). Gated off by default — `/voice-setup` flips it on.
     VoiceMode,
+    /// ATA-private: agent-callable scheduling tools (`cron_create`, `cron_list`,
+    /// `cron_delete`, `monitor_start`, `monitor_list`, `monitor_stop`,
+    /// `monitor_wait`, `monitor_watch_for`). Backed by `codex-scheduling`
+    /// CronRegistry + MonitorRuntime on the Session.
+    Scheduling,
 }
 
 impl Feature {
@@ -1304,6 +1309,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceMode,
         key: "voice_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Scheduling,
+        key: "scheduling",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

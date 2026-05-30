@@ -27,6 +27,28 @@ use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
+use crate::tools::handlers::cron::CronCreateHandler;
+use crate::tools::handlers::cron::CronDeleteHandler;
+use crate::tools::handlers::cron::CronListHandler;
+use crate::tools::handlers::cron_session::CronSessionCreateHandler;
+use crate::tools::handlers::cron_session::CronSessionDeleteHandler;
+use crate::tools::handlers::cron_session::CronSessionListHandler;
+use crate::tools::handlers::cron_session_spec::create_cron_session_create_tool;
+use crate::tools::handlers::cron_session_spec::create_cron_session_delete_tool;
+use crate::tools::handlers::cron_session_spec::create_cron_session_list_tool;
+use crate::tools::handlers::cron_spec::create_cron_create_tool;
+use crate::tools::handlers::cron_spec::create_cron_delete_tool;
+use crate::tools::handlers::cron_spec::create_cron_list_tool;
+use crate::tools::handlers::monitor::MonitorListHandler;
+use crate::tools::handlers::monitor::MonitorStartHandler;
+use crate::tools::handlers::monitor::MonitorStopHandler;
+use crate::tools::handlers::monitor::MonitorWaitHandler;
+use crate::tools::handlers::monitor::MonitorWatchForHandler;
+use crate::tools::handlers::monitor_spec::create_monitor_list_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_start_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_stop_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_wait_tool;
+use crate::tools::handlers::monitor_spec::create_monitor_watch_for_tool;
 use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
@@ -501,12 +523,39 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_mcp_resource_tools(context, planned_tools);
     add_core_utility_tools(context, planned_tools);
     add_collaboration_tools(context, planned_tools);
+    add_scheduling_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
     for spec in hosted_model_tool_specs(context.turn_context) {
         planned_tools.add_hosted_spec(spec);
     }
+}
+
+fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::Scheduling)
+    {
+        return;
+    }
+    planned_tools.add(CronCreateHandler::new(create_cron_create_tool()));
+    planned_tools.add(CronListHandler::new(create_cron_list_tool()));
+    planned_tools.add(CronDeleteHandler::new(create_cron_delete_tool()));
+    planned_tools.add(CronSessionCreateHandler::new(
+        create_cron_session_create_tool(),
+    ));
+    planned_tools.add(CronSessionListHandler::new(create_cron_session_list_tool()));
+    planned_tools.add(CronSessionDeleteHandler::new(
+        create_cron_session_delete_tool(),
+    ));
+    planned_tools.add(MonitorStartHandler::new(create_monitor_start_tool()));
+    planned_tools.add(MonitorListHandler::new(create_monitor_list_tool()));
+    planned_tools.add(MonitorStopHandler::new(create_monitor_stop_tool()));
+    planned_tools.add(MonitorWaitHandler::new(create_monitor_wait_tool()));
+    planned_tools.add(MonitorWatchForHandler::new(create_monitor_watch_for_tool()));
 }
 
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
