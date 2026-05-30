@@ -29,6 +29,8 @@ use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::artifacts::ArtifactsHandler;
 use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+use crate::tools::handlers::js_repl::JsReplHandler;
+use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
 use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
 use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
 use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
@@ -539,6 +541,7 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_scheduling_tools(context, planned_tools);
     add_reading_view_tools(context, planned_tools);
     add_artifacts_tools(context, planned_tools);
+    add_js_repl_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
     add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
@@ -592,6 +595,25 @@ fn add_artifacts_tools(
         return;
     }
     planned_tools.add(ArtifactsHandler::new(create_artifacts_tool()));
+}
+
+/// Register the `js_repl` tool when `Feature::JsRepl` is on. The handler
+/// evaluates JavaScript snippets in an embedded V8 isolate (codex-v8-poc);
+/// it does not yet expose the broader data/research bridge surface that
+/// the dead `tools/js_repl/mod.rs` module sketches.
+fn add_js_repl_tools(
+    context: &CoreToolPlanContext<'_>,
+    planned_tools: &mut PlannedTools,
+) {
+    if !context
+        .turn_context
+        .features
+        .get()
+        .enabled(Feature::JsRepl)
+    {
+        return;
+    }
+    planned_tools.add(JsReplHandler::new(create_js_repl_tool()));
 }
 
 fn add_scheduling_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {

@@ -1057,3 +1057,23 @@ async fn scheduling_tools_omitted_when_feature_off() {
     plan.assert_visible_lacks(SCHEDULING_AGENT_TOOLS);
     plan.assert_registered_lacks(SCHEDULING_AGENT_TOOLS);
 }
+
+#[tokio::test]
+async fn js_repl_tool_registered_when_feature_on() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::JsRepl, /*enabled*/ true);
+    })
+    .await;
+    plan.assert_visible_contains(&["js_repl"]);
+    plan.assert_registered_contains(&["js_repl"]);
+}
+
+#[tokio::test]
+async fn js_repl_tool_omitted_when_feature_off() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::JsRepl, /*enabled*/ false);
+    })
+    .await;
+    plan.assert_visible_lacks(&["js_repl"]);
+    plan.assert_registered_lacks(&["js_repl"]);
+}
