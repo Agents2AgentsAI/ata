@@ -195,16 +195,29 @@ impl ChatWidget {
     }
 
     /// Submit a synthesised user message (e.g. from the document reader's
-    /// Tab-to-ask flow) using whatever collaboration mask is currently
-    /// active. When no mask is active, this is a no-op rather than an
-    /// implicit downgrade to "default" — the caller's invariant is that
-    /// they're inside an active session.
+    /// Tab-to-ask flow). When a collaboration mask is active we route through
+    /// `submit_user_message_with_mode` so the synthesised prompt honours the
+    /// user's mode selection. When no mask is active (collaboration modes
+    /// disabled or no presets), fall back to `submit_user_message` directly —
+    /// the same path the normal chat composer uses. The previous "no mask =
+    /// no-op" behaviour silently dropped reader Tab-to-ask questions.
     pub(crate) fn submit_user_text(&mut self, text: String) {
-        let Some(mask) = self.active_collaboration_mask.clone() else {
-            tracing::warn!("submit_user_text called with no active collaboration mask");
+        if let Some(mask) = self.active_collaboration_mask.clone() {
+            self.submit_user_message_with_mode(text, mask);
             return;
+        }
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
         };
-        self.submit_user_message_with_mode(text, mask);
+        if self.is_plan_streaming_in_tui() {
+            self.queue_user_message(user_message);
+        } else {
+            self.submit_user_message(user_message);
+        }
     }
 
     #[cfg(test)]
