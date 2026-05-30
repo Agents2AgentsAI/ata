@@ -12,5 +12,5 @@ if src_str in sys.path:
 sys.path.insert(0, src_str)
 
 for module_name in list(sys.modules):
-    if module_name == "openai_codex" or module_name.startswith("openai_codex."):
+    if module_name == "codex_app_server" or module_name.startswith("codex_app_server."):
         sys.modules.pop(module_name)

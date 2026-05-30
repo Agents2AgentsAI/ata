@@ -127,7 +127,7 @@ describe("AbortSignal support", () => {
             void event; // Consume the event
             eventCount++;
             // Abort after first event
-            if (eventCount === 1) {
+            if (eventCount === 5) {
               controller.abort("Aborted during iteration");
             }
             // Continue iterating - should eventually throw

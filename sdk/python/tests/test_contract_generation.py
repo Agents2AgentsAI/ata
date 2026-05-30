@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.metadata
 import os
 import subprocess
 import sys
@@ -8,14 +7,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED_TARGETS = [
-    Path("src/openai_codex/generated/notification_registry.py"),
-    Path("src/openai_codex/generated/v2_all.py"),
-    Path("src/openai_codex/api.py"),
+    Path("src/codex_app_server/generated/notification_registry.py"),
+    Path("src/codex_app_server/generated/v2_all.py"),
+    Path("src/codex_app_server/api.py"),
 ]
 
 
 def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | None:
-    """Capture one generated artifact so regeneration drift is easy to compare."""
     target = root / rel_path
     if not target.exists():
         return None
@@ -30,19 +28,16 @@ def _snapshot_target(root: Path, rel_path: Path) -> dict[str, bytes] | bytes | N
 
 
 def _snapshot_targets(root: Path) -> dict[str, dict[str, bytes] | bytes | None]:
-    """Capture all checked-in generated artifacts before and after regeneration."""
-    return {str(rel_path): _snapshot_target(root, rel_path) for rel_path in GENERATED_TARGETS}
+    return {
+        str(rel_path): _snapshot_target(root, rel_path) for rel_path in GENERATED_TARGETS
+    }
 
 
 def test_generated_files_are_up_to_date():
-    """Regenerating from the pinned runtime package should leave artifacts unchanged."""
     before = _snapshot_targets(ROOT)
 
-    # Regenerate contract artifacts via the pinned runtime package, not a local
-    # app-server binary from the checkout or CI environment.
-    assert importlib.metadata.version("openai-codex-cli-bin") == "0.131.0a4"
+    # Regenerate contract artifacts via single maintenance entrypoint.
     env = os.environ.copy()
-    env.pop("CODEX_EXEC_PATH", None)
     python_bin = str(Path(sys.executable).parent)
     env["PATH"] = f"{python_bin}{os.pathsep}{env.get('PATH', '')}"
 

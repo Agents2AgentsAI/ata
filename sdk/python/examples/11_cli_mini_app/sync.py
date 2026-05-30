@@ -9,10 +9,9 @@ from _bootstrap import ensure_local_sdk_src, runtime_config
 
 ensure_local_sdk_src()
 
-from openai_codex import (
+from codex_app_server import (
     Codex,
-)
-from openai_codex.types import (
+    TextInput,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
 )
@@ -20,9 +19,19 @@ from openai_codex.types import (
 print("Codex mini CLI. Type /exit to quit.")
 
 
-def _format_usage(usage: object) -> str:
-    last = usage.last
-    total = usage.total
+def _status_value(status: object | None) -> str:
+    return str(getattr(status, "value", status))
+
+
+def _format_usage(usage: object | None) -> str:
+    if usage is None:
+        return "usage> (none)"
+
+    last = getattr(usage, "last", None)
+    total = getattr(usage, "total", None)
+    if last is None or total is None:
+        return f"usage> {usage}"
+
     return (
         "usage>\n"
         f"  last: input={last.input_tokens} output={last.output_tokens} reasoning={last.reasoning_output_tokens} total={last.total_tokens} cached={last.cached_input_tokens}\n"
@@ -45,18 +54,20 @@ with Codex(config=runtime_config()) as codex:
         if user_input in {"/exit", "/quit"}:
             break
 
-        turn = thread.turn(user_input)
+        turn = thread.turn(TextInput(user_input))
         usage = None
         status = None
         error = None
+        printed_delta = False
 
         print("assistant> ", end="", flush=True)
         for event in turn.stream():
             payload = event.payload
             if event.method == "item/agentMessage/delta":
-                delta = payload.delta
+                delta = getattr(payload, "delta", "")
                 if delta:
                     print(delta, end="", flush=True)
+                    printed_delta = True
                 continue
             if isinstance(payload, ThreadTokenUsageUpdatedNotification):
                 usage = payload.token_usage
@@ -65,13 +76,12 @@ with Codex(config=runtime_config()) as codex:
                 status = payload.turn.status
                 error = payload.turn.error
 
-        print()
-        if status is None:
-            raise RuntimeError("stream ended without turn/completed")
-        if usage is None:
-            raise RuntimeError("stream ended without token usage")
+        if printed_delta:
+            print()
+        else:
+            print("[no text]")
 
-        status_text = status.value
+        status_text = _status_value(status)
         print(f"assistant.status> {status_text}")
         if status_text == "failed":
             print("assistant.error>", error)

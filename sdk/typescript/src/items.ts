@@ -60,7 +60,6 @@ export type McpToolCallItem = {
   /** Result payload returned by the MCP server for successful calls. */
   result?: {
     content: McpContentBlock[];
-    _meta?: unknown;
     structured_content: unknown;
   };
   /** Error message reported for failed calls. */

@@ -11,7 +11,7 @@ ensure_local_sdk_src()
 
 import asyncio
 
-from openai_codex import AsyncCodex
+from codex_app_server import AsyncCodex
 
 
 async def main() -> None:
@@ -19,7 +19,7 @@ async def main() -> None:
         print("server:", server_label(codex.metadata))
         models = await codex.models()
         print("models.count:", len(models.data))
-        print("models:", ", ".join(model.id for model in models.data[:5]))
+        print("models:", ", ".join(model.id for model in models.data[:5]) or "[none]")
 
 
 if __name__ == "__main__":

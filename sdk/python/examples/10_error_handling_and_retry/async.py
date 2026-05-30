@@ -5,7 +5,12 @@ _EXAMPLES_ROOT = Path(__file__).resolve().parents[1]
 if str(_EXAMPLES_ROOT) not in sys.path:
     sys.path.insert(0, str(_EXAMPLES_ROOT))
 
-from _bootstrap import ensure_local_sdk_src, runtime_config
+from _bootstrap import (
+    assistant_text_from_turn,
+    ensure_local_sdk_src,
+    find_turn_by_id,
+    runtime_config,
+)
 
 ensure_local_sdk_src()
 
@@ -14,13 +19,14 @@ import random
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
-from openai_codex import (
+from codex_app_server import (
     AsyncCodex,
     JsonRpcError,
     ServerBusyError,
+    TextInput,
+    TurnStatus,
     is_retryable_error,
 )
-from openai_codex.types import TurnStatus
 
 ResultT = TypeVar("ResultT")
 
@@ -54,9 +60,7 @@ async def retry_on_overload_async(
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        thread = await codex.thread_start(
-            model="gpt-5.4", config={"model_reasoning_effort": "high"}
-        )
+        thread = await codex.thread_start(model="gpt-5.4", config={"model_reasoning_effort": "high"})
 
         try:
             result = await retry_on_overload_async(
@@ -67,21 +71,24 @@ async def main() -> None:
             )
         except ServerBusyError as exc:
             print("Server overloaded after retries:", exc.message)
+            print("Text:")
             return
         except JsonRpcError as exc:
             print(f"JSON-RPC error {exc.code}: {exc.message}")
+            print("Text:")
             return
 
+        persisted = await thread.read(include_turns=True)
+        persisted_turn = find_turn_by_id(persisted.thread.turns, result.id)
         if result.status == TurnStatus.failed:
             print("Turn failed:", result.error)
-            return
 
-        print("Text:", result.final_response)
+        print("Text:", assistant_text_from_turn(persisted_turn))
 
 
 def _run_turn(thread, prompt: str):
     async def _inner():
-        turn = await thread.turn(prompt)
+        turn = await thread.turn(TextInput(prompt))
         return await turn.run()
 
     return _inner
