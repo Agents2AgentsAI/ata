@@ -90,6 +90,7 @@ impl ChatWidget {
             frame_requester.clone(),
             app_event_tx.clone(),
         );
+        let initial_reading_view_mode = resolve_initial_reading_view_mode(&config);
         let mut widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -219,7 +220,7 @@ impl ChatWidget {
             realtime_conversation: RealtimeConversationUiState::default(),
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
-            reading_view_mode: crate::app_event::ReadingViewMode::default(),
+            reading_view_mode: initial_reading_view_mode,
             reading_view_server: None,
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_title: String::new(),
@@ -300,5 +301,37 @@ impl ChatWidget {
         widget.refresh_status_surfaces();
 
         widget
+    }
+}
+
+/// Resolve the initial `ReadingViewMode` from `~/.ata/config.toml`. Mirrors
+/// the core's `reading_view_display_mode_from_config` logic so the TUI's
+/// gating in `is_reading_view_enabled` agrees with which tools the agent
+/// actually has available. Without this, `Default::default()` returns
+/// `Disabled` and `present_reading_view` events fall back to inline
+/// markdown — the reader overlay never opens.
+fn resolve_initial_reading_view_mode(
+    config: &crate::legacy_core::config::Config,
+) -> crate::app_event::ReadingViewMode {
+    let configured = config
+        .config_layer_stack
+        .effective_config()
+        .as_table()
+        .and_then(|t| t.get("reading_view"))
+        .and_then(|v| {
+            v.clone()
+                .try_into::<crate::legacy_core::config::types::ReadingViewToml>()
+                .ok()
+        })
+        .and_then(|rv| rv.mode);
+
+    if let Some(mode) = configured {
+        crate::app_event::ReadingViewMode::from_config_value(Some(&mode))
+    } else if config.features.enabled(codex_features::Feature::ReadingView) {
+        // Backward compat for configs written before [reading_view].mode
+        // became the source of truth.
+        crate::app_event::ReadingViewMode::Tui
+    } else {
+        crate::app_event::ReadingViewMode::Disabled
     }
 }

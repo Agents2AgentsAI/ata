@@ -12,7 +12,9 @@ use crate::thread_state::resolve_server_request_on_thread_listener;
 use crate::thread_status::ThreadWatchActiveGuard;
 use crate::thread_status::ThreadWatchManager;
 use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
+use codex_app_server_protocol::AddDocumentSectionNotification;
 use codex_app_server_protocol::AdditionalPermissionProfile as V2AdditionalPermissionProfile;
+use codex_app_server_protocol::AppendDocumentSectionNotification;
 use codex_app_server_protocol::CodexErrorInfo as V2CodexErrorInfo;
 use codex_app_server_protocol::CommandAction as V2ParsedCommand;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
@@ -44,8 +46,10 @@ use codex_app_server_protocol::ModelVerificationNotification;
 use codex_app_server_protocol::NetworkApprovalContext as V2NetworkApprovalContext;
 use codex_app_server_protocol::NetworkPolicyAmendment as V2NetworkPolicyAmendment;
 use codex_app_server_protocol::NetworkPolicyRuleAction as V2NetworkPolicyRuleAction;
+use codex_app_server_protocol::PatchDocumentSectionNotification;
 use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
+use codex_app_server_protocol::PresentDocumentNotification;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SchedulingMonitorOutputDeltaNotification;
@@ -81,6 +85,7 @@ use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UpdateDocumentSectionNotification;
 use codex_app_server_protocol::WarningNotification;
 use codex_app_server_protocol::build_item_from_guardian_event;
 use codex_app_server_protocol::guardian_auto_approval_review_notification;
@@ -1256,6 +1261,56 @@ pub(crate) async fn apply_bespoke_event_handling(
                     SchedulingMonitorOutputDeltaNotification {
                         thread_id: conversation_id.to_string(),
                         event: delta,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::PresentDocument(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::PresentDocument(
+                    PresentDocumentNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::UpdateDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::UpdateDocumentSection(
+                    UpdateDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::AppendDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::AppendDocumentSection(
+                    AppendDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::AddDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::AddDocumentSection(
+                    AddDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::PatchDocumentSection(event) => {
+            outgoing
+                .send_server_notification(ServerNotification::PatchDocumentSection(
+                    PatchDocumentSectionNotification {
+                        thread_id: conversation_id.to_string(),
+                        event,
                     },
                 ))
                 .await;
