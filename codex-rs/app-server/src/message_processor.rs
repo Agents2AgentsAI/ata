@@ -1341,12 +1341,16 @@ impl MessageProcessor {
             ClientRequest::FeedbackUpload { params, .. } => {
                 self.feedback_processor.feedback_upload(params).await
             }
-            ClientRequest::SchedulingTasksList { .. } => Err(invalid_request(
-                "ATA scheduling tasks list is temporarily disabled during upstream merge.",
-            )),
-            ClientRequest::SchedulingTaskDelete { .. } => Err(invalid_request(
-                "ATA scheduling task delete is temporarily disabled during upstream merge.",
-            )),
+            ClientRequest::SchedulingTasksList { params, .. } => {
+                self.thread_processor
+                    .scheduling_tasks_list(&request_id, params)
+                    .await
+            }
+            ClientRequest::SchedulingTaskDelete { params, .. } => {
+                self.thread_processor
+                    .scheduling_task_delete(&request_id, params)
+                    .await
+            }
         };
 
         match result {

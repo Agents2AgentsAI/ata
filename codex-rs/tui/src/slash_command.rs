@@ -24,6 +24,11 @@ pub enum SlashCommand {
     Experimental,
     #[strum(to_string = "approve")]
     AutoReview,
+    #[cfg(not(target_os = "linux"))]
+    Voice,
+    #[cfg(not(target_os = "linux"))]
+    #[strum(serialize = "voice-setup")]
+    VoiceSetup,
     Memories,
     Skills,
     Hooks,
@@ -133,6 +138,10 @@ impl SlashCommand {
             }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => "toggle voice mode for this ATA session",
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT, API key, language)",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
@@ -241,6 +250,8 @@ impl SlashCommand {
             SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Research | SlashCommand::Scheduling => true,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice | SlashCommand::VoiceSetup => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

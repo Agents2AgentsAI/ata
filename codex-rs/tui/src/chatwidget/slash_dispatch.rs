@@ -319,6 +319,14 @@ impl ChatWidget {
             SlashCommand::AutoReview => {
                 self.open_auto_review_denials_popup();
             }
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice => {
+                self.toggle_voice_mode();
+            }
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::VoiceSetup => {
+                self.open_voice_setup_popup();
+            }
             SlashCommand::Memories => {
                 self.open_memories_popup();
             }
@@ -1012,6 +1020,8 @@ impl ChatWidget {
             | SlashCommand::Research
             | SlashCommand::Scheduling
             | SlashCommand::Pets => QueueDrain::Stop,
+            #[cfg(not(target_os = "linux"))]
+            SlashCommand::Voice | SlashCommand::VoiceSetup => QueueDrain::Stop,
         }
     }
 

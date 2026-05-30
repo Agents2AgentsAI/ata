@@ -4,7 +4,7 @@ assertion_line: 3731
 expression: rendered
 ---
 ╭────────────────────────────────────────────────────╮
-│ >_ Agents2Agents Ata (v<VERSION>)                  │
+│ >_ Agents2Agents ata (v<VERSION>)                  │
 │                                                    │
 │ model:     gpt-5.4 xhigh   fast   /model to change │
 │ directory: /tmp/project                            │

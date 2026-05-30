@@ -109,11 +109,23 @@ pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
 mod provider_transport_capabilities;
 pub mod research {
+    //! Public re-export of the research-config builder used by the `ata zotero`
+    //! and `ata research` CLIs to resolve the effective `[research]` block.
+    //! Delegates to the real implementation in
+    //! `crate::tools::handlers::research::build_research_config`, which honors
+    //! env vars + secrets resolver + the TOML `[research]` overrides.
+
     use codex_research_tools::config::ResearchConfig;
     use std::path::Path;
 
-    pub fn build_research_config<T>(_toml: Option<&T>, _codex_home: &Path, _cwd: &Path) -> ResearchConfig {
-        ResearchConfig::from_env()
+    pub fn build_research_config(
+        toml: Option<&toml::Value>,
+        codex_home: &Path,
+        cwd: &Path,
+    ) -> ResearchConfig {
+        let parsed: Option<crate::config::ResearchToolsToml> =
+            toml.and_then(|v| v.clone().try_into().ok());
+        crate::tools::handlers::research::build_research_config(parsed.as_ref(), codex_home, cwd)
     }
 }
 pub mod review_format;

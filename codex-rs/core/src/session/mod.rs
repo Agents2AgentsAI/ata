@@ -670,6 +670,64 @@ impl Codex {
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
         });
+
+        // ATA scheduling: 1-second cron tick that scans the in-session
+        // CronRegistry for jobs whose `next_fire_at` is now in the past and
+        // re-injects their prompt as `Op::UserInput`. The registry scan is a
+        // cheap hashmap pass, so a 1s cadence handles sub-minute expressions
+        // (e.g. `*/5 * * * * *`) without measurable overhead. Skipped for
+        // sub-agent sessions — the root session's tick is the source of truth
+        // for the spawn tree, and a second engine on a sub-agent would
+        // double-fire every job.
+        let is_subagent_for_cron = session
+            .state
+            .lock()
+            .await
+            .session_configuration
+            .session_source
+            .is_non_root_agent();
+        if !is_subagent_for_cron
+            && let Some(cron_registry) = session.cron_registry.clone()
+        {
+            let tx_sub_for_cron = session.submission_tx.clone();
+            let session_weak = Arc::downgrade(&session);
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+                // First tick fires immediately; skip it so we don't fire at
+                // session start before any job has been created.
+                tick.tick().await;
+                loop {
+                    tick.tick().await;
+                    if session_weak.upgrade().is_none() {
+                        break;
+                    }
+                    let due = cron_registry.take_due(Utc::now());
+                    for (_task_id, prompt, background) in due {
+                        let op = Op::UserInput {
+                            items: vec![UserInput::Text {
+                                text: prompt,
+                                text_elements: Vec::new(),
+                            }],
+                            environments: None,
+                            final_output_json_schema: None,
+                            responsesapi_client_metadata: None,
+                            thread_settings: Default::default(),
+                        };
+                        let prefix = if background { "cronbg" } else { "cron" };
+                        let sub = Submission {
+                            id: format!("{prefix}-{}", Uuid::now_v7()),
+                            op,
+                            trace: None,
+                        };
+                        if tx_sub_for_cron.send(sub).await.is_err() {
+                            // Submission channel closed — session is shutting down.
+                            return;
+                        }
+                    }
+                }
+            });
+        }
+
         let codex = Codex {
             tx_sub,
             rx_event,

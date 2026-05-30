@@ -40,6 +40,10 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SchedulingCronRow;
+use codex_protocol::protocol::SchedulingMonitorRow;
+use codex_protocol::protocol::SchedulingTaskKind;
+use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
@@ -705,6 +709,113 @@ pub async fn review(
     }
 }
 
+/// Build and emit a `SchedulingTasksSnapshot` reflecting the current state of
+/// the session's cron + monitor registries. Routed through the normal event
+/// pipeline so the app-server forwards it to the TUI's `/scheduling` panel
+/// as a `SchedulingTasksSnapshotNotification`.
+pub async fn list_scheduling_tasks(sess: &Arc<Session>, sub_id: String) {
+    let snapshot = build_scheduling_snapshot(sess);
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::SchedulingTasksSnapshot(snapshot),
+    })
+    .await;
+}
+
+/// Remove one scheduling task (cron job or monitor) from the session, aborting
+/// the per-monitor tokio task first if it's still running. Always emits a
+/// fresh snapshot so the `/scheduling` panel removes the row immediately
+/// instead of waiting for the next auto-refresh tick.
+pub async fn delete_scheduling_task(
+    sess: &Arc<Session>,
+    sub_id: String,
+    task_id: String,
+    kind: SchedulingTaskKind,
+) {
+    let id: codex_scheduling::TaskId = task_id.into();
+    match kind {
+        SchedulingTaskKind::Cron => {
+            if let Some(registry) = sess.cron_registry() {
+                registry.remove(&id);
+            }
+        }
+        SchedulingTaskKind::Monitor => {
+            if let Some(runtime) = sess.monitor_runtime() {
+                runtime.abort(&id);
+                runtime.registry.remove(&id);
+            }
+        }
+    }
+    sess.persist_scheduling_state();
+    let snapshot = build_scheduling_snapshot(sess);
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::SchedulingTasksSnapshot(snapshot),
+    })
+    .await;
+}
+
+fn build_scheduling_snapshot(sess: &Arc<Session>) -> SchedulingTasksSnapshotEvent {
+    let scheduling_enabled = sess
+        .features()
+        .enabled(codex_features::Feature::Scheduling);
+
+    let cron_jobs = sess
+        .cron_registry()
+        .map(|registry| {
+            registry
+                .list()
+                .into_iter()
+                .map(|job| SchedulingCronRow {
+                    task_id: job.id.to_string(),
+                    cron_expr: job.cron_expr,
+                    prompt: job.prompt,
+                    status: format!("{:?}", job.status),
+                    fire_count: job.fire_count,
+                    last_fired_at: job.last_fired_at.map(|t| t.to_rfc3339()),
+                    next_fire_at: job.next_fire_at.map(|t| t.to_rfc3339()),
+                    name: job.name,
+                    recent_events: job
+                        .recent_fires
+                        .iter()
+                        .map(|rec| format!("{} {}", rec.fired_at.to_rfc3339(), rec.outcome))
+                        .collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let monitors = sess
+        .monitor_runtime()
+        .map(|runtime| {
+            runtime
+                .registry
+                .list()
+                .into_iter()
+                .map(|task| {
+                    let tail = runtime.registry.tail_snapshot(&task.id);
+                    SchedulingMonitorRow {
+                        task_id: task.id.to_string(),
+                        command: task.command,
+                        status: format!("{:?}", task.status),
+                        lines_emitted: task.lines_emitted,
+                        started_at: task.started_at.map(|t| t.to_rfc3339()),
+                        stopped_at: task.stopped_at.map(|t| t.to_rfc3339()),
+                        name: task.name,
+                        tail,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    SchedulingTasksSnapshotEvent {
+        cron_jobs,
+        monitors,
+        scheduling_enabled,
+    }
+}
+
 pub(super) async fn submission_loop(
     sess: Arc<Session>,
     config: Arc<Config>,
@@ -834,6 +945,14 @@ pub(super) async fn submission_loop(
                 }
                 Op::ApproveGuardianDeniedAction { event } => {
                     approve_guardian_denied_action(&sess, event).await;
+                    false
+                }
+                Op::ListSchedulingTasks => {
+                    list_scheduling_tasks(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::DeleteSchedulingTask { task_id, kind } => {
+                    delete_scheduling_task(&sess, sub.id.clone(), task_id, kind).await;
                     false
                 }
                 _ => false, // Ignore unknown ops; enum is non_exhaustive to allow extensions.

@@ -654,6 +654,26 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn scheduling_tasks_list(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: SchedulingTasksListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.scheduling_tasks_list_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn scheduling_task_delete(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: SchedulingTaskDeleteParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.scheduling_task_delete_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn conversation_summary(
         &self,
         params: GetConversationSummaryParams,
@@ -1787,6 +1807,42 @@ impl ThreadRequestProcessor {
         .await
         .map_err(|err| internal_error(format!("failed to approve Guardian denial: {err}")))?;
         Ok(ThreadApproveGuardianDeniedActionResponse {})
+    }
+
+    async fn scheduling_tasks_list_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: SchedulingTasksListParams,
+    ) -> Result<SchedulingTasksListResponse, JSONRPCErrorError> {
+        let SchedulingTasksListParams { thread_id } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(request_id, thread.as_ref(), Op::ListSchedulingTasks)
+            .await
+            .map_err(|err| {
+                internal_error(format!("failed to request scheduling tasks list: {err}"))
+            })?;
+        Ok(SchedulingTasksListResponse {})
+    }
+
+    async fn scheduling_task_delete_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: SchedulingTaskDeleteParams,
+    ) -> Result<SchedulingTaskDeleteResponse, JSONRPCErrorError> {
+        let SchedulingTaskDeleteParams {
+            thread_id,
+            task_id,
+            kind,
+        } = params;
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        self.submit_core_op(
+            request_id,
+            thread.as_ref(),
+            Op::DeleteSchedulingTask { task_id, kind },
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to delete scheduling task: {err}")))?;
+        Ok(SchedulingTaskDeleteResponse {})
     }
 
     async fn thread_list_response_inner(

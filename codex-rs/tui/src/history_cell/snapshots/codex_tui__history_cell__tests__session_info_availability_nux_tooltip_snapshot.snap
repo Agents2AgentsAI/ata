@@ -4,7 +4,7 @@ assertion_line: 583
 expression: rendered
 ---
 ╭─────────────────────────────────────╮
-│ >_ Agents2Agents Ata (v0.0.0)       │
+│ >_ Agents2Agents ata (v0.0.0)       │
 │                                     │
 │ model:     gpt-5   /model to change │
 │ directory: /tmp/project             │

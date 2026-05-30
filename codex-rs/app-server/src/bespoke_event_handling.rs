@@ -48,6 +48,8 @@ use codex_app_server_protocol::PermissionsRequestApprovalParams;
 use codex_app_server_protocol::PermissionsRequestApprovalResponse;
 use codex_app_server_protocol::RawResponseItemCompletedNotification;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SchedulingMonitorOutputDeltaNotification;
+use codex_app_server_protocol::SchedulingTasksSnapshotNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
@@ -1236,6 +1238,26 @@ pub(crate) async fn apply_bespoke_event_handling(
         EventMsg::ShutdownComplete => {
             thread_watch_manager
                 .note_thread_shutdown(&conversation_id.to_string())
+                .await;
+        }
+        EventMsg::SchedulingTasksSnapshot(snapshot) => {
+            outgoing
+                .send_server_notification(ServerNotification::SchedulingTasksSnapshot(
+                    SchedulingTasksSnapshotNotification {
+                        thread_id: conversation_id.to_string(),
+                        event: snapshot,
+                    },
+                ))
+                .await;
+        }
+        EventMsg::SchedulingMonitorOutputDelta(delta) => {
+            outgoing
+                .send_server_notification(ServerNotification::SchedulingMonitorOutputDelta(
+                    SchedulingMonitorOutputDeltaNotification {
+                        thread_id: conversation_id.to_string(),
+                        event: delta,
+                    },
+                ))
                 .await;
         }
 
