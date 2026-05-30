@@ -85,8 +85,7 @@ async fn session_summary_names_picker_item_when_thread_has_name() {
     assert_eq!(
         summary.resume_hint,
         Some(
-            "ata resume, then select my-session (123e4567-e89b-12d3-a456-426614174000)"
-                .to_string()
+            "ata resume, then select my-session (123e4567-e89b-12d3-a456-426614174000)".to_string()
         )
     );
 }

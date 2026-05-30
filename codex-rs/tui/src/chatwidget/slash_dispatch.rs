@@ -490,19 +490,14 @@ impl ChatWidget {
             }
             SlashCommand::Research => {
                 let items = crate::bottom_pane::build_research_tool_items(&self.config.features);
-                let view = crate::bottom_pane::ResearchToolsView::new(
-                    items,
-                    self.app_event_tx.clone(),
-                );
+                let view =
+                    crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
                 self.bottom_pane.show_view(Box::new(view));
                 self.request_redraw();
             }
             SlashCommand::Scheduling => {
                 let view = crate::bottom_pane::SchedulingView::new()
-                    .with_auto_refresh(
-                        self.app_event_tx.clone(),
-                        self.frame_requester.clone(),
-                    );
+                    .with_auto_refresh(self.app_event_tx.clone(), self.frame_requester.clone());
                 self.bottom_pane.show_view(Box::new(view));
                 self.app_event_tx
                     .send(AppEvent::CodexOp(AppCommand::ListSchedulingTasks));

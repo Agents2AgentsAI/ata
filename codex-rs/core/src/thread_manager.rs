@@ -464,9 +464,7 @@ impl ThreadManager {
     }
 
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
-        self.state
-            .read_models_manager()
-            .list_collaboration_modes()
+        self.state.read_models_manager().list_collaboration_modes()
     }
 
     pub async fn list_thread_ids(&self) -> Vec<ThreadId> {

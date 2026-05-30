@@ -109,10 +109,7 @@ impl SchedulingView {
     /// `SchedulingMonitorOutputDeltaEvent`) to the per-task live tail buffer.
     /// Bounded to `LIVE_TAIL_CAPACITY` lines; older lines drop off the front.
     fn append_monitor_output_line(&mut self, task_id: &str, stream: &str, line: &str) {
-        let entry = self
-            .live_tail
-            .entry(task_id.to_string())
-            .or_default();
+        let entry = self.live_tail.entry(task_id.to_string()).or_default();
         if entry.len() >= LIVE_TAIL_CAPACITY {
             entry.pop_front();
         }
@@ -624,12 +621,7 @@ impl BottomPaneView for SchedulingView {
         self.set_snapshot(snapshot);
     }
 
-    fn handle_scheduling_monitor_output_delta(
-        &mut self,
-        task_id: &str,
-        stream: &str,
-        line: &str,
-    ) {
+    fn handle_scheduling_monitor_output_delta(&mut self, task_id: &str, stream: &str, line: &str) {
         self.append_monitor_output_line(task_id, stream, line);
     }
 }

@@ -756,9 +756,7 @@ pub async fn delete_scheduling_task(
 }
 
 fn build_scheduling_snapshot(sess: &Arc<Session>) -> SchedulingTasksSnapshotEvent {
-    let scheduling_enabled = sess
-        .features()
-        .enabled(codex_features::Feature::Scheduling);
+    let scheduling_enabled = sess.features().enabled(codex_features::Feature::Scheduling);
 
     let cron_jobs = sess
         .cron_registry()

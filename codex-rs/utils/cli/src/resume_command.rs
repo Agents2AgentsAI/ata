@@ -60,10 +60,7 @@ mod tests {
     #[test]
     fn quotes_thread_names_when_needed() {
         let command = resume_command(Some("-starts-with-dash"), /*thread_id*/ None);
-        assert_eq!(
-            command,
-            Some("ata resume -- -starts-with-dash".to_string())
-        );
+        assert_eq!(command, Some("ata resume -- -starts-with-dash".to_string()));
 
         let command = resume_command(Some("two words"), /*thread_id*/ None);
         assert_eq!(command, Some("ata resume 'two words'".to_string()));

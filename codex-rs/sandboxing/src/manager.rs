@@ -209,9 +209,7 @@ impl SandboxManager {
             if !already_present {
                 effective_file_system_policy.entries.push(
                     codex_protocol::permissions::FileSystemSandboxEntry {
-                        path: codex_protocol::permissions::FileSystemPath::Path {
-                            path: kb_root,
-                        },
+                        path: codex_protocol::permissions::FileSystemPath::Path { path: kb_root },
                         access: codex_protocol::permissions::FileSystemAccessMode::Write,
                     },
                 );

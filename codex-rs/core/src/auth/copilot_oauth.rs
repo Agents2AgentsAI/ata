@@ -227,8 +227,9 @@ pub async fn get_or_refresh_copilot_token(
 
 /// Forget all stored Copilot credentials.
 pub fn logout(codex_home: &Path, store_mode: AuthCredentialsStoreMode) -> Result<()> {
-    clear_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode)
-        .map_err(|e| CodexErr::InvalidRequest(format!("Failed to clear Copilot credentials: {e}")))?;
+    clear_provider_oauth_credential(codex_home, PROVIDER_COPILOT, store_mode).map_err(|e| {
+        CodexErr::InvalidRequest(format!("Failed to clear Copilot credentials: {e}"))
+    })?;
     Ok(())
 }
 

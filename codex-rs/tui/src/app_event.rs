@@ -275,12 +275,17 @@ pub(crate) enum AppEvent {
     SupabaseLoginOpen,
     /// User submitted an email address — dispatch the ATA OTP send request
     /// against the app server.
-    SupabaseSendOtp { email: String },
+    SupabaseSendOtp {
+        email: String,
+    },
     /// App server returned the result of an ATA OTP send. `Ok` transitions
     /// the open view to the OTP-entry phase; `Err` shows the error inline.
     SupabaseSendOtpResult(Result<(), String>),
     /// User submitted an OTP code — dispatch the ATA verify request.
-    SupabaseVerifyOtp { email: String, otp: String },
+    SupabaseVerifyOtp {
+        email: String,
+        otp: String,
+    },
     /// App server returned the result of an ATA OTP verify. `Ok(email)`
     /// transitions the view to the success state and refreshes auth.
     SupabaseVerifyOtpResult(Result<String, String>),

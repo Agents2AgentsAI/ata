@@ -185,8 +185,7 @@ pub(super) struct ModelClientState {
     /// `client/*` sub-modules.
     pub(super) codex_home: std::path::PathBuf,
     /// Where to load cached credentials from when adapters resolve auth.
-    pub(super) cli_auth_credentials_store_mode:
-        codex_config::types::AuthCredentialsStoreMode,
+    pub(super) cli_auth_credentials_store_mode: codex_config::types::AuthCredentialsStoreMode,
 }
 
 /// Resolved API client setup for a single request attempt.

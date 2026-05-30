@@ -686,9 +686,7 @@ impl Codex {
             .session_configuration
             .session_source
             .is_non_root_agent();
-        if !is_subagent_for_cron
-            && let Some(cron_registry) = session.cron_registry.clone()
-        {
+        if !is_subagent_for_cron && let Some(cron_registry) = session.cron_registry.clone() {
             let tx_sub_for_cron = session.submission_tx.clone();
             let session_weak = Arc::downgrade(&session);
             tokio::spawn(async move {

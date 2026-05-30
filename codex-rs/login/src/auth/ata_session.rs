@@ -85,7 +85,9 @@ mod tests {
             }
         }"#;
         fs::write(dir.path().join("ata_session.json"), json).unwrap();
-        let session = load_ata_session(dir.path()).unwrap().expect("session loads");
+        let session = load_ata_session(dir.path())
+            .unwrap()
+            .expect("session loads");
         assert_eq!(session.access_token, "eyJabc");
         assert_eq!(session.refresh_token, "rt_abc");
         assert_eq!(session.user.email.as_deref(), Some("alice@example.com"));

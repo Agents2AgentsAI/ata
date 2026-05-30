@@ -925,8 +925,7 @@ async fn run_sampling_request(
     // attachments and retry on context-window / file-rejection errors. Each
     // recovery flavor only fires once per turn — repeated failures with no
     // more attachments to drop propagate the error as before.
-    let mut url_recovery =
-        crate::session::url_file_recovery::UrlFileRecoveryState::default();
+    let mut url_recovery = crate::session::url_file_recovery::UrlFileRecoveryState::default();
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -979,11 +978,7 @@ async fn run_sampling_request(
             }
             Err(CodexErr::InvalidRequest(msg)) => {
                 if url_recovery
-                    .maybe_recover_file_related_invalid_request(
-                        &sess,
-                        &turn_context,
-                        &msg,
-                    )
+                    .maybe_recover_file_related_invalid_request(&sess, &turn_context, &msg)
                     .await
                 {
                     continue;
@@ -992,11 +987,7 @@ async fn run_sampling_request(
             }
             Err(CodexErr::Api(msg)) => {
                 if url_recovery
-                    .maybe_recover_file_related_invalid_request(
-                        &sess,
-                        &turn_context,
-                        &msg,
-                    )
+                    .maybe_recover_file_related_invalid_request(&sess, &turn_context, &msg)
                     .await
                 {
                     continue;

@@ -241,11 +241,7 @@ impl ChatWidget {
             | ServerNotification::WindowsSandboxSetupCompleted(_)
             | ServerNotification::AccountLoginCompleted(_) => {}
             ServerNotification::PresentDocument(notification) => {
-                self.on_present_document(
-                    notification.event,
-                    from_replay,
-                    is_resume_initial_replay,
-                );
+                self.on_present_document(notification.event, from_replay, is_resume_initial_replay);
             }
             ServerNotification::UpdateDocumentSection(notification) => {
                 self.on_update_document_section(notification.event);

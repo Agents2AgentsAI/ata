@@ -1330,7 +1330,9 @@ fn stored_auth_issues(
             // persisted in auth.json, so reaching this branch means the
             // auth.json was hand-written with `auth_mode = "ata"`. Surface
             // that as a hint rather than a hard error.
-            issues.push("ATA Supabase auth is normally sourced from ATA_SUPABASE_TOKEN, not auth.json");
+            issues.push(
+                "ATA Supabase auth is normally sourced from ATA_SUPABASE_TOKEN, not auth.json",
+            );
         }
     }
     issues

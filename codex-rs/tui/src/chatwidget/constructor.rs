@@ -327,7 +327,10 @@ fn resolve_initial_reading_view_mode(
 
     if let Some(mode) = configured {
         crate::app_event::ReadingViewMode::from_config_value(Some(&mode))
-    } else if config.features.enabled(codex_features::Feature::ReadingView) {
+    } else if config
+        .features
+        .enabled(codex_features::Feature::ReadingView)
+    {
         // Backward compat for configs written before [reading_view].mode
         // became the source of truth.
         crate::app_event::ReadingViewMode::Tui

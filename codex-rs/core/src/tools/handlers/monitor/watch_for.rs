@@ -263,7 +263,10 @@ fn ok_response(
             "monitor_watch_for response serialization failed: {err}"
         ))
     })?;
-    Ok(boxed_tool_output(FunctionToolOutput::from_text(body, Some(true))))
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        body,
+        Some(true),
+    )))
 }
 
 impl CoreToolRuntime for MonitorWatchForHandler {}

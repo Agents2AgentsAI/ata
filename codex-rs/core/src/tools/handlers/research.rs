@@ -236,9 +236,11 @@ impl ResearchBridgeHandler {
             "patent_get" => {
                 dispatch_with_params!(PatentGetParams, |params| self.toolkit.patent_get(params))
             }
-            "repo_clone_and_summarize" => dispatch_with_params!(RepoUrlAndBranchArgs, |params| self
-                .toolkit
-                .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref())),
+            "repo_clone_and_summarize" => {
+                dispatch_with_params!(RepoUrlAndBranchArgs, |params| self
+                    .toolkit
+                    .repo_clone_and_summarize(params.repo_url.as_str(), params.branch.as_deref()))
+            }
             "repo_find_models" => dispatch_with_params!(RepoUrlAndFrameworkArgs, |params| self
                 .toolkit
                 .repo_find_models(params.repo_url.as_str(), params.framework.as_deref())),

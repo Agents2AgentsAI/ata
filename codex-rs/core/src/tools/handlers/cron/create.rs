@@ -111,7 +111,10 @@ impl ToolExecutor<ToolInvocation> for CronCreateHandler {
             ))
         })?;
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(body, Some(true))))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            body,
+            Some(true),
+        )))
     }
 }
 

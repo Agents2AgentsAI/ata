@@ -5,7 +5,6 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
-use codex_tools::ToolExecutor;
 use codex_features::Feature;
 use codex_protocol::document_reader::AddDocumentSectionArgs;
 use codex_protocol::document_reader::AddDocumentSectionEvent;
@@ -21,6 +20,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use regex_lite::Regex;
@@ -1488,7 +1488,10 @@ impl ToolExecutor<ToolInvocation> for DocumentReaderHandler {
             }
         };
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(content, Some(true))))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            content,
+            Some(true),
+        )))
     }
 }
 

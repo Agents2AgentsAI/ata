@@ -1375,9 +1375,7 @@ pub fn unstable_features_warning_event(
             if !features.enabled(spec.id) {
                 continue;
             }
-            if matches!(spec.stage, Stage::UnderDevelopment)
-                && !is_research_feature(spec.id)
-            {
+            if matches!(spec.stage, Stage::UnderDevelopment) && !is_research_feature(spec.id) {
                 under_development_feature_keys.push(spec.key.to_string());
             }
         }

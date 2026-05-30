@@ -1628,11 +1628,7 @@ impl super::ChatWidget {
             ];
             if let Some(key) = elevenlabs_api_key {
                 edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "voice_mode".into(),
-                        "elevenlabs".into(),
-                        "api_key".into(),
-                    ],
+                    segments: vec!["voice_mode".into(), "elevenlabs".into(), "api_key".into()],
                     value: key.into(),
                 });
             }
@@ -1659,11 +1655,7 @@ impl super::ChatWidget {
             }
             if let Some(s) = speed {
                 edits.push(ConfigEdit::SetPath {
-                    segments: vec![
-                        "voice_mode".into(),
-                        "elevenlabs".into(),
-                        "speed".into(),
-                    ],
+                    segments: vec!["voice_mode".into(), "elevenlabs".into(), "speed".into()],
                     value: s.into(),
                 });
             }

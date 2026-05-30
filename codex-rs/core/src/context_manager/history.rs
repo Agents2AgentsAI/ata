@@ -204,10 +204,7 @@ impl ContextManager {
     ///
     /// `max_count == 0` is a no-op and returns an empty vec. Empty user
     /// message content blocks are removed once their attachments are stripped.
-    pub(crate) fn drop_last_turn_url_files(
-        &mut self,
-        max_count: usize,
-    ) -> Vec<DroppedUrlFileInfo> {
+    pub(crate) fn drop_last_turn_url_files(&mut self, max_count: usize) -> Vec<DroppedUrlFileInfo> {
         if max_count == 0 {
             return Vec::new();
         }
@@ -255,9 +252,7 @@ impl ContextManager {
 
         let len_before = self.items.len();
         self.items.retain(|item| match item {
-            ResponseItem::Message { role, content, .. } if role == "user" => {
-                !content.is_empty()
-            }
+            ResponseItem::Message { role, content, .. } if role == "user" => !content.is_empty(),
             _ => true,
         });
         if bumped || self.items.len() != len_before {

@@ -29,51 +29,12 @@ use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
 use crate::tools::handlers::agent_jobs::SpawnAgentsOnCsvHandler;
 use crate::tools::handlers::artifacts::ArtifactsHandler;
 use crate::tools::handlers::artifacts_spec::create_artifacts_tool;
+use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
+use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
 #[cfg(feature = "treesitter")]
 use crate::tools::handlers::code_intel::CodeIntelToolHandler;
 #[cfg(feature = "treesitter")]
 use crate::tools::handlers::code_intel::create_code_intel_tool;
-#[cfg(feature = "lsp")]
-use crate::tools::handlers::lsp::LspToolHandler;
-#[cfg(feature = "lsp")]
-use crate::tools::handlers::lsp::create_lsp_tool;
-use crate::tools::handlers::data::DataBridgeHandler;
-use crate::tools::handlers::data::build_data_config;
-use crate::tools::handlers::data_bridge_spec::create_dataset_download_tool;
-use crate::tools::handlers::data_bridge_spec::create_dataset_get_tool;
-use crate::tools::handlers::data_bridge_spec::create_dataset_list_files_tool;
-use crate::tools::handlers::data_bridge_spec::create_dataset_search_tool;
-use crate::tools::handlers::data_bridge_spec::create_hf_dataset_info_tool;
-use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_download_tool;
-use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_list_files_tool;
-use crate::tools::handlers::data_bridge_spec::create_kaggle_competitions_tool;
-use crate::tools::handlers::data_bridge_spec::create_kaggle_dataset_info_tool;
-use crate::tools::handlers::js_repl::JsReplHandler;
-use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
-use crate::tools::handlers::research::ResearchBridgeHandler;
-use crate::tools::handlers::research::build_research_config;
-use crate::tools::handlers::research_bridge_spec::{
-    create_hn_get_thread_tool, create_hn_search_tool, create_paper_citations_tool,
-    create_paper_get_tool, create_paper_recommendations_tool, create_paper_references_tool,
-    create_paper_search_tool, create_patent_get_tool, create_patent_search_tool,
-    create_repo_clone_and_summarize_tool, create_repo_diff_requirements_tool,
-    create_repo_extract_config_schema_tool, create_repo_extract_io_shapes_tool,
-    create_repo_extract_requirements_tool, create_repo_find_entrypoints_tool,
-    create_repo_find_export_paths_tool, create_repo_find_models_tool, create_repo_get_health_tool,
-    create_zotero_add_items_to_collection_tool, create_zotero_advanced_search_tool,
-    create_zotero_create_attachment_link_tool, create_zotero_create_collection_tool,
-    create_zotero_create_items_tool, create_zotero_find_or_create_collection_tool,
-    create_zotero_get_annotations_tool, create_zotero_get_attachments_tool,
-    create_zotero_get_collection_items_tool, create_zotero_get_collections_tool,
-    create_zotero_get_fulltext_tool, create_zotero_get_item_citation_tool,
-    create_zotero_get_item_tool, create_zotero_get_notes_tool, create_zotero_get_recent_tool,
-    create_zotero_get_tags_tool, create_zotero_grep_text_tool, create_zotero_list_groups_tool,
-    create_zotero_search_notes_tool, create_zotero_search_tool, create_zotero_update_items_tool,
-};
-use crate::tools::handlers::attach_url_files::ATTACH_URL_FILES_TOOL;
-use crate::tools::handlers::attach_url_files::AttachUrlFilesHandler;
-use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
-use crate::tools::handlers::crop_figure::CropFigureHandler;
 use crate::tools::handlers::cron::CronCreateHandler;
 use crate::tools::handlers::cron::CronDeleteHandler;
 use crate::tools::handlers::cron::CronListHandler;
@@ -86,13 +47,33 @@ use crate::tools::handlers::cron_session_spec::create_cron_session_list_tool;
 use crate::tools::handlers::cron_spec::create_cron_create_tool;
 use crate::tools::handlers::cron_spec::create_cron_delete_tool;
 use crate::tools::handlers::cron_spec::create_cron_list_tool;
-use crate::tools::handlers::document_reader::DocumentReaderHandler;
+use crate::tools::handlers::crop_figure::CROP_FIGURE_TOOL;
+use crate::tools::handlers::crop_figure::CropFigureHandler;
+use crate::tools::handlers::data::DataBridgeHandler;
+use crate::tools::handlers::data::build_data_config;
+use crate::tools::handlers::data_bridge_spec::create_dataset_download_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_get_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_list_files_tool;
+use crate::tools::handlers::data_bridge_spec::create_dataset_search_tool;
+use crate::tools::handlers::data_bridge_spec::create_hf_dataset_info_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_download_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competition_list_files_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_competitions_tool;
+use crate::tools::handlers::data_bridge_spec::create_kaggle_dataset_info_tool;
 use crate::tools::handlers::document_reader::ADD_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::APPEND_TO_SECTION_TOOL;
+use crate::tools::handlers::document_reader::DocumentReaderHandler;
 use crate::tools::handlers::document_reader::PATCH_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::PRESENT_DOCUMENT_TOOL;
 use crate::tools::handlers::document_reader::UPDATE_DOCUMENT_SECTION_TOOL;
 use crate::tools::handlers::document_reader::reading_view_tools_enabled;
+use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
+use crate::tools::handlers::js_repl::JsReplHandler;
+use crate::tools::handlers::js_repl_spec::create_js_repl_tool;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::LspToolHandler;
+#[cfg(feature = "lsp")]
+use crate::tools::handlers::lsp::create_lsp_tool;
 use crate::tools::handlers::monitor::MonitorListHandler;
 use crate::tools::handlers::monitor::MonitorStartHandler;
 use crate::tools::handlers::monitor::MonitorStopHandler;
@@ -103,7 +84,6 @@ use crate::tools::handlers::monitor_spec::create_monitor_start_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_stop_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_wait_tool;
 use crate::tools::handlers::monitor_spec::create_monitor_watch_for_tool;
-use crate::tools::handlers::extension_tools::ExtensionToolAdapter;
 use crate::tools::handlers::multi_agents::CloseAgentHandler;
 use crate::tools::handlers::multi_agents::ResumeAgentHandler;
 use crate::tools::handlers::multi_agents::SendInputHandler;
@@ -120,6 +100,47 @@ use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHand
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::WaitAgentHandler as WaitAgentHandlerV2;
+use crate::tools::handlers::research::ResearchBridgeHandler;
+use crate::tools::handlers::research::build_research_config;
+use crate::tools::handlers::research_bridge_spec::create_hn_get_thread_tool;
+use crate::tools::handlers::research_bridge_spec::create_hn_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_citations_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_get_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_recommendations_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_references_tool;
+use crate::tools::handlers::research_bridge_spec::create_paper_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_patent_get_tool;
+use crate::tools::handlers::research_bridge_spec::create_patent_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_clone_and_summarize_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_diff_requirements_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_extract_config_schema_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_extract_io_shapes_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_extract_requirements_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_find_entrypoints_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_find_export_paths_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_find_models_tool;
+use crate::tools::handlers::research_bridge_spec::create_repo_get_health_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_add_items_to_collection_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_advanced_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_create_attachment_link_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_create_collection_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_create_items_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_find_or_create_collection_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_annotations_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_attachments_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_collection_items_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_collections_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_fulltext_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_item_citation_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_item_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_notes_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_recent_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_get_tags_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_grep_text_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_list_groups_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_search_notes_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_search_tool;
+use crate::tools::handlers::research_bridge_spec::create_zotero_update_items_tool;
 use crate::tools::handlers::view_image_spec::ViewImageToolOptions;
 use crate::tools::hosted_spec::WebSearchToolOptions;
 use crate::tools::hosted_spec::create_image_generation_tool;
@@ -605,10 +626,7 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
 /// PDF tools (`attach_url_files`, `crop_figure`). All gated together by
 /// `reading_view_tools_enabled` so a single `[reading_view] mode = "disabled"`
 /// hides the whole surface from the model.
-fn add_reading_view_tools(
-    context: &CoreToolPlanContext<'_>,
-    planned_tools: &mut PlannedTools,
-) {
+fn add_reading_view_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     if !reading_view_tools_enabled(&context.turn_context.config) {
         return;
     }
@@ -631,10 +649,7 @@ fn add_reading_view_tools(
 /// Register the freeform `artifacts` tool when `Feature::Artifact` is on.
 /// The runtime delegates to the preinstalled `@oai/artifact-tool` Node
 /// package (handler dispatches via `ArtifactsHandler`).
-fn add_artifacts_tools(
-    context: &CoreToolPlanContext<'_>,
-    planned_tools: &mut PlannedTools,
-) {
+fn add_artifacts_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
     if !context
         .turn_context
         .features
@@ -650,16 +665,8 @@ fn add_artifacts_tools(
 /// evaluates JavaScript snippets in an embedded V8 isolate (codex-v8-poc);
 /// it does not yet expose the broader data/research bridge surface that
 /// the dead `tools/js_repl/mod.rs` module sketches.
-fn add_js_repl_tools(
-    context: &CoreToolPlanContext<'_>,
-    planned_tools: &mut PlannedTools,
-) {
-    if !context
-        .turn_context
-        .features
-        .get()
-        .enabled(Feature::JsRepl)
-    {
+fn add_js_repl_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
+    if !context.turn_context.features.get().enabled(Feature::JsRepl) {
         return;
     }
     planned_tools.add(JsReplHandler::new(create_js_repl_tool()));
@@ -780,39 +787,87 @@ fn add_research_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pla
             ("zotero_search", create_zotero_search_tool()),
             ("zotero_get_tags", create_zotero_get_tags_tool()),
             ("zotero_get_recent", create_zotero_get_recent_tool()),
-            ("zotero_advanced_search", create_zotero_advanced_search_tool()),
+            (
+                "zotero_advanced_search",
+                create_zotero_advanced_search_tool(),
+            ),
             ("zotero_grep_text", create_zotero_grep_text_tool()),
             ("zotero_search_notes", create_zotero_search_notes_tool()),
             ("zotero_get_item", create_zotero_get_item_tool()),
-            ("zotero_get_item_citation", create_zotero_get_item_citation_tool()),
+            (
+                "zotero_get_item_citation",
+                create_zotero_get_item_citation_tool(),
+            ),
             ("zotero_get_fulltext", create_zotero_get_fulltext_tool()),
             ("zotero_get_notes", create_zotero_get_notes_tool()),
-            ("zotero_get_annotations", create_zotero_get_annotations_tool()),
-            ("zotero_get_attachments", create_zotero_get_attachments_tool()),
-            ("zotero_get_collections", create_zotero_get_collections_tool()),
+            (
+                "zotero_get_annotations",
+                create_zotero_get_annotations_tool(),
+            ),
+            (
+                "zotero_get_attachments",
+                create_zotero_get_attachments_tool(),
+            ),
+            (
+                "zotero_get_collections",
+                create_zotero_get_collections_tool(),
+            ),
             ("zotero_list_groups", create_zotero_list_groups_tool()),
-            ("zotero_get_collection_items", create_zotero_get_collection_items_tool()),
-            ("zotero_create_collection", create_zotero_create_collection_tool()),
-            ("zotero_find_or_create_collection", create_zotero_find_or_create_collection_tool()),
+            (
+                "zotero_get_collection_items",
+                create_zotero_get_collection_items_tool(),
+            ),
+            (
+                "zotero_create_collection",
+                create_zotero_create_collection_tool(),
+            ),
+            (
+                "zotero_find_or_create_collection",
+                create_zotero_find_or_create_collection_tool(),
+            ),
             ("zotero_create_items", create_zotero_create_items_tool()),
             ("zotero_update_items", create_zotero_update_items_tool()),
-            ("zotero_add_items_to_collection", create_zotero_add_items_to_collection_tool()),
-            ("zotero_create_attachment_link", create_zotero_create_attachment_link_tool()),
+            (
+                "zotero_add_items_to_collection",
+                create_zotero_add_items_to_collection_tool(),
+            ),
+            (
+                "zotero_create_attachment_link",
+                create_zotero_create_attachment_link_tool(),
+            ),
         ] {
             planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
         }
     }
     if repo_analysis_on {
         for (name, spec) in [
-            ("repo_clone_and_summarize", create_repo_clone_and_summarize_tool()),
+            (
+                "repo_clone_and_summarize",
+                create_repo_clone_and_summarize_tool(),
+            ),
             ("repo_find_models", create_repo_find_models_tool()),
-            ("repo_extract_requirements", create_repo_extract_requirements_tool()),
+            (
+                "repo_extract_requirements",
+                create_repo_extract_requirements_tool(),
+            ),
             ("repo_find_entrypoints", create_repo_find_entrypoints_tool()),
-            ("repo_extract_io_shapes", create_repo_extract_io_shapes_tool()),
+            (
+                "repo_extract_io_shapes",
+                create_repo_extract_io_shapes_tool(),
+            ),
             ("repo_get_health", create_repo_get_health_tool()),
-            ("repo_find_export_paths", create_repo_find_export_paths_tool()),
-            ("repo_extract_config_schema", create_repo_extract_config_schema_tool()),
-            ("repo_diff_requirements", create_repo_diff_requirements_tool()),
+            (
+                "repo_find_export_paths",
+                create_repo_find_export_paths_tool(),
+            ),
+            (
+                "repo_extract_config_schema",
+                create_repo_extract_config_schema_tool(),
+            ),
+            (
+                "repo_diff_requirements",
+                create_repo_diff_requirements_tool(),
+            ),
         ] {
             planned_tools.add(ResearchBridgeHandler::new(name, spec, toolkit.clone()));
         }

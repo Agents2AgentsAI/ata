@@ -70,8 +70,7 @@ impl ChatWidget {
         match commands::list::run() {
             Ok(summaries) if summaries.is_empty() => {
                 self.add_info_message(
-                    "Workspaces: (none — create one with `ata workspace init <name>`)"
-                        .to_string(),
+                    "Workspaces: (none — create one with `ata workspace init <name>`)".to_string(),
                     None,
                 );
             }
@@ -120,9 +119,7 @@ impl ChatWidget {
             return;
         }
         let Some(fast_tier) = self.current_model_fast_service_tier() else {
-            self.add_error_message(
-                "Fast mode is not available for the current model.".to_string(),
-            );
+            self.add_error_message("Fast mode is not available for the current model.".to_string());
             return;
         };
         let was_fast = self.current_service_tier() == Some(fast_tier.id.as_str());

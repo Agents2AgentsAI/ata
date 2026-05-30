@@ -152,9 +152,24 @@ Use when:
 Returns a list of `{path, size_bytes}` entries. Optionally filter to a subdirectory with `path`, or pin to a `revision` (branch/tag/commit SHA)."#,
         &["dataset_id"],
         &[
-            ("dataset_id", string_prop("Required. HuggingFace dataset id (e.g. `squad`, `huggingface/dataset-name`).")),
-            ("path", string_prop("Optional. Subdirectory within the repo to list (e.g. `data/`). Defaults to repo root.")),
-            ("revision", string_prop("Optional. Branch, tag, or commit SHA to pin the listing to. Defaults to main.")),
+            (
+                "dataset_id",
+                string_prop(
+                    "Required. HuggingFace dataset id (e.g. `squad`, `huggingface/dataset-name`).",
+                ),
+            ),
+            (
+                "path",
+                string_prop(
+                    "Optional. Subdirectory within the repo to list (e.g. `data/`). Defaults to repo root.",
+                ),
+            ),
+            (
+                "revision",
+                string_prop(
+                    "Optional. Branch, tag, or commit SHA to pin the listing to. Defaults to main.",
+                ),
+            ),
         ],
     )
 }
@@ -172,10 +187,24 @@ Use when:
 If `files` is omitted, all files in the dataset are downloaded — confirm size with `dataset_list_files` first for large datasets. Returns count and total bytes downloaded; the bytes land at `output_path`."#,
         &["dataset_id", "output_path"],
         &[
-            ("dataset_id", string_prop("Required. HuggingFace dataset id.")),
-            ("output_path", string_prop("Required. Local directory to write files into. Created if missing.")),
-            ("files", string_array_prop("Optional. Subset of file paths (as returned by `dataset_list_files`) to download. Defaults to all files.")),
-            ("revision", string_prop("Optional. Branch, tag, or commit SHA. Defaults to main.")),
+            (
+                "dataset_id",
+                string_prop("Required. HuggingFace dataset id."),
+            ),
+            (
+                "output_path",
+                string_prop("Required. Local directory to write files into. Created if missing."),
+            ),
+            (
+                "files",
+                string_array_prop(
+                    "Optional. Subset of file paths (as returned by `dataset_list_files`) to download. Defaults to all files.",
+                ),
+            ),
+            (
+                "revision",
+                string_prop("Optional. Branch, tag, or commit SHA. Defaults to main."),
+            ),
         ],
     )
 }
@@ -193,9 +222,22 @@ Use when:
 Returns the same shape as `dataset_get`. Prefer `dataset_get` for cross-source code paths; use this when the source is unambiguously HuggingFace."#,
         &["dataset_id"],
         &[
-            ("dataset_id", string_prop("Required. HuggingFace dataset id (e.g. `squad`).")),
-            ("include_files", JsonSchema::boolean(Some("Optional. If true, include the file list in the response.".to_string()))),
-            ("include_readme", JsonSchema::boolean(Some("Optional. If true, include the dataset README.".to_string()))),
+            (
+                "dataset_id",
+                string_prop("Required. HuggingFace dataset id (e.g. `squad`)."),
+            ),
+            (
+                "include_files",
+                JsonSchema::boolean(Some(
+                    "Optional. If true, include the file list in the response.".to_string(),
+                )),
+            ),
+            (
+                "include_readme",
+                JsonSchema::boolean(Some(
+                    "Optional. If true, include the dataset README.".to_string(),
+                )),
+            ),
         ],
     )
 }
@@ -215,9 +257,24 @@ Use when:
 Requires `KAGGLE_USERNAME` + `KAGGLE_KEY` env vars. Returns Kaggle dataset detail. Returns an error if credentials are missing — surface it to the user; do not retry blindly."#,
         &["dataset_id"],
         &[
-            ("dataset_id", string_prop("Required. Kaggle dataset id in `owner/slug` form (e.g. `zillow/zecon`).")),
-            ("include_files", JsonSchema::boolean(Some("Optional. If true, include the file list.".to_string()))),
-            ("include_readme", JsonSchema::boolean(Some("Optional. If true, include the dataset README/description.".to_string()))),
+            (
+                "dataset_id",
+                string_prop(
+                    "Required. Kaggle dataset id in `owner/slug` form (e.g. `zillow/zecon`).",
+                ),
+            ),
+            (
+                "include_files",
+                JsonSchema::boolean(Some(
+                    "Optional. If true, include the file list.".to_string(),
+                )),
+            ),
+            (
+                "include_readme",
+                JsonSchema::boolean(Some(
+                    "Optional. If true, include the dataset README/description.".to_string(),
+                )),
+            ),
         ],
     )
 }
@@ -235,10 +292,26 @@ Use when:
 Requires `KAGGLE_USERNAME` + `KAGGLE_KEY`. Returns competition entries with id, title, deadline, reward, organization, and evaluation metric. Filter with `search` (free text), `category`, or `sort_by`."#,
         &[],
         &[
-            ("search", string_prop("Optional. Free-text query to filter competitions by title/description.")),
-            ("category", string_prop("Optional. Kaggle category filter (e.g. `featured`, `research`).")),
-            ("sort_by", string_prop("Optional. Sort key (e.g. `latestDeadline`, `prize`, `numberOfTeams`).")),
-            ("limit", integer_prop("Optional. Max competitions to return.")),
+            (
+                "search",
+                string_prop(
+                    "Optional. Free-text query to filter competitions by title/description.",
+                ),
+            ),
+            (
+                "category",
+                string_prop("Optional. Kaggle category filter (e.g. `featured`, `research`)."),
+            ),
+            (
+                "sort_by",
+                string_prop(
+                    "Optional. Sort key (e.g. `latestDeadline`, `prize`, `numberOfTeams`).",
+                ),
+            ),
+            (
+                "limit",
+                integer_prop("Optional. Max competitions to return."),
+            ),
         ],
     )
 }
@@ -255,9 +328,10 @@ Use when:
 
 Requires `KAGGLE_USERNAME` + `KAGGLE_KEY` AND that the user has accepted the competition's rules on kaggle.com — otherwise the API returns 403. Returns `{path, size_bytes}` entries. No bytes downloaded."#,
         &["competition"],
-        &[
-            ("competition", string_prop("Required. Kaggle competition id/slug (e.g. `titanic`).")),
-        ],
+        &[(
+            "competition",
+            string_prop("Required. Kaggle competition id/slug (e.g. `titanic`)."),
+        )],
     )
 }
 
@@ -274,9 +348,20 @@ Use when:
 Requires `KAGGLE_USERNAME` + `KAGGLE_KEY` AND prior rules acceptance on kaggle.com. If `files` is omitted, all files are downloaded. Returns count and total bytes; bytes land at `output_path`."#,
         &["competition", "output_path"],
         &[
-            ("competition", string_prop("Required. Kaggle competition id/slug.")),
-            ("output_path", string_prop("Required. Local directory to write files into. Created if missing.")),
-            ("files", string_array_prop("Optional. Subset of file paths to download. Defaults to all files.")),
+            (
+                "competition",
+                string_prop("Required. Kaggle competition id/slug."),
+            ),
+            (
+                "output_path",
+                string_prop("Required. Local directory to write files into. Created if missing."),
+            ),
+            (
+                "files",
+                string_array_prop(
+                    "Optional. Subset of file paths to download. Defaults to all files.",
+                ),
+            ),
         ],
     )
 }

@@ -467,7 +467,9 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
             ))
         })?
         .error_for_status()
-        .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist loadCodeAssist failed: {err}")))?
+        .map_err(|err| {
+            CodexErr::InvalidRequest(format!("Gemini Code Assist loadCodeAssist failed: {err}"))
+        })?
         .json()
         .await
         .map_err(|err| {
@@ -516,10 +518,14 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
             ))
         })?
         .error_for_status()
-        .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist onboardUser failed: {err}")))?
+        .map_err(|err| {
+            CodexErr::InvalidRequest(format!("Gemini Code Assist onboardUser failed: {err}"))
+        })?
         .json()
         .await
-        .map_err(|err| CodexErr::InvalidRequest(format!("Failed to parse onboardUser response: {err}")))?;
+        .map_err(|err| {
+            CodexErr::InvalidRequest(format!("Failed to parse onboardUser response: {err}"))
+        })?;
 
     let poll_started = tokio::time::Instant::now();
     let mut poll_interval = ONBOARD_POLL_INITIAL_INTERVAL;
@@ -558,10 +564,14 @@ async fn resolve_project_via_code_assist(access_token: &str) -> Result<String> {
                 CodexErr::InvalidRequest(format!("Gemini Code Assist operation poll failed: {err}"))
             })?
             .error_for_status()
-            .map_err(|err| CodexErr::InvalidRequest(format!("Gemini Code Assist operation failed: {err}")))?
+            .map_err(|err| {
+                CodexErr::InvalidRequest(format!("Gemini Code Assist operation failed: {err}"))
+            })?
             .json()
             .await
-            .map_err(|err| CodexErr::InvalidRequest(format!("Failed to parse operation response: {err}")))?;
+            .map_err(|err| {
+                CodexErr::InvalidRequest(format!("Failed to parse operation response: {err}"))
+            })?;
         poll_interval = std::cmp::min(poll_interval.saturating_mul(2), ONBOARD_POLL_MAX_INTERVAL);
     }
 

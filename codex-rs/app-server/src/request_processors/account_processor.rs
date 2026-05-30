@@ -1097,9 +1097,7 @@ impl AccountRequestProcessor {
                             thread_manager_for_task.set_models_manager(new_manager);
                         }
                         Err(err) => {
-                            warn!(
-                                "failed to reload config for models_manager refresh: {err}"
-                            );
+                            warn!("failed to reload config for models_manager refresh: {err}");
                         }
                     }
                 }
@@ -1142,7 +1140,8 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
 
         if logged_in {
-            self.send_login_success_notifications(/*login_id*/ None).await;
+            self.send_login_success_notifications(/*login_id*/ None)
+                .await;
         }
     }
 
@@ -1289,12 +1288,7 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn ata_verify_otp_v2(
-        &self,
-        request_id: ConnectionRequestId,
-        email: String,
-        otp: String,
-    ) {
+    async fn ata_verify_otp_v2(&self, request_id: ConnectionRequestId, email: String, otp: String) {
         let result = self
             .ata_verify_otp_common(email.as_str(), otp.as_str())
             .await

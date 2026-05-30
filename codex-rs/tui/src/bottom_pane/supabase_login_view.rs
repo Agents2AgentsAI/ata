@@ -296,14 +296,12 @@ fn render_body_lines(phase: &SupabaseLoginPhase) -> Vec<Line<'static>> {
             }
             lines
         }
-        SupabaseLoginPhase::SendingOtp { email } => vec![
-            Line::from(vec![
-                gutter(),
-                "Sending OTP to ".dim(),
-                email.clone().into(),
-                "…".dim(),
-            ]),
-        ],
+        SupabaseLoginPhase::SendingOtp { email } => vec![Line::from(vec![
+            gutter(),
+            "Sending OTP to ".dim(),
+            email.clone().into(),
+            "…".dim(),
+        ])],
         SupabaseLoginPhase::EnterOtp { email, otp, error } => {
             let mut lines = vec![
                 Line::from(vec![
@@ -324,28 +322,19 @@ fn render_body_lines(phase: &SupabaseLoginPhase) -> Vec<Line<'static>> {
             }
             lines
         }
-        SupabaseLoginPhase::VerifyingOtp { email } => vec![
-            Line::from(vec![
-                gutter(),
-                "Verifying code for ".dim(),
-                email.clone().into(),
-                "…".dim(),
-            ]),
-        ],
+        SupabaseLoginPhase::VerifyingOtp { email } => vec![Line::from(vec![
+            gutter(),
+            "Verifying code for ".dim(),
+            email.clone().into(),
+            "…".dim(),
+        ])],
         SupabaseLoginPhase::Success { email } => vec![
-            Line::from(vec![
-                gutter(),
-                "Signed in as ".dim(),
-                email.clone().green(),
-            ]),
-            Line::from(vec![
-                gutter(),
-                "Press any key to close.".dim(),
-            ]),
+            Line::from(vec![gutter(), "Signed in as ".dim(), email.clone().green()]),
+            Line::from(vec![gutter(), "Press any key to close.".dim()]),
         ],
-        SupabaseLoginPhase::Cancelled => vec![
-            Line::from(vec![gutter(), "Sign-in cancelled.".dim()]),
-        ],
+        SupabaseLoginPhase::Cancelled => {
+            vec![Line::from(vec![gutter(), "Sign-in cancelled.".dim()])]
+        }
     }
 }
 

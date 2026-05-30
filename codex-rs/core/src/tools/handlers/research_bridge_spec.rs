@@ -105,11 +105,26 @@ pub fn create_paper_search_tool() -> ToolSpec {
         "Search academic literature (Semantic Scholar, arXiv, OpenAlex) for papers matching a query. Returns matches with title, authors, year, venue, citation count, ids (DOI, arXiv, S2), and optionally abstract. No PDFs are downloaded.",
         &["query"],
         &[
-            ("query", string_prop("Required. Free-text search query for academic papers.")),
-            ("year_from", integer_prop("Optional. Earliest publication year (inclusive).")),
-            ("year_to", integer_prop("Optional. Latest publication year (inclusive).")),
-            ("limit", integer_prop("Optional. Max results. Defaults to a small list.")),
-            ("include_abstract", boolean_prop("Optional. Include abstracts when true.")),
+            (
+                "query",
+                string_prop("Required. Free-text search query for academic papers."),
+            ),
+            (
+                "year_from",
+                integer_prop("Optional. Earliest publication year (inclusive)."),
+            ),
+            (
+                "year_to",
+                integer_prop("Optional. Latest publication year (inclusive)."),
+            ),
+            (
+                "limit",
+                integer_prop("Optional. Max results. Defaults to a small list."),
+            ),
+            (
+                "include_abstract",
+                boolean_prop("Optional. Include abstracts when true."),
+            ),
         ],
     )
 }
@@ -120,7 +135,10 @@ pub fn create_paper_get_tool() -> ToolSpec {
         PAPER_GET_TOOL_NAME,
         "Get detailed paper information by DOI, arXiv ID, or Semantic Scholar ID. Use after paper_search to fetch full metadata + abstract.",
         &["paper_id"],
-        &[("paper_id", string_prop("DOI, arXiv id, or Semantic Scholar id."))],
+        &[(
+            "paper_id",
+            string_prop("DOI, arXiv id, or Semantic Scholar id."),
+        )],
     )
 }
 
@@ -131,10 +149,16 @@ pub fn create_paper_citations_tool() -> ToolSpec {
         "List papers that cite a given paper. Paginated; pass offset+limit to walk the list.",
         &["paper_id"],
         &[
-            ("paper_id", string_prop("DOI, arXiv id, or Semantic Scholar id.")),
+            (
+                "paper_id",
+                string_prop("DOI, arXiv id, or Semantic Scholar id."),
+            ),
             ("offset", integer_prop("Optional. Pagination offset.")),
             ("limit", integer_prop("Optional. Page size.")),
-            ("fields", string_array_prop("Optional. Subset of fields to return.")),
+            (
+                "fields",
+                string_array_prop("Optional. Subset of fields to return."),
+            ),
         ],
     )
 }
@@ -146,10 +170,16 @@ pub fn create_paper_references_tool() -> ToolSpec {
         "List papers cited BY a given paper (its bibliography). Paginated.",
         &["paper_id"],
         &[
-            ("paper_id", string_prop("DOI, arXiv id, or Semantic Scholar id.")),
+            (
+                "paper_id",
+                string_prop("DOI, arXiv id, or Semantic Scholar id."),
+            ),
             ("offset", integer_prop("Optional. Pagination offset.")),
             ("limit", integer_prop("Optional. Page size.")),
-            ("fields", string_array_prop("Optional. Subset of fields to return.")),
+            (
+                "fields",
+                string_array_prop("Optional. Subset of fields to return."),
+            ),
         ],
     )
 }
@@ -161,8 +191,14 @@ pub fn create_paper_recommendations_tool() -> ToolSpec {
         "Recommend papers similar to a positive set (and optionally dissimilar to a negative set). Backed by Semantic Scholar's recommendations API.",
         &["positive_paper_ids"],
         &[
-            ("positive_paper_ids", string_array_prop("Required. Paper ids to seed the recommendation.")),
-            ("negative_paper_ids", string_array_prop("Optional. Paper ids to push the recs away from.")),
+            (
+                "positive_paper_ids",
+                string_array_prop("Required. Paper ids to seed the recommendation."),
+            ),
+            (
+                "negative_paper_ids",
+                string_array_prop("Optional. Paper ids to push the recs away from."),
+            ),
             ("limit", integer_prop("Optional. Max recommendations.")),
         ],
     )
@@ -178,7 +214,12 @@ pub fn create_hn_search_tool() -> ToolSpec {
         &["query"],
         &[
             ("query", string_prop("Free-text search query.")),
-            ("tags", string_prop("Optional. Algolia HN tag filter, e.g. `story`, `comment`, `(story,front_page)`.")),
+            (
+                "tags",
+                string_prop(
+                    "Optional. Algolia HN tag filter, e.g. `story`, `comment`, `(story,front_page)`.",
+                ),
+            ),
             ("limit", integer_prop("Optional. Max hits.")),
         ],
     )
@@ -191,8 +232,14 @@ pub fn create_hn_get_thread_tool() -> ToolSpec {
         "Fetch a full Hacker News discussion thread (story + its descendant comments) by story id, returned as nested JSON.",
         &["story_id"],
         &[
-            ("story_id", string_prop("HN story id (the numeric id from `hn_search` results).")),
-            ("max_depth", integer_prop("Optional. Limit comment-tree depth.")),
+            (
+                "story_id",
+                string_prop("HN story id (the numeric id from `hn_search` results)."),
+            ),
+            (
+                "max_depth",
+                integer_prop("Optional. Limit comment-tree depth."),
+            ),
         ],
     )
 }
@@ -219,7 +266,10 @@ pub fn create_patent_get_tool() -> ToolSpec {
         PATENT_GET_TOOL_NAME,
         "Fetch a single patent's full bibliographic + abstract record by publication id. EPO credentials required.",
         &["publication_id"],
-        &[("publication_id", string_prop("EPO publication id (e.g. `EP1234567`)."))],
+        &[(
+            "publication_id",
+            string_prop("EPO publication id (e.g. `EP1234567`)."),
+        )],
     )
 }
 
@@ -267,7 +317,10 @@ pub fn create_zotero_advanced_search_tool() -> ToolSpec {
         &[
             ("query", string_prop("Optional. Free-text query.")),
             ("tags", string_array_prop("Optional. Filter by tags.")),
-            ("item_type", string_prop("Optional. e.g. `journalArticle`, `book`.")),
+            (
+                "item_type",
+                string_prop("Optional. e.g. `journalArticle`, `book`."),
+            ),
             ("year_from", integer_prop("Optional.")),
             ("year_to", integer_prop("Optional.")),
             ("limit", integer_prop("Optional.")),
@@ -307,7 +360,10 @@ pub fn create_zotero_get_item_tool() -> ToolSpec {
         ZOTERO_GET_ITEM_TOOL_NAME,
         "Fetch a single Zotero item's full metadata by item key.",
         &["item_key"],
-        &[("item_key", string_prop("Required. Zotero item key (8-char identifier)."))],
+        &[(
+            "item_key",
+            string_prop("Required. Zotero item key (8-char identifier)."),
+        )],
     )
 }
 
@@ -319,7 +375,10 @@ pub fn create_zotero_get_item_citation_tool() -> ToolSpec {
         &["item_key"],
         &[
             ("item_key", string_prop("Required. Zotero item key.")),
-            ("style", string_prop("Optional. Citation style (default: `chicago-author-date`).")),
+            (
+                "style",
+                string_prop("Optional. Citation style (default: `chicago-author-date`)."),
+            ),
         ],
     )
 }
@@ -394,7 +453,10 @@ pub fn create_zotero_get_collection_items_tool() -> ToolSpec {
         "List items inside a specific Zotero collection.",
         &["collection_key"],
         &[
-            ("collection_key", string_prop("Required. Zotero collection key.")),
+            (
+                "collection_key",
+                string_prop("Required. Zotero collection key."),
+            ),
             ("limit", integer_prop("Optional.")),
         ],
     )
@@ -408,7 +470,10 @@ pub fn create_zotero_create_collection_tool() -> ToolSpec {
         &["name"],
         &[
             ("name", string_prop("Required. New collection name.")),
-            ("parent_collection_key", string_prop("Optional. Parent collection to nest under.")),
+            (
+                "parent_collection_key",
+                string_prop("Optional. Parent collection to nest under."),
+            ),
         ],
     )
 }
@@ -420,8 +485,14 @@ pub fn create_zotero_find_or_create_collection_tool() -> ToolSpec {
         "Look up a Zotero collection by name (case-insensitive); create it if it does not exist. Returns the collection key.",
         &["name"],
         &[
-            ("name", string_prop("Required. Collection name to find or create.")),
-            ("parent_collection_key", string_prop("Optional. Parent collection.")),
+            (
+                "name",
+                string_prop("Required. Collection name to find or create."),
+            ),
+            (
+                "parent_collection_key",
+                string_prop("Optional. Parent collection."),
+            ),
         ],
     )
 }
@@ -465,8 +536,14 @@ pub fn create_zotero_add_items_to_collection_tool() -> ToolSpec {
         "Add one or more existing Zotero items to a collection.",
         &["collection_key", "item_keys"],
         &[
-            ("collection_key", string_prop("Required. Target collection key.")),
-            ("item_keys", string_array_prop("Required. Item keys to add.")),
+            (
+                "collection_key",
+                string_prop("Required. Target collection key."),
+            ),
+            (
+                "item_keys",
+                string_array_prop("Required. Item keys to add."),
+            ),
         ],
     )
 }
@@ -478,9 +555,15 @@ pub fn create_zotero_create_attachment_link_tool() -> ToolSpec {
         "Attach a URL link to a Zotero parent item (e.g. for archival pages or papers without a downloadable PDF).",
         &["parent_item_key", "url"],
         &[
-            ("parent_item_key", string_prop("Required. Item to attach to.")),
+            (
+                "parent_item_key",
+                string_prop("Required. Item to attach to."),
+            ),
             ("url", string_prop("Required. URL to link.")),
-            ("title", string_prop("Optional. Display title for the link.")),
+            (
+                "title",
+                string_prop("Optional. Display title for the link."),
+            ),
         ],
     )
 }
@@ -505,8 +588,18 @@ Use when:
 Returns: `{url, commit_sha?, directory_tree, readme_snippet?, key_files, total_files}`. The directory tree is depth-capped, the README is truncated to ~2000 chars, and the result is cached for 30 minutes."#,
         &["repo_url"],
         &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository (e.g. `https://github.com/owner/repo`). `/tree/<branch>` suffixes are accepted.")),
-            ("branch", string_prop("Optional. Branch, tag, or single ref to check out. Defaults to the repo's default branch.")),
+            (
+                "repo_url",
+                string_prop(
+                    "Required. https URL to a GitHub or GitLab repository (e.g. `https://github.com/owner/repo`). `/tree/<branch>` suffixes are accepted.",
+                ),
+            ),
+            (
+                "branch",
+                string_prop(
+                    "Optional. Branch, tag, or single ref to check out. Defaults to the repo's default branch.",
+                ),
+            ),
         ],
     )
 }
@@ -524,8 +617,16 @@ Use when:
 Returns a list of `{file_path, class_name, line_number, context}` entries. Matches classes inheriting from `nn.Module`, `tf.keras.Model`, `flax.linen.Module`, or similar framework base classes. Results capped at 300 entries."#,
         &["repo_url"],
         &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-            ("framework", string_prop("Optional. Constrain to one of: `pytorch`, `tensorflow`, `jax`. If omitted, all three are searched.")),
+            (
+                "repo_url",
+                string_prop("Required. https URL to a GitHub or GitLab repository."),
+            ),
+            (
+                "framework",
+                string_prop(
+                    "Optional. Constrain to one of: `pytorch`, `tensorflow`, `jax`. If omitted, all three are searched.",
+                ),
+            ),
         ],
     )
 }
@@ -542,9 +643,10 @@ Use when:
 
 Parses `requirements*.txt`, `pyproject.toml`, `setup.py`, `setup.cfg`, `Pipfile`, and `environment.yml`/`yaml`. Returns `{repo_url, dependencies, source_files}` where dependencies are deduplicated and rendered as `name<constraint>` (e.g. `torch>=2.2`)."#,
         &["repo_url"],
-        &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-        ],
+        &[(
+            "repo_url",
+            string_prop("Required. https URL to a GitHub or GitLab repository."),
+        )],
     )
 }
 
@@ -561,8 +663,16 @@ Use when:
 Returns `{file_path, kind, cli_args_summary?, config_file?}` per match. Detection combines filename heuristics (e.g. `train.py`, `infer.py`) with content checks (`__main__` guard + topic keywords). Each entry includes a CLI-args summary when the script uses argparse/click."#,
         &["repo_url"],
         &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-            ("task_hint", string_prop("Optional. Constrain to one of: `train`, `eval`, `infer`, `export`. If omitted, all four are searched.")),
+            (
+                "repo_url",
+                string_prop("Required. https URL to a GitHub or GitLab repository."),
+            ),
+            (
+                "task_hint",
+                string_prop(
+                    "Optional. Constrain to one of: `train`, `eval`, `infer`, `export`. If omitted, all four are searched.",
+                ),
+            ),
         ],
     )
 }
@@ -580,8 +690,16 @@ Use when:
 Returns `{input_shapes?, output_shapes?, dtype?, source_file, source_line}` per match. Greps for assignments like `input_size=...`, `image_size=...`, `output_shape=...`, `num_classes=...` across `.py/.yaml/.yml/.json/.toml`, plus `torch.randn(...)`/`np.zeros(...)` constructors."#,
         &["repo_url"],
         &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-            ("model_class", string_prop("Optional. Only return shapes from files mentioning this class name, useful when a repo has multiple models.")),
+            (
+                "repo_url",
+                string_prop("Required. https URL to a GitHub or GitLab repository."),
+            ),
+            (
+                "model_class",
+                string_prop(
+                    "Optional. Only return shapes from files mentioning this class name, useful when a repo has multiple models.",
+                ),
+            ),
         ],
     )
 }
@@ -598,9 +716,7 @@ Use when:
 
 Returns `{license?, last_commit_date?, stars, open_issues, releases_count, ci_passing?}`. Calls the GitHub REST API only — no clone, no rate-limited git operations. GitLab URLs are not supported by this tool; use `repo_clone_and_summarize` instead for those. With `GITHUB_TOKEN` set, allowed rate scales up; without it, falls back to anonymous limits."#,
         &["repo_url"],
-        &[
-            ("repo_url", string_prop("Required. https GitHub URL.")),
-        ],
+        &[("repo_url", string_prop("Required. https GitHub URL."))],
     )
 }
 
@@ -616,9 +732,10 @@ Use when:
 
 Returns `{file_path, target_format, framework_version?}` per match. `framework_version` is inferred from the repo's declared requirements (e.g. `torch>=2.2`). Greps for known export calls like `torch.onnx.export`, `tf.lite.TFLiteConverter`, `ct.convert`, `torch.jit.script`/`trace`."#,
         &["repo_url"],
-        &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-        ],
+        &[(
+            "repo_url",
+            string_prop("Required. https URL to a GitHub or GitLab repository."),
+        )],
     )
 }
 
@@ -634,9 +751,10 @@ Use when:
 
 Returns a list of `{config_file, format, key_params: [{name, default?, description?}]}`. `format` is one of `yaml`/`json`/`toml`/`cfg`/`argparse`. Each schema is capped at 200 keys; total schemas capped at 200."#,
         &["repo_url"],
-        &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-        ],
+        &[(
+            "repo_url",
+            string_prop("Required. https URL to a GitHub or GitLab repository."),
+        )],
     )
 }
 
@@ -653,8 +771,16 @@ Use when:
 Returns `{repo_url, conflicts, missing_locally, compatible, repo_total_deps, local_total_deps}` where `conflicts` lists `name: repo requires X, local has Y` entries. `local_requirements_path` must be a path the agent can read locally (a `requirements*.txt`/`pyproject.toml`/etc.)."#,
         &["repo_url", "local_requirements_path"],
         &[
-            ("repo_url", string_prop("Required. https URL to a GitHub or GitLab repository.")),
-            ("local_requirements_path", string_prop("Required. Local filesystem path to a requirements file to compare against.")),
+            (
+                "repo_url",
+                string_prop("Required. https URL to a GitHub or GitLab repository."),
+            ),
+            (
+                "local_requirements_path",
+                string_prop(
+                    "Required. Local filesystem path to a requirements file to compare against.",
+                ),
+            ),
         ],
     )
 }

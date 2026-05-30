@@ -385,10 +385,7 @@ impl App {
                 self.chat_widget.request_frame_redraw();
             }
             AppEvent::SupabaseLogoutRequested => {
-                let result = app_server
-                    .ata_logout()
-                    .await
-                    .map_err(|err| err.to_string());
+                let result = app_server.ata_logout().await.map_err(|err| err.to_string());
                 self.chat_widget
                     .app_event_tx
                     .send(AppEvent::SupabaseLogoutResult(result));
@@ -874,8 +871,7 @@ impl App {
                 self.chat_widget.submit_user_text(text);
             }
             AppEvent::ReadingViewBrowserMessage(json) => {
-                self.chat_widget
-                    .handle_reading_view_browser_message(&json);
+                self.chat_widget.handle_reading_view_browser_message(&json);
             }
             AppEvent::ReadingViewServerStarted(server) => {
                 self.chat_widget.set_reading_view_server(server);

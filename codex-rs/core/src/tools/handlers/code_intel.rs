@@ -19,6 +19,7 @@ use crate::function_tool::FunctionCallError;
 use crate::state::MultiRootState;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::HANDLER_DEFAULT_LIMIT;
 use crate::tools::handlers::HANDLER_MAX_RESULT_BYTES;
 use crate::tools::handlers::HANDLER_MAX_RESULTS;
@@ -26,7 +27,6 @@ use crate::tools::handlers::function_arguments_from_payload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::require_absolute_path_argument;
 use crate::tools::handlers::truncate_tool_output;
-use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
 use codex_tools::ToolExecutor;
 
@@ -625,7 +625,10 @@ impl ToolExecutor<ToolInvocation> for CodeIntelToolHandler {
             output
         };
 
-        Ok(boxed_tool_output(FunctionToolOutput::from_text(output, Some(true))))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            output,
+            Some(true),
+        )))
     }
 }
 
