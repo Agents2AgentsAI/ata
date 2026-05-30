@@ -254,6 +254,7 @@ impl ChatWidget {
                     codex_login::CodexAuth::from_api_key("placeholder"),
                 ),
             },
+            supabase_login_state: None,
         };
 
         widget.prefetch_rate_limits();

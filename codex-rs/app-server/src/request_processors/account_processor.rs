@@ -1331,6 +1331,12 @@ impl AccountRequestProcessor {
                         "failed to persist ATA session: {err}"
                     )));
                 }
+                // Refresh the in-memory AuthManager so the next call to
+                // `auth_cached()` returns the freshly-persisted
+                // `CodexAuth::Ata` — without this reload, the account
+                // status panel would keep showing the pre-sign-in state
+                // until the next `ata` restart.
+                self.auth_manager.reload().await;
                 Ok(user_email)
             }
             Err(SupabaseError::Api { status, message }) => Err(invalid_request(format!(
@@ -1342,7 +1348,13 @@ impl AccountRequestProcessor {
 
     async fn ata_logout_v2(&self, request_id: ConnectionRequestId) {
         let result = match delete_ata_session(&self.config.codex_home) {
-            Ok(_) => Ok(LoginAccountResponse::AtaLogout {}),
+            Ok(_) => {
+                // Reload so the in-memory AuthManager drops the cached
+                // `CodexAuth::Ata`; otherwise voice mode / status would
+                // keep behaving as if the user were signed in.
+                self.auth_manager.reload().await;
+                Ok(LoginAccountResponse::AtaLogout {})
+            }
             Err(err) => Err(internal_error(format!(
                 "failed to clear ATA session: {err}"
             ))),

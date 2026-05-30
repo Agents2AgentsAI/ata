@@ -315,6 +315,97 @@ impl App {
                         .add_error_message(format!("Logout failed: {err}"));
                 }
             },
+            AppEvent::SupabaseLoginOpen => {
+                self.chat_widget.open_supabase_login();
+            }
+            AppEvent::SupabaseSendOtp { email } => {
+                let result = app_server
+                    .ata_send_otp(email)
+                    .await
+                    .map_err(|err| err.to_string());
+                self.chat_widget
+                    .app_event_tx
+                    .send(AppEvent::SupabaseSendOtpResult(result));
+            }
+            AppEvent::SupabaseSendOtpResult(result) => {
+                use crate::bottom_pane::SupabaseLoginPhase;
+                self.chat_widget.with_supabase_login_state(|state| {
+                    state.phase = match (&state.phase, result) {
+                        (SupabaseLoginPhase::SendingOtp { email }, Ok(())) => {
+                            SupabaseLoginPhase::EnterOtp {
+                                email: email.clone(),
+                                otp: String::new(),
+                                error: None,
+                            }
+                        }
+                        (SupabaseLoginPhase::SendingOtp { email }, Err(err)) => {
+                            SupabaseLoginPhase::EnterEmail {
+                                email: email.clone(),
+                                error: Some(err),
+                            }
+                        }
+                        // The user already cancelled or the view advanced —
+                        // ignore the result and leave the phase untouched.
+                        (phase, _) => phase.clone(),
+                    };
+                });
+                self.chat_widget.request_frame_redraw();
+            }
+            AppEvent::SupabaseVerifyOtp { email, otp } => {
+                let result = app_server
+                    .ata_verify_otp(email, otp)
+                    .await
+                    .map_err(|err| err.to_string());
+                self.chat_widget
+                    .app_event_tx
+                    .send(AppEvent::SupabaseVerifyOtpResult(result));
+            }
+            AppEvent::SupabaseVerifyOtpResult(result) => {
+                use crate::bottom_pane::SupabaseLoginPhase;
+                let success_email = result.as_ref().ok().cloned();
+                self.chat_widget.with_supabase_login_state(|state| {
+                    state.phase = match (&state.phase, result) {
+                        (SupabaseLoginPhase::VerifyingOtp { .. }, Ok(email)) => {
+                            SupabaseLoginPhase::Success { email }
+                        }
+                        (SupabaseLoginPhase::VerifyingOtp { email }, Err(err)) => {
+                            SupabaseLoginPhase::EnterOtp {
+                                email: email.clone(),
+                                otp: String::new(),
+                                error: Some(err),
+                            }
+                        }
+                        (phase, _) => phase.clone(),
+                    };
+                });
+                if let Some(email) = success_email {
+                    self.chat_widget
+                        .add_info_message(format!("Signed in to ATA as {email}."), None);
+                }
+                self.chat_widget.request_frame_redraw();
+            }
+            AppEvent::SupabaseLogoutRequested => {
+                let result = app_server
+                    .ata_logout()
+                    .await
+                    .map_err(|err| err.to_string());
+                self.chat_widget
+                    .app_event_tx
+                    .send(AppEvent::SupabaseLogoutResult(result));
+            }
+            AppEvent::SupabaseLogoutResult(result) => {
+                match result {
+                    Ok(()) => {
+                        self.chat_widget
+                            .add_info_message("Signed out of ATA.".to_string(), None);
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("ATA logout failed: {err}"));
+                    }
+                }
+                self.chat_widget.clear_supabase_login_state();
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }

@@ -30,6 +30,8 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -304,6 +306,14 @@ impl AppServerSession {
                 None,
                 Some(TelemetryAuthMode::ApiKey),
                 Some(StatusAccountDisplay::Copilot),
+                None,
+                FeedbackAudience::External,
+                false,
+            ),
+            Some(Account::Ata { email }) => (
+                Some(email.clone()),
+                Some(TelemetryAuthMode::ApiKey),
+                Some(StatusAccountDisplay::Ata { email: Some(email) }),
                 None,
                 FeedbackAudience::External,
                 false,
@@ -860,6 +870,60 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn ata_send_otp(&mut self, email: String) -> Result<()> {
+        let request_id = self.next_request_id();
+        let response: LoginAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LoginAccount {
+                request_id,
+                params: LoginAccountParams::AtaSendOtp { email },
+            })
+            .await
+            .wrap_err("account/login/start (AtaSendOtp) failed in TUI")?;
+        match response {
+            LoginAccountResponse::AtaSendOtp {} => Ok(()),
+            other => Err(color_eyre::eyre::eyre!(
+                "unexpected AtaSendOtp response: {other:?}"
+            )),
+        }
+    }
+
+    pub(crate) async fn ata_verify_otp(&mut self, email: String, otp: String) -> Result<String> {
+        let request_id = self.next_request_id();
+        let response: LoginAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LoginAccount {
+                request_id,
+                params: LoginAccountParams::AtaVerifyOtp { email, otp },
+            })
+            .await
+            .wrap_err("account/login/start (AtaVerifyOtp) failed in TUI")?;
+        match response {
+            LoginAccountResponse::AtaVerifyOtp { email } => Ok(email),
+            other => Err(color_eyre::eyre::eyre!(
+                "unexpected AtaVerifyOtp response: {other:?}"
+            )),
+        }
+    }
+
+    pub(crate) async fn ata_logout(&mut self) -> Result<()> {
+        let request_id = self.next_request_id();
+        let response: LoginAccountResponse = self
+            .client
+            .request_typed(ClientRequest::LoginAccount {
+                request_id,
+                params: LoginAccountParams::AtaLogout,
+            })
+            .await
+            .wrap_err("account/login/start (AtaLogout) failed in TUI")?;
+        match response {
+            LoginAccountResponse::AtaLogout {} => Ok(()),
+            other => Err(color_eyre::eyre::eyre!(
+                "unexpected AtaLogout response: {other:?}"
+            )),
+        }
+    }
+
     pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {
         let request_id = self.next_request_id();
         let _: ThreadUnsubscribeResponse = self
@@ -1151,7 +1215,8 @@ pub(crate) fn status_account_display_from_auth_mode(
     plan_type: Option<codex_protocol::account::PlanType>,
 ) -> Option<StatusAccountDisplay> {
     match auth_mode {
-        Some(AuthMode::ApiKey) | Some(AuthMode::Ata) => Some(StatusAccountDisplay::ApiKey),
+        Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
+        Some(AuthMode::Ata) => Some(StatusAccountDisplay::Ata { email: None }),
         Some(AuthMode::Chatgpt)
         | Some(AuthMode::ChatgptAuthTokens)
         | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {

@@ -328,6 +328,12 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
+            SlashCommand::SupabaseLogin => {
+                self.app_event_tx.send(AppEvent::SupabaseLoginOpen);
+            }
+            SlashCommand::SupabaseLogout => {
+                self.app_event_tx.send(AppEvent::SupabaseLogoutRequested);
+            }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
             }
@@ -995,6 +1001,8 @@ impl ChatWidget {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Logout
+            | SlashCommand::SupabaseLogin
+            | SlashCommand::SupabaseLogout
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Hooks

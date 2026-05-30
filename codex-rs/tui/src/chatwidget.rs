@@ -35,6 +35,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -516,7 +517,7 @@ pub(crate) enum ExternalEditorState {
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
-    app_event_tx: AppEventSender,
+    pub(crate) app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
     transcript: TranscriptState,
@@ -782,6 +783,12 @@ pub(crate) struct ChatWidget {
     /// lands in `codex-login`.
     #[cfg(not(target_os = "linux"))]
     auth_manager: Arc<codex_login::AuthManager>,
+    /// Shared state for the active `/supabase-login` flow. `Some` while the
+    /// view is open; the event dispatcher mutates the `phase` field as
+    /// app-server responses come in. `None` once the user accepts or
+    /// cancels — the view itself transitions to `Cancelled` first so the
+    /// dispatcher's writes after that are no-ops.
+    supabase_login_state: Option<Arc<RwLock<crate::bottom_pane::SupabaseLoginState>>>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1361,6 +1368,10 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn request_frame_redraw(&mut self) {
+        self.request_redraw();
+    }
+
     fn bump_active_cell_revision(&mut self) {
         self.transcript.bump_active_cell_revision();
     }
@@ -1726,6 +1737,38 @@ impl ChatWidget {
     #[cfg(test)]
     pub(crate) fn remote_image_urls(&self) -> Vec<String> {
         self.bottom_pane.remote_image_urls()
+    }
+
+    /// Open the Supabase login view in the bottom pane and stash the shared
+    /// state so the event dispatcher can update phase transitions as
+    /// app-server responses come in.
+    pub(crate) fn open_supabase_login(&mut self) {
+        let state = Arc::new(RwLock::new(crate::bottom_pane::SupabaseLoginState::new()));
+        self.supabase_login_state = Some(state.clone());
+        let view = crate::bottom_pane::SupabaseLoginView::new(state, self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    /// Mutate the active Supabase-login state, if any. Returns true if the
+    /// state was present so the caller can decide whether to schedule a redraw.
+    pub(crate) fn with_supabase_login_state<F>(&self, mutator: F) -> bool
+    where
+        F: FnOnce(&mut crate::bottom_pane::SupabaseLoginState),
+    {
+        if let Some(state) = self.supabase_login_state.as_ref()
+            && let Ok(mut guard) = state.write()
+        {
+            mutator(&mut guard);
+            return true;
+        }
+        false
+    }
+
+    /// Drop the cached Supabase-login state. Called when the view closes or
+    /// the user cancels so subsequent dispatcher writes silently no-op.
+    pub(crate) fn clear_supabase_login_state(&mut self) {
+        self.supabase_login_state = None;
     }
 
     #[cfg(test)]

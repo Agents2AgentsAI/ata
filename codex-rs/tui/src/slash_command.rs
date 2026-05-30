@@ -56,6 +56,10 @@ pub enum SlashCommand {
     Apps,
     Plugins,
     Logout,
+    #[strum(serialize = "supabase-login")]
+    SupabaseLogin,
+    #[strum(serialize = "supabase-logout")]
+    SupabaseLogout,
     Quit,
     Exit,
     Feedback,
@@ -134,6 +138,8 @@ impl SlashCommand {
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::SupabaseLogin => "sign in to ATA via Supabase OTP",
+            SlashCommand::SupabaseLogout => "sign out of ATA",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
             SlashCommand::Research => "configure research tool integrations",
@@ -201,6 +207,8 @@ impl SlashCommand {
             | SlashCommand::Plan
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::SupabaseLogin
+            | SlashCommand::SupabaseLogout
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate => false,
             SlashCommand::Diff

@@ -209,7 +209,13 @@ impl ModelProvider for ConfiguredModelProvider {
                     Some(auth)
                 })
                 .map(|auth| match &auth {
-                    CodexAuth::ApiKey(_) | CodexAuth::Ata(_) => Ok(ProviderAccount::ApiKey),
+                    CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
+                    CodexAuth::Ata(ata) => match ata.email() {
+                        Some(email) => Ok(ProviderAccount::Ata {
+                            email: email.to_string(),
+                        }),
+                        None => Ok(ProviderAccount::ApiKey),
+                    },
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
                     | CodexAuth::AgentIdentity(_) => {

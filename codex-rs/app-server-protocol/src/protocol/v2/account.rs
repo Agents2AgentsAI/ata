@@ -33,6 +33,14 @@ pub enum Account {
     #[serde(rename = "copilot", rename_all = "camelCase")]
     #[ts(rename = "copilot", rename_all = "camelCase")]
     Copilot {},
+
+    /// Authenticated via the ATA Supabase OTP flow (`/supabase-login` or
+    /// the onboarding ATA path). The wire protocol carries the verified
+    /// email so clients can surface `Signed in as user@example.com` in
+    /// status views.
+    #[serde(rename = "ata", rename_all = "camelCase")]
+    #[ts(rename = "ata", rename_all = "camelCase")]
+    Ata { email: String },
 }
 
 impl From<ProviderAccount> for Account {
@@ -42,6 +50,7 @@ impl From<ProviderAccount> for Account {
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
             ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
             ProviderAccount::Copilot => Self::Copilot {},
+            ProviderAccount::Ata { email } => Self::Ata { email },
         }
     }
 }

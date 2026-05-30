@@ -74,14 +74,15 @@ pub struct ApiKeyAuth {
 
 /// ATA Supabase auth payload. `access_token` is the Supabase JWT used as
 /// `Authorization: Bearer <access_token>` for ATA backend calls.
-/// `account_id` and `refresh_token` are reserved for future use by the
-/// Supabase login flow; today they are populated only when explicitly
-/// supplied.
+/// `refresh_token` + `expires_at` drive the in-session refresh handler
+/// (`refresh_token_from_authority_impl`). `email` is surfaced in `/status`.
 #[derive(Debug, Clone)]
 pub struct AtaAuth {
     access_token: String,
     account_id: Option<String>,
     refresh_token: Option<String>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    email: Option<String>,
 }
 
 impl AtaAuth {
@@ -90,6 +91,8 @@ impl AtaAuth {
             access_token,
             account_id: None,
             refresh_token: None,
+            expires_at: None,
+            email: None,
         }
     }
 
@@ -103,6 +106,16 @@ impl AtaAuth {
         self
     }
 
+    pub fn with_expires_at(mut self, expires_at: chrono::DateTime<chrono::Utc>) -> Self {
+        self.expires_at = Some(expires_at);
+        self
+    }
+
+    pub fn with_email(mut self, email: String) -> Self {
+        self.email = Some(email);
+        self
+    }
+
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
@@ -113,6 +126,14 @@ impl AtaAuth {
 
     pub fn refresh_token(&self) -> Option<&str> {
         self.refresh_token.as_deref()
+    }
+
+    pub fn expires_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.expires_at
+    }
+
+    pub fn email(&self) -> Option<&str> {
+        self.email.as_deref()
     }
 }
 
@@ -844,6 +865,31 @@ async fn load_auth(
     // without an interactive sign-in.
     if let Some(token) = read_ata_supabase_token_from_env() {
         return Ok(Some(CodexAuth::from_ata_token(&token)));
+    }
+
+    // ATA Supabase session persisted by the in-app `/supabase-login` OTP flow.
+    // Lives in a sibling file (`ata_session.json`), not in `auth.json`, so it
+    // does not interact with the ChatGPT/API-key persistence above. Errors
+    // here are non-fatal — fall through to the regular ChatGPT path so a
+    // corrupted session file never blocks login entirely.
+    match super::ata_session::load_ata_session(codex_home) {
+        Ok(Some(session)) => {
+            let mut auth = AtaAuth::new(session.access_token)
+                .with_refresh_token(session.refresh_token)
+                .with_expires_at(session.expires_at)
+                .with_account_id(session.user.id);
+            if let Some(email) = session.user.email {
+                auth = auth.with_email(email);
+            }
+            return Ok(Some(CodexAuth::Ata(auth)));
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "failed to load persisted ATA session; falling through to ChatGPT auth"
+            );
+        }
     }
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
@@ -1863,7 +1909,33 @@ impl AuthManager {
                 self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
                     .await
             }
-            CodexAuth::ApiKey(_) | CodexAuth::AgentIdentity(_) | CodexAuth::Ata(_) => Ok(()),
+            CodexAuth::ApiKey(_) | CodexAuth::AgentIdentity(_) => Ok(()),
+            CodexAuth::Ata(ata) => {
+                match super::ata_refresh::refresh_ata_session(&self.codex_home, &ata).await {
+                    Ok(refreshed) => {
+                        self.set_cached_auth(Some(CodexAuth::Ata(refreshed)));
+                        Ok(())
+                    }
+                    Err(super::ata_refresh::AtaRefreshError::MissingRefreshToken) => {
+                        // Env-var-supplied token has no refresh — treat as a
+                        // permanent failure so callers surface a sign-in
+                        // prompt rather than retrying forever.
+                        Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                            RefreshTokenFailedReason::Other,
+                            "ATA Supabase token cannot be refreshed (no refresh token). Run /supabase-login or re-set ATA_SUPABASE_TOKEN.".to_string(),
+                        )))
+                    }
+                    Err(super::ata_refresh::AtaRefreshError::Api { status, message }) => {
+                        // 401/400 from Supabase means the refresh token is
+                        // dead; surface as permanent so we don't busy-loop.
+                        Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
+                            RefreshTokenFailedReason::Other,
+                            format!("Supabase refused ATA token refresh ({status}): {message}"),
+                        )))
+                    }
+                    Err(err) => Err(RefreshTokenError::Transient(std::io::Error::other(err))),
+                }
+            }
         };
         if let Err(RefreshTokenError::Permanent(error)) = &result {
             self.record_permanent_refresh_failure_if_unchanged(&attempted_auth, error);

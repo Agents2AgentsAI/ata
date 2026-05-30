@@ -1827,6 +1827,8 @@ async fn get_login_status(
         Some(AppServerAccount::AmazonBedrock {}) => LoginStatus::NotAuthenticated,
         // Copilot uses an API-key-style bearer token under the hood.
         Some(AppServerAccount::Copilot {}) => LoginStatus::AuthMode(AppServerAuthMode::ApiKey),
+        // ATA Supabase auth uses a bearer token for ATA-hosted backends.
+        Some(AppServerAccount::Ata { .. }) => LoginStatus::AuthMode(AppServerAuthMode::Ata),
         None => LoginStatus::NotAuthenticated,
     })
 }

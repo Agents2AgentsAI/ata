@@ -1,4 +1,6 @@
 mod agent_identity;
+mod ata_refresh;
+mod ata_session;
 pub mod default_client;
 pub mod error;
 pub mod storage;
