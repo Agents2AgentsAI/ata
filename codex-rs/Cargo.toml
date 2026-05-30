@@ -5,6 +5,7 @@ members = [
     "agent-graph-store",
     "agent-identity",
     "backend-client",
+    "builtin-mcps",
     "bwrap",
     "ansi-escape",
     "async-utils",
@@ -119,6 +120,7 @@ members = [
     "state",
     "terminal-detection",
     "test-binary-support",
+    "test-macros",
     "thread-manager-sample",
     "thread-store",
     "uds",
@@ -159,6 +161,7 @@ codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
 codex-backend-client = { path = "backend-client" }
+codex-builtin-mcps = { path = "builtin-mcps" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
@@ -206,6 +209,7 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
+codex-memories-mcp = { path = "memories/mcp" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -234,6 +238,7 @@ codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
 codex-test-binary-support = { path = "test-binary-support" }
+codex-test-macros = { path = "test-macros" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }
 codex-tui = { path = "tui" }

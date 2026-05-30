@@ -2202,6 +2202,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-builtin-mcps"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-memories-mcp",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "tokio",
+]
+
+[[package]]
 name = "codex-bwrap"
 version = "0.0.0"
 dependencies = [
@@ -3907,6 +3918,15 @@ version = "0.0.0"
 dependencies = [
  "codex-arg0",
  "tempfile",
+]
+
+[[package]]
+name = "codex-test-macros"
+version = "0.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
