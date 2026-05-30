@@ -203,6 +203,12 @@ impl ChatWidget {
             SlashCommand::Model => {
                 self.open_model_popup();
             }
+            SlashCommand::Fast => {
+                self.run_fast_slash_command("");
+            }
+            SlashCommand::Workspace => {
+                self.run_workspace_slash_command("");
+            }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
                     return;
@@ -622,6 +628,12 @@ impl ChatWidget {
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
+            SlashCommand::Workspace => {
+                self.run_workspace_slash_command(trimmed);
+            }
+            SlashCommand::Fast => {
+                self.run_fast_slash_command(trimmed);
+            }
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),
@@ -1019,6 +1031,8 @@ impl ChatWidget {
             | SlashCommand::Theme
             | SlashCommand::Research
             | SlashCommand::Scheduling
+            | SlashCommand::Workspace
+            | SlashCommand::Fast
             | SlashCommand::Pets => QueueDrain::Stop,
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice | SlashCommand::VoiceSetup => QueueDrain::Stop,

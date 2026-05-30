@@ -789,7 +789,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ShellSnapshot,
         key: "shell_snapshot",
-        stage: Stage::Stable,
+        stage: Stage::Experimental {
+            name: "Shell snapshot",
+            menu_description: "Capture an interactive shell snapshot at session start so the agent inherits your aliases, functions, and environment.",
+            announcement: "",
+        },
         default_enabled: true,
     },
     FeatureSpec {
@@ -871,6 +875,29 @@ pub const FEATURES: &[FeatureSpec] = &[
             announcement: "NEW: Codex can now generate and use memories. Try it now with `/memories`",
         },
         default_enabled: false,
+    },
+    // ATA-specific experimental features placed early in FEATURES so the
+    // `/experimental` popup (capped at MAX_POPUP_ROWS = 8 visible rows)
+    // surfaces them without scrolling.
+    FeatureSpec {
+        id: Feature::VoiceMode,
+        key: "voice_mode",
+        stage: Stage::Experimental {
+            name: "Voice mode",
+            menu_description: "Talk to Ata: push-to-talk dictation plus spoken replies. Use /voice to toggle.",
+            announcement: "",
+        },
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::Scheduling,
+        key: "scheduling",
+        stage: Stage::Experimental {
+            name: "Scheduling",
+            menu_description: "Schedule recurring prompts (cron) and background monitors. View active tasks via /scheduling.",
+            announcement: "",
+        },
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::Chronicle,
@@ -1133,7 +1160,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::Goals,
         key: "goals",
-        stage: Stage::Stable,
+        stage: Stage::Experimental {
+            name: "Goals",
+            menu_description: "Set or view the goal for a long-running task via /goal.",
+            announcement: "",
+        },
         default_enabled: true,
     },
     FeatureSpec {
@@ -1311,20 +1342,8 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
-        id: Feature::VoiceMode,
-        key: "voice_mode",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
         id: Feature::DataTools,
         key: "data_tools",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::Scheduling,
-        key: "scheduling",
         stage: Stage::Stable,
         default_enabled: true,
     },

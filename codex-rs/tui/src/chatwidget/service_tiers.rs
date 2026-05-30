@@ -142,7 +142,7 @@ impl ChatWidget {
             .unwrap_or(false)
     }
 
-    fn current_model_fast_service_tier(&self) -> Option<ServiceTierCommand> {
+    pub(crate) fn current_model_fast_service_tier(&self) -> Option<ServiceTierCommand> {
         self.current_model_service_tier_commands()
             .into_iter()
             .find(|tier| tier.name.eq_ignore_ascii_case(SPEED_TIER_FAST))

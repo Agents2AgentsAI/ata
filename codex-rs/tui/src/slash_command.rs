@@ -13,15 +13,20 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
+    Fast,
     Ide,
     Permissions,
     Keymap,
     Vim,
+    Experimental,
+    // ATA-specific overlay placed in the top 8 so a bare `/` popup
+    // (capped at MAX_POPUP_ROWS = 8 visible) surfaces it without scrolling.
+    Scheduling,
+    Workspace,
     #[strum(serialize = "setup-default-sandbox")]
     ElevateSandbox,
     #[strum(serialize = "sandbox-add-read-dir")]
     SandboxReadRoot,
-    Experimental,
     #[strum(to_string = "approve")]
     AutoReview,
     #[cfg(not(target_os = "linux"))]
@@ -37,7 +42,6 @@ pub enum SlashCommand {
     New,
     Resume,
     Research,
-    Scheduling,
     Fork,
     Init,
     Compact,
@@ -153,6 +157,12 @@ impl SlashCommand {
             SlashCommand::TestApproval => "test approval request",
             SlashCommand::Research => "configure research tool integrations",
             SlashCommand::Scheduling => "view active cron / monitor tasks",
+            SlashCommand::Workspace => {
+                "summarize the active workspace; manage with `ata workspace`"
+            }
+            SlashCommand::Fast => {
+                "toggle Fast mode to enable fastest inference with increased plan usage"
+            }
         }
     }
 
@@ -179,6 +189,7 @@ impl SlashCommand {
                 | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Workspace
         )
     }
 
@@ -250,6 +261,8 @@ impl SlashCommand {
             SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
             SlashCommand::Research | SlashCommand::Scheduling => true,
+            SlashCommand::Workspace => true,
+            SlashCommand::Fast => true,
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice | SlashCommand::VoiceSetup => true,
             SlashCommand::Theme | SlashCommand::Pets => false,

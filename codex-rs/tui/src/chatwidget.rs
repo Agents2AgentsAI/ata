@@ -437,6 +437,7 @@ use self::user_messages::user_message_display_for_history;
 use self::user_messages::user_message_for_restore;
 use self::user_messages::user_message_preview_text;
 mod warnings;
+mod workspace_slash;
 use self::warnings::WarningDisplayState;
 pub(crate) use crate::branch_summary::StatusLineGitSummary;
 use crate::streaming::chunking::AdaptiveChunkingPolicy;
