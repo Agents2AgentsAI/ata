@@ -147,7 +147,6 @@ pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
 pub(crate) use voice_setup_view::VoiceSetupView;
 mod document_reader;
 mod research_tools_view;
-pub(crate) use research_tools_view::ResearchToolItem;
 pub(crate) use research_tools_view::ResearchToolsView;
 pub(crate) use research_tools_view::build_reading_view_tool_items;
 pub(crate) use research_tools_view::build_research_tool_items;

@@ -119,6 +119,7 @@ mod session;
 
 pub(crate) use approvals::*;
 pub(crate) use base::*;
+#[cfg(test)]
 pub(crate) use document::DocumentCell;
 pub(crate) use document::new_document_cell;
 pub(crate) use exec::*;

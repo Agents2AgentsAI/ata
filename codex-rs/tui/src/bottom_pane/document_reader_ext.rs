@@ -133,7 +133,6 @@ impl BottomPane {
     ///
     /// Views that wait for tool calls (e.g. document reader waiting for
     /// `update_document_section`) use this to clear stale "waiting" state.
-    #[allow(dead_code)]
     pub(crate) fn notify_turn_complete(&mut self) {
         if let Some(view) = self.view_stack.last_mut() {
             view.handle_turn_complete();
@@ -217,20 +216,6 @@ impl BottomPane {
             view.set_voice_tts_paused(paused);
             self.request_redraw();
         }
-    }
-
-    /// Query the TTS paused state of the active document reader.
-    #[cfg(all(test, not(target_os = "linux")))]
-    pub(crate) fn is_document_reader_tts_paused(&self) -> bool {
-        self.view_stack
-            .last()
-            .is_some_and(|v| v.voice_tts_paused())
-    }
-
-    /// Query the voice status text of the active document reader.
-    #[cfg(all(test, not(target_os = "linux")))]
-    pub(crate) fn document_reader_voice_status(&self) -> Option<String> {
-        self.view_stack.last().and_then(|v| v.voice_status())
     }
 
     /// Mark a section as pending a voice question answer (same inline

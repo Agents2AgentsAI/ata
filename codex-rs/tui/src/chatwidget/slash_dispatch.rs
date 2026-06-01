@@ -495,6 +495,16 @@ impl ChatWidget {
                 self.bottom_pane.show_view(Box::new(view));
                 self.request_redraw();
             }
+            SlashCommand::ReadingView => {
+                let items =
+                    crate::bottom_pane::build_reading_view_tool_items(self.reading_view_mode);
+                let view = crate::bottom_pane::ResearchToolsView::new_reading_view(
+                    items,
+                    self.app_event_tx.clone(),
+                );
+                self.bottom_pane.show_view(Box::new(view));
+                self.request_redraw();
+            }
             SlashCommand::Scheduling => {
                 let view = crate::bottom_pane::SchedulingView::new()
                     .with_auto_refresh(self.app_event_tx.clone(), self.frame_requester.clone());
@@ -1025,6 +1035,7 @@ impl ChatWidget {
             | SlashCommand::Statusline
             | SlashCommand::Theme
             | SlashCommand::Research
+            | SlashCommand::ReadingView
             | SlashCommand::Scheduling
             | SlashCommand::Workspace
             | SlashCommand::Fast

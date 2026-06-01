@@ -223,7 +223,6 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Notify the view that the agent's turn finished, regardless of how it
     /// ended. The reading view uses this to clear pending-section markers if
     /// the agent never called an update tool.
-    #[allow(dead_code)]
     fn handle_turn_complete(&mut self) {}
 
     /// Deliver a fresh `/scheduling` snapshot to the view if it owns the
@@ -274,19 +273,4 @@ pub(crate) trait BottomPaneView: Renderable {
     ) {
     }
 
-    /// Query whether the active reading view is currently paused mid-TTS.
-    /// Non-reading views default to "not paused" — they are not voice-aware.
-    #[cfg(not(target_os = "linux"))]
-    #[allow(dead_code)]
-    fn voice_tts_paused(&self) -> bool {
-        false
-    }
-
-    /// Current voice status label (e.g. "Reading…") for the active reading
-    /// view. Only the document reader sets this; everything else returns
-    /// `None`.
-    #[cfg(all(test, not(target_os = "linux")))]
-    fn voice_status(&self) -> Option<String> {
-        None
-    }
 }

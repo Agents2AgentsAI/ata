@@ -370,6 +370,11 @@ impl ChatWidget {
 
     #[inline]
     pub(super) fn handle_streaming_delta(&mut self, delta: String) {
+        // Reading-view overlay owns its own rendering; suppress chat-area
+        // streaming so the document body isn't duplicated in the transcript.
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         if self.stream_controller.is_none() {
             // Before starting an agent stream, flush any active exec cell group.
             self.flush_unified_exec_wait_streak();

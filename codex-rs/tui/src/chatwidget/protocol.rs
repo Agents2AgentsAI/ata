@@ -280,6 +280,9 @@ impl ChatWidget {
         // this TUI already rendered locally. Once that turn ends, another
         // client can submit the same text and it still needs its own user cell.
         self.last_rendered_user_message_display = None;
+        // Reading-view-style overlays watch for turn end to clear "waiting for
+        // tool call" markers; broadcast regardless of how the turn finished.
+        self.bottom_pane.notify_turn_complete();
         match notification.turn.status {
             TurnStatus::Completed => {
                 self.last_non_retry_error = None;

@@ -42,6 +42,8 @@ pub enum SlashCommand {
     New,
     Resume,
     Research,
+    #[strum(serialize = "reading-view")]
+    ReadingView,
     Fork,
     Init,
     Compact,
@@ -156,6 +158,7 @@ impl SlashCommand {
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
             SlashCommand::Research => "configure research tool integrations",
+            SlashCommand::ReadingView => "configure the reading-view display mode",
             SlashCommand::Scheduling => "view active cron / monitor tasks",
             SlashCommand::Workspace => {
                 "summarize the active workspace; manage with `ata workspace`"
@@ -260,7 +263,7 @@ impl SlashCommand {
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Research | SlashCommand::Scheduling => true,
+            SlashCommand::Research | SlashCommand::Scheduling | SlashCommand::ReadingView => true,
             SlashCommand::Workspace => true,
             SlashCommand::Fast => true,
             #[cfg(not(target_os = "linux"))]

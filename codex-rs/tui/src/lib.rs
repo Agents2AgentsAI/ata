@@ -198,7 +198,6 @@ mod update_prompt;
 #[cfg(any(not(debug_assertions), test))]
 mod update_versions;
 mod updates;
-#[allow(dead_code)]
 mod vad;
 mod version;
 #[cfg(not(target_os = "linux"))]
