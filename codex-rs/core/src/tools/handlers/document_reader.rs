@@ -238,7 +238,6 @@ fn next_streaming_section(doc: &CachedDocument) -> Option<(usize, String)> {
 }
 
 // @agent-facing
-#[allow(dead_code)]
 fn reading_view_display_mode_guidance() -> &'static str {
     "\
     READING VIEW DISPLAY MODES: The current turn may include a short state line like \
@@ -264,7 +263,6 @@ fn reading_view_display_mode_guidance() -> &'static str {
     Describe meaning, not visual symbols."
 }
 
-#[allow(dead_code)]
 const READING_VIEW_CONTENT_STYLE_GUIDANCE: &str = "Content style: write straight prose that continues the section's voice. \
      Do NOT use a Q:/A: format. If the answer would be unclear without context, \
      a short italic lead-in is fine (e.g. *On dropout:* ...), but skip it when \
@@ -272,12 +270,10 @@ const READING_VIEW_CONTENT_STYLE_GUIDANCE: &str = "Content style: write straight
      bold/italic topic lines like '**On the efficiency gains:**' or \
      '*Regarding caching:*' — just write the content directly.";
 
-#[allow(dead_code)]
 const READING_VIEW_SUMMARY_GUIDANCE: &str = "SUMMARY (required): Always set the `summary` parameter to a short descriptive \
      label of your answer (5-10 words), e.g. summary=\"Role of attention heads in GPT\". \
      This is used as a section label regardless of foldable.";
 
-#[allow(dead_code)]
 const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: Set foldable=true for any inserted answer, explanation, \
      example, or deep dive — the user can collapse and re-expand it with `f`. \
      Only set foldable=false when the user explicitly asked for a permanent \
@@ -286,11 +282,9 @@ const READING_VIEW_FOLDABLE_GUIDANCE: &str = "FOLDABLE CONTENT: Set foldable=tru
      foldable=true unless you are sure the content is meant to overwrite the \
      original passage.";
 
-#[allow(dead_code)]
 const READING_VIEW_TOOL_CALL_ONLY_GUIDANCE: &str =
     "Do NOT output plain text; only tool calls are visible to the user.";
 
-#[allow(dead_code)]
 const READING_VIEW_REWRITE_BOUNDARY_GUIDANCE: &str =
     "Do NOT rewrite the entire section unless the user explicitly asks for a rewrite.";
 
@@ -305,7 +299,6 @@ pub fn reading_view_display_mode_state(mode: ReadingViewDisplayMode) -> &'static
     }
 }
 
-#[allow(dead_code)]
 pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -319,7 +312,6 @@ pub fn reading_view_selection_follow_up_guidance(mode: ReadingViewDisplayMode) -
     )
 }
 
-#[allow(dead_code)]
 pub fn reading_view_section_follow_up_guidance(mode: ReadingViewDisplayMode) -> String {
     let display_mode_state = reading_view_display_mode_state(mode);
     format!(
@@ -359,7 +351,6 @@ pub enum ReadingViewDisplayMode {
     #[default]
     Tui,
     /// Browser with full HTML/KaTeX/Mermaid rendering.
-    #[allow(dead_code)]
     Browser,
 }
 
@@ -384,6 +375,12 @@ impl DocumentCache {
 
     /// Set the display mode (called by the UI layer when the user changes
     /// reading view mode).
+    ///
+    /// NOT YET WIRED: the TUI updates `~/.ata/config.toml` and `[features]`
+    /// when the user picks a new mode via `/reading-view`, but the live
+    /// session's `DocumentCache.display_mode` only refreshes on the next
+    /// session start. Wiring is deferred until a TUI→app-server IPC op is
+    /// added so the running session can react to mode changes.
     #[allow(dead_code)]
     pub fn set_display_mode(&self, mode: ReadingViewDisplayMode) {
         if let Ok(mut m) = self.display_mode.lock() {
@@ -414,7 +411,6 @@ impl DocumentCache {
     /// (e.g. `present_reading_view(document_id=...)` without title/content)
     /// can serve the cached version instantly instead of forcing the agent
     /// to regenerate the document from scratch.
-    #[allow(dead_code)]
     pub fn restore_document(&self, document_id: String, title: String, content: &str) {
         let sections = parse_sections(content);
         let mut cache = self.lock();
@@ -470,7 +466,6 @@ fn reading_view_config_mode_from_config(config: &Config) -> ReadingViewConfigMod
     ReadingViewConfigMode::Tui
 }
 
-#[allow(dead_code)]
 pub(crate) fn reading_view_display_mode_from_config(config: &Config) -> ReadingViewDisplayMode {
     match reading_view_config_mode_from_config(config) {
         ReadingViewConfigMode::Browser => ReadingViewDisplayMode::Browser,
@@ -502,7 +497,6 @@ impl DocumentReaderHandler {
 // ---------------------------------------------------------------------------
 
 // @agent-facing
-#[allow(dead_code)]
 pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -616,7 +610,6 @@ pub static PRESENT_DOCUMENT_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 });
 
 // @agent-facing
-#[allow(dead_code)]
 pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -663,7 +656,6 @@ pub static UPDATE_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 });
 
 // @agent-facing
-#[allow(dead_code)]
 pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -730,7 +722,6 @@ pub static APPEND_TO_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
 });
 
 // @agent-facing
-#[allow(dead_code)]
 pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -804,7 +795,6 @@ pub static PATCH_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     })
 });
 
-#[allow(dead_code)]
 pub static ADD_DOCUMENT_SECTION_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     let mut properties = BTreeMap::new();
     properties.insert(
