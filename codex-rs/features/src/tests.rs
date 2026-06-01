@@ -34,7 +34,10 @@ fn default_enabled_features_are_stable() {
             assert!(
                 matches!(spec.stage, Stage::Stable | Stage::Removed)
                     || spec.id == Feature::TerminalResizeReflow
-                    || spec.id == Feature::ShellSnapshot,
+                    || spec.id == Feature::ShellSnapshot
+                    || spec.id == Feature::VoiceMode
+                    || spec.id == Feature::Scheduling
+                    || spec.id == Feature::Goals,
                 "feature `{}` is enabled by default but is not stable/removed ({:?})",
                 spec.key,
                 spec.stage

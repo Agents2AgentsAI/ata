@@ -170,7 +170,10 @@ tr003_a() {
   local sess=$SESSION-003a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   local out=$WORK/003a.txt
-  capture "$sess" "$out"
+  # Include scrollback: the welcome card (banner + YOLO mode + directory lines)
+  # can scroll out of the visible pane once announcement-tip / MCP startup
+  # cells render below it. The card itself is still in the scroll buffer.
+  tmux capture-pane -t "$sess" -p -S -200 > "$out"
   assert_contains "$out" "Agents2Agents ata (v" "banner with version"
   assert_contains "$out" "YOLO mode"             "permissions line shows YOLO"
   assert_contains "$out" "directory:"            "directory line present"

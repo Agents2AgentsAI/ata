@@ -2,6 +2,7 @@ use clap::Parser;
 use codex_app_server::AppServerRuntimeOptions;
 use codex_app_server::AppServerTransport;
 use codex_app_server::AppServerWebsocketAuthArgs;
+#[cfg(debug_assertions)]
 use codex_app_server::PluginStartupTasks;
 use codex_app_server::run_main_with_transport_options;
 use codex_arg0::Arg0DispatchPaths;
@@ -77,12 +78,19 @@ fn main() -> anyhow::Result<()> {
         };
         let transport = listen;
         let auth = auth.try_into_settings()?;
-        let mut runtime_options = AppServerRuntimeOptions::default();
+        let runtime_options = AppServerRuntimeOptions {
+            remote_control_enabled: remote_control,
+            ..Default::default()
+        };
         #[cfg(debug_assertions)]
-        if disable_plugin_startup_tasks_for_tests {
-            runtime_options.plugin_startup_tasks = PluginStartupTasks::Skip;
-        }
-        runtime_options.remote_control_enabled = remote_control;
+        let runtime_options = if disable_plugin_startup_tasks_for_tests {
+            AppServerRuntimeOptions {
+                plugin_startup_tasks: PluginStartupTasks::Skip,
+                ..runtime_options
+            }
+        } else {
+            runtime_options
+        };
 
         run_main_with_transport_options(
             arg0_paths,

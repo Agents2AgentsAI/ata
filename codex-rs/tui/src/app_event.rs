@@ -32,7 +32,9 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
+#[cfg(not(target_os = "linux"))]
 use crate::legacy_core::config::types::TtsBackend;
+#[cfg(not(target_os = "linux"))]
 use crate::legacy_core::config::types::VoiceVerbosity;
 
 use crate::app_command::AppCommand;
