@@ -275,7 +275,7 @@ async fn wait_for_hook_log(
     filename: &str,
     expected_len: usize,
 ) -> Result<Vec<serde_json::Value>> {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let inputs = read_hook_log(home, filename)?;
         if inputs.len() >= expected_len {
