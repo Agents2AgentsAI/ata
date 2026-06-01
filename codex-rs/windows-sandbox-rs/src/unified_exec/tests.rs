@@ -142,6 +142,7 @@ async fn collect_stdout_and_exit(
 }
 
 #[test]
+#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_non_tty_cmd_emits_output() {
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
@@ -218,6 +219,7 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
 }
 
 #[test]
+#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_non_tty_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -405,6 +407,7 @@ fn runner_resizer_sends_resize_frame() {
 }
 
 #[test]
+#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_capture_powershell_emits_output() {
     let Some(pwsh) = pwsh_path() else {
         return;
@@ -442,6 +445,7 @@ fn legacy_capture_powershell_emits_output() {
 }
 
 #[test]
+#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_tty_powershell_emits_output_and_accepts_input() {
     let Some(pwsh) = pwsh_path() else {
         return;

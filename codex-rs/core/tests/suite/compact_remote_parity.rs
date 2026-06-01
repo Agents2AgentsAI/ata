@@ -116,6 +116,10 @@ const FULL_MIX: &[Step] = &[
 ];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    windows,
+    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
+)]
 async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -146,6 +150,10 @@ async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    windows,
+    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
+)]
 async fn remote_compaction_parity_v2_api_key_sends_service_tier_upgrade() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -187,6 +195,10 @@ async fn remote_compaction_parity_manual_hooks() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    windows,
+    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
+)]
 async fn remote_compaction_parity_pre_turn_auto() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -197,6 +209,10 @@ async fn remote_compaction_parity_pre_turn_auto() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    windows,
+    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
+)]
 async fn remote_compaction_parity_mid_turn_auto() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

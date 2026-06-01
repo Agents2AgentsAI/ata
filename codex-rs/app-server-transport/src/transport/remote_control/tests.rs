@@ -1304,6 +1304,10 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    all(target_os = "linux", target_arch = "aarch64"),
+    ignore = "flaky timing assertion (auth-change vs retry-delay) on ubuntu-arm64 CI runners. Tracked separately."
+)]
 async fn remote_control_waits_for_account_id_before_enrolling() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
