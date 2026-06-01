@@ -139,8 +139,11 @@ pub(crate) use title_setup::TerminalTitleItem;
 pub(crate) use title_setup::TerminalTitleSetupView;
 #[cfg(test)]
 pub(crate) use title_setup::preview_line_for_title_items;
+#[cfg(not(target_os = "linux"))]
 mod voice_setup_view;
+#[cfg(not(target_os = "linux"))]
 pub(crate) use bottom_pane_view::ReadingViewVoiceContext;
+#[cfg(not(target_os = "linux"))]
 pub(crate) use voice_setup_view::VoiceSetupView;
 mod document_reader;
 mod research_tools_view;
