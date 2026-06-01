@@ -75,6 +75,27 @@
           ],
           "title": "CopilotAccount",
           "type": "object"
+        },
+        {
+          "description": "Authenticated via the ATA Supabase OTP flow (`/supabase-login` or the onboarding ATA path). The wire protocol carries the verified email so clients can surface `Signed in as user@example.com` in status views.",
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "ata"
+              ],
+              "title": "AtaAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "type"
+          ],
+          "title": "AtaAccount",
+          "type": "object"
         }
       ]
     },

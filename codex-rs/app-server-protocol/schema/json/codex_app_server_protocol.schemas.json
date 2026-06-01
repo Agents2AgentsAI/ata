@@ -5871,6 +5871,27 @@
             ],
             "title": "CopilotAccount",
             "type": "object"
+          },
+          {
+            "description": "Authenticated via the ATA Supabase OTP flow (`/supabase-login` or the onboarding ATA path). The wire protocol carries the verified email so clients can surface `Signed in as user@example.com` in status views.",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "ata"
+                ],
+                "title": "AtaAccountType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "type"
+            ],
+            "title": "AtaAccount",
+            "type": "object"
           }
         ]
       },
@@ -6754,6 +6775,13 @@
             "description": "Programmatic Codex auth backed by a registered Agent Identity.",
             "enum": [
               "agentIdentity"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "ATA Supabase-backed auth. The user signs in to ATA's Supabase instance and the resulting access token is used as a bearer for ATA-hosted backends (ElevenLabs proxy, future Supabase Edge Functions). Token may also be set via the `ATA_SUPABASE_TOKEN` env var for testing without a UI sign-in flow.",
+            "enum": [
+              "ata"
             ],
             "type": "string"
           }
