@@ -469,6 +469,7 @@ impl BottomPane {
     /// Force-hide the composer cursor while voice mode is active so the
     /// recording UI is the only visible focus indicator. Releasing the
     /// lock requires a matching `set_force_hide_cursor(false)` call.
+    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_force_hide_cursor(&mut self, hidden: bool) {
         if self.force_hide_cursor == hidden {
             return;

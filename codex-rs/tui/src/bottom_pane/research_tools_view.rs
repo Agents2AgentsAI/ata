@@ -101,6 +101,7 @@ impl ResearchToolsView {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn new_reading_view(
         items: Vec<ResearchToolItem>,
         app_event_tx: AppEventSender,
@@ -427,6 +428,7 @@ pub(crate) fn build_research_tool_items(
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_reading_view_tool_items(
     reading_view_mode: crate::app_event::ReadingViewMode,
 ) -> Vec<ResearchToolItem> {

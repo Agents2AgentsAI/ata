@@ -133,6 +133,7 @@ impl BottomPane {
     ///
     /// Views that wait for tool calls (e.g. document reader waiting for
     /// `update_document_section`) use this to clear stale "waiting" state.
+    #[allow(dead_code)]
     pub(crate) fn notify_turn_complete(&mut self) {
         if let Some(view) = self.view_stack.last_mut() {
             view.handle_turn_complete();

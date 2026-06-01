@@ -396,6 +396,7 @@ fn browser_resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>
 impl ChatWidget {
     /// Returns `true` when the document reader is active and streaming output
     /// (agent messages, reasoning) should be suppressed from the chat history.
+    #[allow(dead_code)]
     fn is_suppressing_streaming_for_reader(&self) -> bool {
         self.bottom_pane.is_document_reader_active()
     }
