@@ -111,6 +111,21 @@ capture() {
   tmux capture-pane -t "$name" -p > "$out"
 }
 
+# Poll the pane for a literal substring up to N seconds. Returns 0 once it
+# appears (with the final capture saved to $out), 1 on timeout. Use this in
+# place of fixed sleeps after slash-command Enter / menu transitions, where
+# the picker can take longer than ~1.5s to render under CI load.
+poll_pane_for() {
+  local name=$1 out=$2 needle=$3 timeout=${4:-5}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    capture "$name" "$out"
+    if grep -qF -- "$needle" "$out"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+
 assert_contains() {
   local file=$1 needle=$2 desc=${3:-}
   if ! grep -qF -- "$needle" "$file"; then
@@ -301,19 +316,18 @@ tr018_b() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/model"
   send_key  "$sess" Enter
-  sleep 1.5
+  local out_step1=$WORK/018b-step1.txt
+  poll_pane_for "$sess" "$out_step1" "Select Model and Effort" || true
   send_key  "$sess" Enter  # select gpt-5.5 (highlighted)
-  sleep 1.5
   local out=$WORK/018b.txt
-  capture "$sess" "$out"
+  poll_pane_for "$sess" "$out" "Select Reasoning Level" || true
   assert_contains "$out" "Select Reasoning Level" "step 2 reasoning picker open"
   assert_contains "$out" "Medium (default)" "Medium shown as default"
   assert_contains "$out" "Low"  "Low option listed"
   assert_contains "$out" "High" "High option listed"
   send_key "$sess" Escape
-  sleep 1
   local out2=$WORK/018b-back.txt
-  capture "$sess" "$out2"
+  poll_pane_for "$sess" "$out2" "Select Model and Effort" || true
   assert_contains "$out2" "Select Model and Effort" "Esc returns to step 1"
   assert_not_contains "$out2" "Select Reasoning Level" "step 2 closed"
   kill_ata "$sess"
@@ -982,13 +996,15 @@ tr017_b() {
     fail_assert "ata (non-yolo) never reached the composer"
     end_test; kill_ata "$sess"; return
   fi
-  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  send_text "$sess" "/permissions"; send_key "$sess" Enter
+  local out_picker=$WORK/017b-picker.txt
+  poll_pane_for "$sess" "$out_picker" "Update Model Permissions" || true
   # Down twice to Full Access (Default → Auto-review → Full Access).
   send_key "$sess" Down; sleep 0.3
   send_key "$sess" Down; sleep 0.3
-  send_key "$sess" Enter; sleep 1
+  send_key "$sess" Enter
   local out=$WORK/017b.txt
-  capture "$sess" "$out"
+  poll_pane_for "$sess" "$out" "Enable full access?" || true
   assert_contains "$out" "Enable full access?"        "elevation confirmation header"
   assert_contains "$out" "Yes, continue anyway"       "session-only option"
   assert_contains "$out" "Yes, and don't ask again"   "persist-to-config option"
