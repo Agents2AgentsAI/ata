@@ -669,7 +669,13 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
 
     drop(codex);
     drop(harness);
-    sleep(Duration::from_millis(150)).await;
+
+    // Cleanup runs in a Drop impl; under CI load 150ms isn't always enough.
+    // Poll for up to 5s instead of a hardcoded sleep so the test isn't flaky.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while snapshot_path.exists() && tokio::time::Instant::now() < deadline {
+        sleep(Duration::from_millis(50)).await;
+    }
 
     assert_eq!(
         snapshot_path.exists(),
