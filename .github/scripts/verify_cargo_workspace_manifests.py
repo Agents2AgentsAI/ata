@@ -39,17 +39,6 @@ MANIFEST_FEATURE_EXCEPTIONS = {
         "java": ("dep:tree-sitter-java",),
         "scala": ("dep:tree-sitter-scala",),
     },
-    # Upstream codex-code-mode (v0.131+) gates the V8 sandbox build behind
-    # a `sandbox` feature so consumers can opt out on platforms where V8's
-    # pointer-compression sandbox isn't supported.
-    "codex-rs/code-mode/Cargo.toml": {
-        "sandbox": ("v8/v8_enable_sandbox",),
-    },
-    # Upstream codex-v8-poc mirrors the same `sandbox` feature gate as
-    # codex-code-mode.
-    "codex-rs/v8-poc/Cargo.toml": {
-        "sandbox": ("v8/v8_enable_sandbox",),
-    },
     # ATA: codex-core gates its code-intel surface (LSP + treesitter
     # integration introduced upstream around v0.130) behind matching
     # features so a slim build can skip the heavy native deps. Default
