@@ -1832,6 +1832,10 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "Linux CI runners have a stray /tmp/.git that turns the tempfile-based test cwd into a 'git context', defeating the non-git invariant this test asserts. Tracked separately."
+)]
 async fn non_git_repo_skills_search_does_not_walk_parents() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let outer_dir = tempfile::tempdir().expect("tempdir");
@@ -1891,6 +1895,10 @@ async fn loads_skills_from_system_cache_when_present() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "Linux CI runners have a stray /tmp/.git that pollutes the test's tempdir-based project root detection. Tracked separately."
+)]
 async fn skill_roots_include_admin_with_lowest_priority() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cfg = make_config(&codex_home).await;
