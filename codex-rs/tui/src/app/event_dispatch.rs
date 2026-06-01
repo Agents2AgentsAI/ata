@@ -921,16 +921,6 @@ impl App {
                 self.chat_widget
                     .on_voice_prefetch_section(document_id, section_index, text);
             }
-            #[cfg(target_os = "linux")]
-            AppEvent::VoiceModeInterruptTts
-            | AppEvent::VoiceModePauseTts
-            | AppEvent::VoiceModeResumeTts
-            | AppEvent::VoiceModePlaybackSpeedChange { .. }
-            | AppEvent::VoiceModeNarrateSection { .. }
-            | AppEvent::VoiceModePrefetchSection { .. } => {
-                // Voice mode is unavailable on linux — drop the event.
-            }
-
             // ── Voice-mode internal events (state machine ticks/results) ─
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeMeterTick { text } => {
@@ -964,17 +954,6 @@ impl App {
             AppEvent::VoiceModeTtsFinished => {
                 self.chat_widget.on_voice_tts_finished();
             }
-            #[cfg(target_os = "linux")]
-            AppEvent::VoiceModeMeterTick { .. }
-            | AppEvent::VoiceModePttTimeoutCheck
-            | AppEvent::VoiceModeHighlightTick
-            | AppEvent::VoiceModeTranscriptionComplete { .. }
-            | AppEvent::VoiceModeTranscriptionFailed { .. }
-            | AppEvent::VoiceModeTtsAudioChunk { .. }
-            | AppEvent::VoiceModeTtsError { .. }
-            | AppEvent::VoiceModeTtsFinished => {
-                // Voice mode is unavailable on linux — drop the event.
-            }
             #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateVoiceSettings {
                 startup_enabled,
@@ -996,10 +975,6 @@ impl App {
                     verbosity,
                     tts_backend,
                 );
-            }
-            #[cfg(target_os = "linux")]
-            AppEvent::UpdateVoiceSettings { .. } => {
-                // Voice mode is unavailable on linux.
             }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);

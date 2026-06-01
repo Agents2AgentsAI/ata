@@ -748,7 +748,6 @@ text(result.output);
 }
 
 #[ignore = "upstream PR #23564 added this; ContextManager::process_item still re-truncates via model.truncation_policy * 1.2 when tool_output_token_limit is set, so explicit nested max_output_tokens doesn't propagate past the secondary rewrite. Unblock once upstream wires per-call budget into process_item."]
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -811,7 +810,6 @@ text(result.output);
 }
 
 #[ignore = "upstream PR #23564 added this; ContextManager::process_item still re-truncates via model.truncation_policy * 1.2 when tool_output_token_limit is set, so @exec max_output_tokens doesn't propagate past the secondary rewrite. Unblock once upstream wires per-call budget into process_item."]
-#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
