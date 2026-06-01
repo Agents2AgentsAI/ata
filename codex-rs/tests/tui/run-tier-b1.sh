@@ -914,17 +914,29 @@ tr006_c() {
     printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":3,"text":"%s"}\n' "$m3"
   } >> "$HOME/.ata/history.jsonl"
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
-  send_key "$sess" Up; sleep 0.4
-  local u1=$WORK/006c-up1.txt; capture "$sess" "$u1"
+  # History entries are fetched async via LookupMessageHistoryEntry; on slow
+  # CI runners a fixed 0.4s sleep races the round-trip. Poll the pane for
+  # the expected entry instead.
+  poll_pane_for() {
+    local out=$1 needle=$2 deadline=$(( $(date +%s) + 5 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      capture "$sess" "$out"
+      if grep -qF -- "$needle" "$out"; then return 0; fi
+      sleep 0.2
+    done
+    return 1
+  }
+  tmux send-keys -t "$sess" Up
+  local u1=$WORK/006c-up1.txt; poll_pane_for "$u1" "$m3" || true
   assert_contains "$u1" "$m3" "Up #1 shows newest entry"
-  send_key "$sess" Up; sleep 0.4
-  local u2=$WORK/006c-up2.txt; capture "$sess" "$u2"
+  tmux send-keys -t "$sess" Up
+  local u2=$WORK/006c-up2.txt; poll_pane_for "$u2" "$m2" || true
   assert_contains "$u2" "$m2" "Up #2 shows middle entry"
-  send_key "$sess" Up; sleep 0.4
-  local u3=$WORK/006c-up3.txt; capture "$sess" "$u3"
+  tmux send-keys -t "$sess" Up
+  local u3=$WORK/006c-up3.txt; poll_pane_for "$u3" "$m1" || true
   assert_contains "$u3" "$m1" "Up #3 shows oldest entry"
-  send_key "$sess" Down; sleep 0.4
-  local d1=$WORK/006c-down1.txt; capture "$sess" "$d1"
+  tmux send-keys -t "$sess" Down
+  local d1=$WORK/006c-down1.txt; poll_pane_for "$d1" "$m2" || true
   assert_contains "$d1" "$m2" "Down moves forward to middle entry"
   if [ -n "$hist_bak" ]; then mv "$hist_bak" "$HOME/.ata/history.jsonl"; else rm -f "$HOME/.ata/history.jsonl"; fi
   kill_ata "$sess"
