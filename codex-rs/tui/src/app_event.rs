@@ -1104,12 +1104,17 @@ pub(crate) enum AppEvent {
     /// Voice-mode TTS controls emitted by the document reader. The Wave 9D
     /// `voice_mode` module owns the consumer side; defining the variants
     /// here unblocks the producer (Wave 9B reader views).
+    #[cfg(not(target_os = "linux"))]
     VoiceModeInterruptTts,
+    #[cfg(not(target_os = "linux"))]
     VoiceModePauseTts,
+    #[cfg(not(target_os = "linux"))]
     VoiceModeResumeTts,
+    #[cfg(not(target_os = "linux"))]
     VoiceModePlaybackSpeedChange {
         delta: f64,
     },
+    #[cfg(not(target_os = "linux"))]
     VoiceModeNarrateSection {
         document_id: String,
         section_index: usize,
@@ -1117,6 +1122,7 @@ pub(crate) enum AppEvent {
         selection_word_offset: Option<usize>,
         manual: bool,
     },
+    #[cfg(not(target_os = "linux"))]
     VoiceModePrefetchSection {
         document_id: String,
         section_index: usize,
@@ -1126,36 +1132,44 @@ pub(crate) enum AppEvent {
     /// Push-to-talk recording meter tick — the meter renders the most
     /// recently observed audio level (encoded as a unicode meter glyph
     /// string by `RecordingMeterState`).
+    #[cfg(not(target_os = "linux"))]
     VoiceModeMeterTick {
         text: String,
     },
     /// The PTT timeout poller fired. Used to detect Space-release in
     /// terminals that don't emit KeyEventKind::Release.
+    #[cfg(not(target_os = "linux"))]
     VoiceModePttTimeoutCheck,
     /// Karaoke highlight tick — drives the per-word highlight cursor for
     /// the active TTS narration.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeHighlightTick,
     /// Successful STT transcription delivered for submission to the agent.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeTranscriptionComplete {
         text: String,
     },
     /// STT transcription failed (mic error, missing API key, recording
     /// too short, runtime error). The chatwidget surfaces the message.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeTranscriptionFailed {
         error: String,
     },
     /// A chunk of TTS audio + optional word-level alignment arrived from
     /// the ElevenLabs WebSocket worker.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeTtsAudioChunk {
         pcm: Vec<i16>,
         alignment: Option<codex_elevenlabs::TtsAlignment>,
     },
     /// TTS pipeline failure (backend missing / connection failure /
     /// stream error). Surfaced inline so the user knows audio went silent.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeTtsError {
         error: String,
     },
     /// All in-flight TTS tasks for the current turn finished.
+    #[cfg(not(target_os = "linux"))]
     VoiceModeTtsFinished,
 
     /// Apply voice-mode settings produced by `VoiceSetupView` to the runtime
@@ -1164,6 +1178,7 @@ pub(crate) enum AppEvent {
     /// touched this field" (Some) from "leave the existing config value
     /// alone" (None); the inner `Option<String>` on `language_code` further
     /// distinguishes "explicit language" from "auto-detect".
+    #[cfg(not(target_os = "linux"))]
     UpdateVoiceSettings {
         startup_enabled: bool,
         tts_enabled: bool,
