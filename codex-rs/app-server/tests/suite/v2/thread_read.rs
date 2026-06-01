@@ -1248,6 +1248,8 @@ fn turn_user_texts(turns: &[codex_app_server_protocol::Turn]) -> Vec<&str> {
                 UserInput::Text { text, .. } => Some(text.as_str()),
                 UserInput::Image { .. }
                 | UserInput::LocalImage { .. }
+                | UserInput::LocalFile { .. }
+                | UserInput::UploadedFile { .. }
                 | UserInput::Skill { .. }
                 | UserInput::Mention { .. } => None,
             },

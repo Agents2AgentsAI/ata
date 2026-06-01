@@ -538,10 +538,6 @@ impl ChatWidget {
         // Strip BEFORE the existing IDE-context extraction so the rest of this
         // function sees the trimmed message.
         let message = strip_system_instruction_suffix(&message);
-        let text_elements = text_elements
-            .into_iter()
-            .filter(|element| element.byte_range.end <= message.len())
-            .collect::<Vec<_>>();
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
         let prompt_request_end = prompt_request_offset + message.len();

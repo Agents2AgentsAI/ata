@@ -1,3 +1,7 @@
+// ATA handler still consumes `turn_context.cwd`. Upstream v0.134 deprecated
+// the field in favor of per-environment cwd accessors; migrate in a follow-up.
+#![allow(deprecated)]
+
 use codex_artifacts::ArtifactBuildRequest;
 use codex_artifacts::ArtifactCommandOutput;
 use codex_artifacts::ArtifactRuntimeManager;

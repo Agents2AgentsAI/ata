@@ -3288,6 +3288,7 @@ impl Session {
     /// only ever enqueue `TurnInput::ResponseInputItem`, so dropping any
     /// `TurnInput::UserInput` entries here keeps the surface scoped to the
     /// model-facing items the tests care about.
+    #[cfg(test)]
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         self.input_queue
             .get_pending_input(&self.active_turn)

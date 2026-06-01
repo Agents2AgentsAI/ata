@@ -1,5 +1,9 @@
 //! LSP tool handler exposing code intelligence and preview refactor operations to the agent.
 
+// ATA handler still consumes `turn_context.cwd`. Upstream v0.134 deprecated
+// the field in favor of per-environment cwd accessors; migrate in a follow-up.
+#![allow(deprecated)]
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Write;
