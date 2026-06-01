@@ -272,5 +272,4 @@ pub(crate) trait BottomPaneView: Renderable {
         _heading_words_to_skip: usize,
     ) {
     }
-
 }
