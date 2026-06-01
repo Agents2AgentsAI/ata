@@ -2456,19 +2456,19 @@ mod tests {
 
     #[test]
     fn plugin_marketplace_help_uses_plugin_namespace() {
-        let help = help_from_args(&["codex", "plugin", "marketplace", "--help"]);
+        let help = help_from_args(&["ata", "plugin", "marketplace", "--help"]);
         assert!(
-            help.contains("Usage: codex plugin marketplace [OPTIONS] <COMMAND>"),
+            help.contains("Usage: ata plugin marketplace [OPTIONS] <COMMAND>"),
             "{help}"
         );
 
         for (subcommand, usage) in [
-            ("add", "Usage: codex plugin marketplace add"),
-            ("list", "Usage: codex plugin marketplace list"),
-            ("upgrade", "Usage: codex plugin marketplace upgrade"),
-            ("remove", "Usage: codex plugin marketplace remove"),
+            ("add", "Usage: ata plugin marketplace add"),
+            ("list", "Usage: ata plugin marketplace list"),
+            ("upgrade", "Usage: ata plugin marketplace upgrade"),
+            ("remove", "Usage: ata plugin marketplace remove"),
         ] {
-            let help = help_from_args(&["codex", "plugin", "marketplace", subcommand, "--help"]);
+            let help = help_from_args(&["ata", "plugin", "marketplace", subcommand, "--help"]);
             assert!(help.contains(usage), "{help}");
         }
     }
@@ -2674,7 +2674,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume 123e4567-e89b-12d3-a456-426614174000"
+                "To continue this session, run ata resume 123e4567-e89b-12d3-a456-426614174000"
                     .to_string(),
             ]
         );
@@ -2702,7 +2702,7 @@ mod tests {
             lines,
             vec![
                 "Token usage: total=2 input=0 output=2".to_string(),
-                "To continue this session, run codex resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
+                "To continue this session, run ata resume, then select my-thread (123e4567-e89b-12d3-a456-426614174000)".to_string(),
             ]
         );
     }

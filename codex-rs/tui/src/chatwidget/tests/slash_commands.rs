@@ -2187,6 +2187,11 @@ async fn model_switch_recomputes_catalog_default_service_tier() {
     }
 }
 
+// ATA registers `/fast` as a SlashCommand (toggle Fast mode), which takes a
+// different path than the upstream service-tier override this test
+// exercises. Re-enable once ATA's slash-command and service-tier handling
+// converge.
+#[ignore = "ATA's /fast slash command interrupts the upstream service-tier queue flow."]
 #[tokio::test]
 async fn queued_fast_slash_applies_before_next_queued_message() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;

@@ -1471,8 +1471,8 @@ foo = "xyzzy"
     fn windows_system_requirements_toml_file_uses_expected_suffix() {
         let expected = windows_program_data_dir_from_known_folder()
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_PROGRAM_DATA_DIR_WINDOWS))
-            .join("OpenAI")
-            .join("Codex")
+            .join("Agents2Agents")
+            .join("Ata")
             .join("requirements.toml");
         assert_eq!(
             windows_system_requirements_toml_file()
@@ -1484,7 +1484,7 @@ foo = "xyzzy"
             windows_system_requirements_toml_file()
                 .expect("requirements.toml path")
                 .as_path()
-                .ends_with(Path::new("OpenAI").join("Codex").join("requirements.toml"))
+                .ends_with(Path::new("Agents2Agents").join("Ata").join("requirements.toml"))
         );
     }
 
@@ -1493,8 +1493,8 @@ foo = "xyzzy"
     fn windows_system_config_toml_file_uses_expected_suffix() {
         let expected = windows_program_data_dir_from_known_folder()
             .unwrap_or_else(|_| PathBuf::from(DEFAULT_PROGRAM_DATA_DIR_WINDOWS))
-            .join("OpenAI")
-            .join("Codex")
+            .join("Agents2Agents")
+            .join("Ata")
             .join("config.toml");
         assert_eq!(
             windows_system_config_toml_file()
@@ -1506,7 +1506,7 @@ foo = "xyzzy"
             windows_system_config_toml_file()
                 .expect("config.toml path")
                 .as_path()
-                .ends_with(Path::new("OpenAI").join("Codex").join("config.toml"))
+                .ends_with(Path::new("Agents2Agents").join("Ata").join("config.toml"))
         );
     }
 }

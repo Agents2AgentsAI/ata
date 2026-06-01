@@ -223,6 +223,11 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     // That is not thread persistence; keep the assertion focused on rollout,
     // session, sqlite, and other unexpected thread-store artifacts.
     entries.remove("shell_snapshots");
+    // ATA: `workspaces` is initialized by the ATA workspace-aware config
+    // loader during normal session startup. It is not thread persistence;
+    // keep the assertion focused on rollout, session, sqlite, and other
+    // unexpected thread-store artifacts.
+    entries.remove("workspaces");
     assert_eq!(
         entries,
         BTreeSet::from([
