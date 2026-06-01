@@ -394,7 +394,7 @@ tr032_a() {
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
   send_key  "$sess" Tab
   sleep 1
-  send_text "$sess" "add a third slide about coffee brewing methods"
+  send_text "$sess" "use the add_document_section tool to add a third slide about coffee brewing methods"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 120; then
     fail_assert "agent did not finish within 120s"
@@ -426,7 +426,7 @@ tr033_a() {
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
   send_key  "$sess" Tab
   sleep 1
-  send_text "$sess" "append a short paragraph about espresso to slide 2"
+  send_text "$sess" "use the append_to_section tool to append a short paragraph about espresso to slide 2"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 120; then
     fail_assert "agent did not finish within 120s"
@@ -457,7 +457,7 @@ tr037_a() {
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
   send_key  "$sess" Tab
   sleep 1
-  send_text "$sess" "explain why coffee tastes bitter in one short paragraph"
+  send_text "$sess" "use the append_to_section tool with foldable=true to explain why coffee tastes bitter in one short paragraph"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 90; then
     fail_assert "agent did not finish within 90s"
@@ -1790,7 +1790,7 @@ tr062_b() {
   start_test "TR-062 B"
   local sess=$SESSION-062b
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "Use paper_search to find 3 papers on transformer attention"; send_key "$sess" Enter
+  send_text "$sess" "use the paper_search tool with query='transformer attention' and limit=3 to find 3 papers on transformer attention"; send_key "$sess" Enter
   if ! wait_for_idle "$sess" 180; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
@@ -1809,7 +1809,7 @@ tr062_d() {
   start_test "TR-062 D"
   local sess=$SESSION-062d
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "Use paper_search to find papers on zzzqqqxxxnonsense-$$"; send_key "$sess" Enter
+  send_text "$sess" "use the paper_search tool with query='zzzqqqxxxnonsense-$$' to search for papers, then report whether you found any results"; send_key "$sess" Enter
   if ! wait_for_idle "$sess" 180; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local out=$WORK/062d.txt
   capture "$sess" "$out"
@@ -1843,7 +1843,7 @@ tr064_a() {
   start_test "TR-064 A"
   local sess=$SESSION-064a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "use paper_citations to find recent papers that cite arxiv 2505.21323"
+  send_text "$sess" "use the paper_citations tool with paper_id='arXiv:2505.21323' (keep the 'arXiv:' prefix exactly) to find recent papers that cite arxiv 2505.21323"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local sess_jsonl
@@ -1862,7 +1862,7 @@ tr065_a() {
   start_test "TR-065 A"
   local sess=$SESSION-065a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "use paper_references to list the references cited inside arxiv 2505.21323"
+  send_text "$sess" "use the paper_references tool with paper_id='arXiv:2505.21323' (keep the 'arXiv:' prefix exactly) to list the references cited inside arxiv 2505.21323"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local sess_jsonl
