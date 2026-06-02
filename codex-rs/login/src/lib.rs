@@ -1,10 +1,12 @@
-// ATA-only Supabase auth (`supabase_auth.rs`) is still temporarily disabled
-// for the rust-v0.129.0 upstream merge — the ATA email-OTP flow now lives
-// behind `app-server-protocol::v2::LoginAccountParams::AtaSendOtp/AtaVerifyOtp`
-// and is driven from the TUI's onboarding picker.
+// ATA email-OTP Supabase auth is wired end-to-end via
+// `app-server-protocol::v2::LoginAccountParams::AtaSendOtp/AtaVerifyOtp`,
+// dispatched from the TUI's onboarding picker through the app-server's
+// account processor. On success the session lands as `CodexAuth::Ata`
+// (see `auth::manager::CodexAuth`), which the TUI's `build_elevenlabs_proxy`
+// keys off for the Supabase-routed ElevenLabs path.
 //
-// `gemini_server.rs` was re-introduced from `main` as part of restoring the
-// four-option onboarding picker (Gemini Code Assist OAuth). It lives behind
+// `gemini_server.rs` powers the Gemini Code Assist OAuth option in the
+// four-option onboarding picker. It lives behind
 // `LoginAccountParams::GeminiOauth`.
 
 pub mod auth;

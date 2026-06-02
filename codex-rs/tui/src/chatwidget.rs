@@ -777,11 +777,10 @@ pub(crate) struct ChatWidget {
     /// any input, in which case we hold the welcome/warning cells.
     #[cfg(not(target_os = "linux"))]
     pending_voice_startup_cells: Vec<Box<dyn crate::history_cell::HistoryCell>>,
-    /// Auth handle used by the (currently-stubbed) ElevenLabs proxy
-    /// builder. Kept as a real `Arc<AuthManager>` rather than `Option<…>`
-    /// so the existing call sites compile unchanged; a placeholder
-    /// in-memory auth is wired in the constructor until `AuthMode::Ata`
-    /// lands in `codex-login`.
+    /// Auth handle used by the ElevenLabs proxy builder. `CodexAuth::Ata`
+    /// (from the Supabase OTP flow) makes `build_elevenlabs_proxy` return
+    /// a real proxy; any other auth mode falls through to the direct
+    /// ElevenLabs API key path documented in `build_elevenlabs_config`.
     #[cfg(not(target_os = "linux"))]
     auth_manager: Arc<codex_login::AuthManager>,
     /// Shared state for the active `/supabase-login` flow. `Some` while the
