@@ -1915,9 +1915,18 @@ impl App {
                 parent_thread_id,
                 user_message,
             } => {
-                return self
-                    .handle_start_side(tui, app_server, parent_thread_id, user_message)
-                    .await;
+                // Box::pin so the large handle_start_side future state
+                // machine (Config clones, ChatWidget snapshots, side fork
+                // params) lives on the heap. Without this the cumulative
+                // futures-state-machine size on the main thread overflows
+                // its 8MB stack on macOS aarch64.
+                return Box::pin(self.handle_start_side(
+                    tui,
+                    app_server,
+                    parent_thread_id,
+                    user_message,
+                ))
+                .await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();

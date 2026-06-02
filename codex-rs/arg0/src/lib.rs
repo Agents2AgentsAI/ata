@@ -185,7 +185,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// in this workspace that depends on these helper CLIs.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
@@ -193,14 +193,37 @@ where
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
 
-    // Regular invocation – create a Tokio runtime and execute the provided
-    // async entry-point.
-    let runtime = build_runtime()?;
-    runtime.block_on(run_main_with_arg0_guard(
-        path_entry_guard,
-        std::env::current_exe().ok(),
-        main_fn,
-    ))
+    // Regular invocation – run the Tokio runtime on a dedicated OS thread
+    // with `TOKIO_WORKER_STACK_SIZE_BYTES` (16 MiB) of stack rather than on
+    // the process's main thread. The TUI uses non-Send types (Cell/RefCell
+    // in chat widget state) so we cannot `tokio::spawn` the entry future;
+    // instead the whole `block_on` runs on a thread we own, where we
+    // control the stack size. The default main-thread stack is 8 MiB on
+    // macOS and 1 MiB on Windows; on macOS aarch64 the TUI's top-level
+    // event loop accumulates large futures (e.g. `/side` fork setup, the
+    // ChatWidget config clones) and overflows that 8 MiB without this.
+    let current_exe = std::env::current_exe().ok();
+    std::thread::Builder::new()
+        .name("ata-runtime".to_string())
+        .stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .spawn(move || -> anyhow::Result<()> {
+            let runtime = build_runtime()?;
+            runtime.block_on(run_main_with_arg0_guard(
+                path_entry_guard,
+                current_exe,
+                main_fn,
+            ))
+        })
+        .map_err(|e| anyhow::anyhow!("failed to spawn ata-runtime thread: {e}"))?
+        .join()
+        .map_err(|panic| {
+            anyhow::anyhow!(
+                "ata-runtime thread panicked: {}",
+                panic.downcast_ref::<String>().map(String::as_str).unwrap_or(
+                    panic.downcast_ref::<&'static str>().copied().unwrap_or("<unknown>")
+                )
+            )
+        })?
 }
 
 async fn run_main_with_arg0_guard<F, Fut>(
