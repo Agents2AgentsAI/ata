@@ -219,9 +219,15 @@ where
         .map_err(|panic| {
             anyhow::anyhow!(
                 "ata-runtime thread panicked: {}",
-                panic.downcast_ref::<String>().map(String::as_str).unwrap_or(
-                    panic.downcast_ref::<&'static str>().copied().unwrap_or("<unknown>")
-                )
+                panic
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .unwrap_or(
+                        panic
+                            .downcast_ref::<&'static str>()
+                            .copied()
+                            .unwrap_or("<unknown>")
+                    )
             )
         })?
 }

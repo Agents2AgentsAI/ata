@@ -291,10 +291,7 @@ mod tests {
             .filter(|item| item.command() == "fast")
             .collect();
         assert_eq!(fast_rows.len(), 1, "expected a single /fast row");
-        assert!(matches!(
-            fast_rows[0],
-            SlashCommandItem::ServiceTier(_)
-        ));
+        assert!(matches!(fast_rows[0], SlashCommandItem::ServiceTier(_)));
     }
 
     #[test]

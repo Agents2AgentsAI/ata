@@ -199,8 +199,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "tool_search",
         "web_search",
     ]);
-    let tools_set: std::collections::HashSet<&str> =
-        tools0.iter().map(String::as_str).collect();
+    let tools_set: std::collections::HashSet<&str> = tools0.iter().map(String::as_str).collect();
     for required in &baseline {
         assert!(
             tools_set.contains(required),
