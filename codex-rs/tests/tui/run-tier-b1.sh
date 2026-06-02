@@ -928,20 +928,27 @@ tr006_c() {
     printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":3,"text":"%s"}\n' "$m3"
   } >> "$HOME/.ata/history.jsonl"
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
+  # boot_ata returns when the welcome banner is up and no "esc to interrupt"
+  # spinner is visible. That does NOT guarantee that SessionConfigured has
+  # fired (which is what calls set_history_metadata and turns on history
+  # navigation). If we send Up before that lands, the keypress is dropped
+  # because should_handle_navigation returns false. Wait for the persistent
+  # entry count to be wired before driving Up.
+  sleep 2
   # History entries are fetched async via LookupMessageHistoryEntry; on slow
   # CI runners a fixed 0.4s sleep races the round-trip. Use the global
   # poll_pane_for helper to wait for each Up/Down to land in the pane.
   tmux send-keys -t "$sess" Up
-  local u1=$WORK/006c-up1.txt; poll_pane_for "$sess" "$u1" "$m3" || true
+  local u1=$WORK/006c-up1.txt; poll_pane_for "$sess" "$u1" "$m3" 10 || true
   assert_contains "$u1" "$m3" "Up #1 shows newest entry"
   tmux send-keys -t "$sess" Up
-  local u2=$WORK/006c-up2.txt; poll_pane_for "$sess" "$u2" "$m2" || true
+  local u2=$WORK/006c-up2.txt; poll_pane_for "$sess" "$u2" "$m2" 10 || true
   assert_contains "$u2" "$m2" "Up #2 shows middle entry"
   tmux send-keys -t "$sess" Up
-  local u3=$WORK/006c-up3.txt; poll_pane_for "$sess" "$u3" "$m1" || true
+  local u3=$WORK/006c-up3.txt; poll_pane_for "$sess" "$u3" "$m1" 10 || true
   assert_contains "$u3" "$m1" "Up #3 shows oldest entry"
   tmux send-keys -t "$sess" Down
-  local d1=$WORK/006c-down1.txt; poll_pane_for "$sess" "$d1" "$m2" || true
+  local d1=$WORK/006c-down1.txt; poll_pane_for "$sess" "$d1" "$m2" 10 || true
   assert_contains "$d1" "$m2" "Down moves forward to middle entry"
   if [ -n "$hist_bak" ]; then mv "$hist_bak" "$HOME/.ata/history.jsonl"; else rm -f "$HOME/.ata/history.jsonl"; fi
   kill_ata "$sess"
