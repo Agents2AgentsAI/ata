@@ -358,9 +358,9 @@ tr010_a() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/experimental"
   send_key  "$sess" Enter
-  sleep 1.5
   local out=$WORK/010a.txt
-  capture "$sess" "$out"
+  # Picker can take >1.5s on a loaded runner; poll until the title appears.
+  poll_pane_for "$sess" "$out" "Experimental features" 10 || true
   assert_contains "$out" "Experimental features"     "title shown"
   assert_contains "$out" "Terminal resize reflow"    "first toggle listed"
   assert_contains "$out" "Press space to select"     "footer hint present"
