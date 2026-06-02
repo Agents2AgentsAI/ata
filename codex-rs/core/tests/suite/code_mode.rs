@@ -747,6 +747,7 @@ text(result.output);
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_explicit_max_above_truncation_policy_preserves_output() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -808,6 +809,7 @@ text(result.output);
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_without_max_preserves_output_beyond_truncation_policy() -> Result<()> {
     skip_if_no_network!(Ok(()));
