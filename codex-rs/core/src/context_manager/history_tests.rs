@@ -1065,7 +1065,10 @@ fn record_items_preserves_custom_tool_call_output_content() {
     match &history.items[0] {
         ResponseItem::CustomToolCallOutput { output, .. } => {
             let output = output.text_content().unwrap_or_default();
-            assert_eq!(output, long_output, "CustomToolCallOutput must be preserved verbatim");
+            assert_eq!(
+                output, long_output,
+                "CustomToolCallOutput must be preserved verbatim"
+            );
         }
         other => panic!("unexpected history item: {other:?}"),
     }
