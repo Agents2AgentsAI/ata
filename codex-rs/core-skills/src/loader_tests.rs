@@ -42,9 +42,18 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
             .expect("file cwd should have a parent directory")
             .to_path_buf()
     };
+    // Mirror production `find_project_root`: skip well-known system temp dirs
+    // so a stray `/tmp/.git` (left behind by CI runner state) does not get
+    // treated as a project root. Tests with tempdir-based cwds rely on
+    // there being no `.git` above them — without this guard, those tests
+    // fail on Linux GH runners that ship with a stray `/tmp/.git`.
+    let system_temp_dirs = codex_git_utils::system_temp_dirs();
     let project_root = cwd_dir
         .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists())
+        .find(|ancestor| {
+            !codex_git_utils::is_system_temp_dir(ancestor, &system_temp_dirs)
+                && ancestor.join(".git").exists()
+        })
         .unwrap_or(cwd_dir.as_path())
         .to_path_buf();
 

@@ -774,16 +774,16 @@ pub async fn resolve_root_git_project_for_trust(
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
-    let system_temp = std::env::temp_dir();
+    let system_temp_dirs = system_temp_dirs();
     let mut dir = base_dir.to_path_buf();
 
     loop {
-        // Skip the system temp dir itself — a `.git` directly under it is
+        // Skip well-known system temp dirs — a `.git` directly under them is
         // essentially always accidental contamination (CI runner state,
         // stale fixture), not a real project root. Without this guard,
         // walking up from `/tmp/<some-cwd>` could mistake `/tmp/.git` for
         // the project root and report the project name as `tmp`.
-        if !is_system_temp_dir(&dir, &system_temp) {
+        if !is_system_temp_dir(&dir, &system_temp_dirs) {
             let dot_git = dir.join(".git");
             if dot_git.exists() {
                 return Some((dir, dot_git));
@@ -800,17 +800,36 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-fn is_system_temp_dir(dir: &Path, system_temp: &Path) -> bool {
-    if dir == system_temp {
-        return true;
+/// Returns true if `dir` matches any well-known system temp directory. The
+/// match is intentionally broad: we check `std::env::temp_dir()`, the GitHub
+/// Actions `RUNNER_TEMP` env, plus hard-coded `/tmp`, `/var/tmp`, and
+/// `/private/tmp` (macOS) so we catch the stray-`.git` case even when the
+/// stray is not under the env-derived temp dir.
+pub fn is_system_temp_dir(dir: &Path, system_temp_dirs: &[PathBuf]) -> bool {
+    let dir_canonical = dir.canonicalize().ok();
+    system_temp_dirs.iter().any(|candidate| {
+        if dir == candidate.as_path() {
+            return true;
+        }
+        match (&dir_canonical, candidate.canonicalize()) {
+            (Some(d), Ok(c)) => *d == c,
+            _ => false,
+        }
+    })
+}
+
+/// Collect all well-known system temp directories that may contain a stray
+/// `.git` from CI runner pollution or fixture leftover. Returns absolute
+/// paths; duplicates are not deduplicated since the cost is negligible.
+pub fn system_temp_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![std::env::temp_dir()];
+    if let Some(runner_temp) = std::env::var_os("RUNNER_TEMP") {
+        dirs.push(PathBuf::from(runner_temp));
     }
-    // Handle platforms where temp_dir() and the walk hit different paths
-    // for the same directory (e.g. macOS where `/tmp` is a symlink to
-    // `/private/tmp`).
-    matches!(
-        (dir.canonicalize(), system_temp.canonicalize()),
-        (Ok(d), Ok(t)) if d == t
-    )
+    for hardcoded in ["/tmp", "/var/tmp", "/private/tmp"] {
+        dirs.push(PathBuf::from(hardcoded));
+    }
+    dirs
 }
 
 async fn find_ancestor_git_entry_with_fs(

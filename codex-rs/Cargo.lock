@@ -2714,6 +2714,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-config",
  "codex-exec-server",
+ "codex-git-utils",
  "codex-login",
  "codex-model-provider",
  "codex-otel",

@@ -414,7 +414,18 @@ async fn find_project_root(
         return cwd.clone();
     }
 
+    let system_temp_dirs = codex_git_utils::system_temp_dirs();
+
     for ancestor in cwd.ancestors() {
+        // Skip well-known system temp dirs. A marker file directly under
+        // `/tmp`, `$TMPDIR`, `$RUNNER_TEMP` etc. is essentially always
+        // accidental contamination (stale CI fixture, leftover test state),
+        // not a real project root. Without this guard, a stray `/tmp/.git`
+        // would make every tempdir-based cwd look like it lives inside a
+        // project rooted at `/tmp`.
+        if codex_git_utils::is_system_temp_dir(ancestor.as_path(), &system_temp_dirs) {
+            continue;
+        }
         for marker in project_root_markers {
             let marker_path = ancestor.join(marker);
             match fs.get_metadata(&marker_path, /*sandbox*/ None).await {
