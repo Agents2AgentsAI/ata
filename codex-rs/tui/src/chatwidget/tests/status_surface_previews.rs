@@ -126,10 +126,6 @@ async fn status_line_setup_popup_live_only_snapshot() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git that makes get_git_repo_root('/tmp/project') return /tmp; snapshot embeds 'tmp' instead of expected fallback. Tracked separately."
-)]
 async fn status_surface_preview_lines_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -169,10 +165,6 @@ async fn thread_title_falls_back_to_thread_id_when_unnamed() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git that makes get_git_repo_root('/tmp/project') return /tmp; snapshot embeds 'tmp' instead of expected fallback. Tracked separately."
-)]
 async fn status_line_setup_popup_hardcoded_only_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.config.tui_status_line = Some(vec![
@@ -188,10 +180,6 @@ async fn status_line_setup_popup_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git that makes get_git_repo_root('/tmp/project') return /tmp; snapshot embeds 'tmp' instead of expected fallback. Tracked separately."
-)]
 async fn status_surface_preview_lines_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
@@ -288,10 +276,6 @@ async fn status_line_setup_popup_rate_limits_snapshot() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git that makes get_git_repo_root('/tmp/project') return /tmp; snapshot embeds 'tmp' instead of expected fallback. Tracked separately."
-)]
 async fn status_line_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
@@ -344,10 +328,6 @@ async fn terminal_title_setup_popup_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git that makes get_git_repo_root('/tmp/project') return /tmp; snapshot embeds 'tmp' instead of expected fallback. Tracked separately."
-)]
 async fn terminal_title_setup_popup_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_name = Some("Mixed preview thread".to_string());
@@ -379,10 +359,6 @@ async fn terminal_title_setup_popup_rate_limits_snapshot() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "Linux GitHub Actions runners have a stray /tmp/.git which makes get_git_repo_root('/tmp/project') return /tmp, breaking the no-project-root assumption in test_config. Tracked separately."
-)]
 async fn missing_project_root_uses_different_status_and_title_preview_sources() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

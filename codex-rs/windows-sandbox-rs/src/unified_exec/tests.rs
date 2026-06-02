@@ -37,6 +37,43 @@ fn legacy_process_test_guard() -> MutexGuard<'static, ()> {
         .expect("legacy Windows sandbox process test lock poisoned")
 }
 
+/// Returns true when the current process token carries an interactive
+/// Logon SID — a prerequisite for `spawn_windows_sandbox_session_legacy`.
+/// CI environments (GitHub Actions runners, scheduled tasks running as
+/// LocalSystem, etc.) typically execute without an interactive logon and
+/// therefore lack this SID. Tests that need it gate on this check and
+/// self-skip when it returns false, rather than panicking inside the
+/// spawn helper.
+fn current_process_has_interactive_logon_sid() -> bool {
+    use crate::token::get_current_token_for_restriction;
+    use crate::token::get_logon_sid_bytes;
+    use windows_sys::Win32::Foundation::CloseHandle;
+
+    // SAFETY: get_current_token_for_restriction returns an owned token
+    // handle that we close immediately after querying; get_logon_sid_bytes
+    // requires only a valid open token handle.
+    unsafe {
+        let Ok(h_token) = get_current_token_for_restriction() else {
+            return false;
+        };
+        let has_sid = get_logon_sid_bytes(h_token).is_ok();
+        CloseHandle(h_token);
+        has_sid
+    }
+}
+
+macro_rules! skip_if_no_interactive_logon_sid {
+    () => {
+        if !current_process_has_interactive_logon_sid() {
+            eprintln!(
+                "[skip] no interactive Logon SID on current process token; \
+                 spawn_windows_sandbox_session_legacy cannot run here"
+            );
+            return;
+        }
+    };
+}
+
 fn current_thread_runtime() -> tokio::runtime::Runtime {
     Builder::new_current_thread()
         .enable_all()
@@ -142,8 +179,8 @@ async fn collect_stdout_and_exit(
 }
 
 #[test]
-#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_non_tty_cmd_emits_output() {
+    skip_if_no_interactive_logon_sid!();
     let _guard = legacy_process_test_guard();
     let runtime = current_thread_runtime();
     runtime.block_on(async move {
@@ -219,8 +256,8 @@ fn legacy_non_tty_cmd_rejects_deny_read_overrides() {
 }
 
 #[test]
-#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_non_tty_powershell_emits_output() {
+    skip_if_no_interactive_logon_sid!();
     let Some(pwsh) = pwsh_path() else {
         return;
     };
@@ -407,8 +444,8 @@ fn runner_resizer_sends_resize_frame() {
 }
 
 #[test]
-#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_capture_powershell_emits_output() {
+    skip_if_no_interactive_logon_sid!();
     let Some(pwsh) = pwsh_path() else {
         return;
     };
@@ -445,8 +482,8 @@ fn legacy_capture_powershell_emits_output() {
 }
 
 #[test]
-#[ignore = "Logon SID not present on token: GitHub Actions Windows runner runs without an interactive logon SID, which the Windows sandbox session requires. Tracked separately."]
 fn legacy_tty_powershell_emits_output_and_accepts_input() {
+    skip_if_no_interactive_logon_sid!();
     let Some(pwsh) = pwsh_path() else {
         return;
     };

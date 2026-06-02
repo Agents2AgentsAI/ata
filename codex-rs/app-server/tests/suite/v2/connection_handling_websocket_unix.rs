@@ -57,7 +57,6 @@ async fn websocket_transport_ctrl_c_waits_for_running_turn_before_exit() -> Resu
 }
 
 #[tokio::test]
-#[ignore = "flaky on macOS CI: 3s Ctrl-C forced-restart deadline is racy under runner load. Tracked separately."]
 async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> Result<()> {
     let GracefulCtrlCFixture {
         _codex_home,
@@ -70,9 +69,13 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
     send_sigint(&process)?;
+    // The forced-restart path is fast in isolation but the 2s deadline used
+    // to race macOS CI runner load (test passed locally, flaked on CI).
+    // 10s keeps the failure mode obvious while leaving room for runner
+    // contention.
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         "timed out waiting for forced Ctrl-C restart shutdown",
     )
     .await?;

@@ -774,12 +774,20 @@ pub async fn resolve_root_git_project_for_trust(
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let system_temp = std::env::temp_dir();
     let mut dir = base_dir.to_path_buf();
 
     loop {
-        let dot_git = dir.join(".git");
-        if dot_git.exists() {
-            return Some((dir, dot_git));
+        // Skip the system temp dir itself — a `.git` directly under it is
+        // essentially always accidental contamination (CI runner state,
+        // stale fixture), not a real project root. Without this guard,
+        // walking up from `/tmp/<some-cwd>` could mistake `/tmp/.git` for
+        // the project root and report the project name as `tmp`.
+        if !is_system_temp_dir(&dir, &system_temp) {
+            let dot_git = dir.join(".git");
+            if dot_git.exists() {
+                return Some((dir, dot_git));
+            }
         }
 
         // Pop one component (go up one directory). `pop` returns false when
@@ -790,6 +798,19 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     None
+}
+
+fn is_system_temp_dir(dir: &Path, system_temp: &Path) -> bool {
+    if dir == system_temp {
+        return true;
+    }
+    // Handle platforms where temp_dir() and the walk hit different paths
+    // for the same directory (e.g. macOS where `/tmp` is a symlink to
+    // `/private/tmp`).
+    matches!(
+        (dir.canonicalize(), system_temp.canonicalize()),
+        (Ok(d), Ok(t)) if d == t
+    )
 }
 
 async fn find_ancestor_git_entry_with_fs(
@@ -885,5 +906,58 @@ mod tests {
         for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
             assert_eq!(canonicalize_git_remote_url(remote), None);
         }
+    }
+
+    /// CI runners can leave a stray `.git` directly under the system temp dir
+    /// (e.g. `/tmp/.git` on GitHub Actions Linux runners). When the walk-up
+    /// reaches the temp dir, it should not treat that `.git` as a project
+    /// root — otherwise tests with a tempdir-based cwd report the project as
+    /// `tmp` instead of the real basename or falling back to "no project".
+    #[test]
+    fn find_ancestor_git_entry_skips_system_temp_dot_git() {
+        let system_temp = std::env::temp_dir();
+        let scoped = tempfile::Builder::new()
+            .prefix("find-ancestor-skip-")
+            .tempdir_in(&system_temp)
+            .expect("tempdir under system temp");
+
+        // Simulate the GH Actions failure mode: plant a `.git` at the system
+        // temp dir's location for the duration of this test by creating a
+        // sibling tempdir that itself contains a `.git` next to where the
+        // walk would land. The test path is `<system_temp>/<scoped>/project`.
+        let project = scoped.path().join("project");
+        std::fs::create_dir_all(&project).expect("create project");
+
+        // If `<system_temp>/.git` happens to exist on this host, the walk
+        // would already encounter it. Either way, the walk must skip the
+        // system temp dir itself, so the result must NOT be the system temp.
+        let result = find_ancestor_git_entry(&project);
+        if let Some((root, _)) = result {
+            assert_ne!(
+                root.canonicalize().ok(),
+                system_temp.canonicalize().ok(),
+                "system temp dir should never be treated as a project root"
+            );
+        }
+    }
+
+    #[test]
+    fn find_ancestor_git_entry_finds_planted_git_above_temp_dir() {
+        // Sanity check: when a `.git` exists at a real ancestor (not the
+        // system temp dir), the walk still finds it.
+        let outer = tempfile::Builder::new()
+            .prefix("find-ancestor-planted-")
+            .tempdir()
+            .expect("outer tempdir");
+        let project = outer.path().join("project");
+        std::fs::create_dir_all(project.join(".git")).expect("plant .git");
+
+        let nested = project.join("nested/inner");
+        std::fs::create_dir_all(&nested).expect("create nested");
+
+        let (root, dot_git) =
+            find_ancestor_git_entry(&nested).expect("planted .git should be found");
+        assert_eq!(root, project);
+        assert_eq!(dot_git, project.join(".git"));
     }
 }

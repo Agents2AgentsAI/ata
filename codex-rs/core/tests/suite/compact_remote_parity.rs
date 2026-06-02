@@ -116,10 +116,6 @@ const FULL_MIX: &[Step] = &[
 ];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg_attr(
-    windows,
-    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
-)]
 async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -150,10 +146,6 @@ async fn remote_compaction_parity_manual_transcripts() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg_attr(
-    windows,
-    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
-)]
 async fn remote_compaction_parity_v2_api_key_sends_service_tier_upgrade() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -195,10 +187,6 @@ async fn remote_compaction_parity_manual_hooks() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg_attr(
-    windows,
-    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
-)]
 async fn remote_compaction_parity_pre_turn_auto() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -209,10 +197,6 @@ async fn remote_compaction_parity_pre_turn_auto() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[cfg_attr(
-    windows,
-    ignore = "skills_instructions includes per-run tempdir paths (C:/Windows/SystemTemp/.tmpXXXXXX/skills/.system/...); the two captures use different tempdirs, so string equality cannot hold on Windows. Tracked separately."
-)]
 async fn remote_compaction_parity_mid_turn_auto() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1001,12 +985,24 @@ fn normalize_tmp_prefix_before_marker(text: &mut String, marker: &str) {
                     .and_then(|temp_index| prefix[..temp_index].rfind(":\\Users\\"))
                     .and_then(|colon_index| colon_index.checked_sub(1))
             });
+        // GitHub Actions Windows runners and other LocalSystem-context jobs
+        // place tempdirs under `C:\Windows\SystemTemp\.tmpXXXXXX` instead of
+        // a per-user `AppData/Local/Temp` location.
+        let windows_systemtemp_start = prefix
+            .rfind(":/Windows/SystemTemp/.tmp")
+            .and_then(|colon_index| colon_index.checked_sub(1))
+            .or_else(|| {
+                prefix
+                    .rfind(":\\Windows\\SystemTemp\\.tmp")
+                    .and_then(|colon_index| colon_index.checked_sub(1))
+            });
         let start = prefix
             .rfind("/private/var/folders/")
             .or_else(|| prefix.rfind("/var/folders/"))
             .or_else(|| prefix.rfind("/private/tmp/.tmp"))
             .or_else(|| prefix.rfind("/tmp/.tmp"))
-            .or(windows_appdata_temp_start);
+            .or(windows_appdata_temp_start)
+            .or(windows_systemtemp_start);
         if let Some(start_index) = start {
             text.replace_range(start_index..marker_index, "<CODEX_HOME>");
             search_start = start_index + "<CODEX_HOME>".len() + marker.len();
@@ -1035,6 +1031,20 @@ fn normalize_string_rewrites_windows_temp_skill_paths() {
     let text = normalize_string(
         "file: C:/Users/runneradmin/AppData/Local/Temp/.tmpDuYxa3/skills/.system/imagegen/SKILL.md and \
          C:\\Users\\runneradmin\\AppData\\Local\\Temp\\.tmpiP36Yr\\skills\\custom\\SKILL.md",
+    );
+
+    assert_eq!(
+        text,
+        "file: <CODEX_HOME>/skills/.system/imagegen/SKILL.md and \
+         <CODEX_HOME>\\skills\\custom\\SKILL.md"
+    );
+}
+
+#[test]
+fn normalize_string_rewrites_windows_systemtemp_skill_paths() {
+    let text = normalize_string(
+        "file: C:/Windows/SystemTemp/.tmpDuYxa3/skills/.system/imagegen/SKILL.md and \
+         C:\\Windows\\SystemTemp\\.tmpiP36Yr\\skills\\custom\\SKILL.md",
     );
 
     assert_eq!(

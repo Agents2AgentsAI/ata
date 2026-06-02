@@ -3017,13 +3017,19 @@ async fn multi_agent_v2_wait_agent_uses_configured_default_timeout() {
         .expect("test config should allow feature update");
     config.multi_agent_v2.min_wait_timeout_ms = 1;
     config.multi_agent_v2.max_wait_timeout_ms = 1_000;
-    config.multi_agent_v2.default_wait_timeout_ms = 50;
+    // The early-return assertion below wraps the handler in a tokio timeout
+    // and asserts the outer wrapper fires before the configured default
+    // timeout completes. The 20ms/50ms gap (30ms safety margin) was too
+    // tight on Windows runners, where tokio's timer resolution + scheduling
+    // jitter routinely closed the gap. 50ms/200ms keeps the invariant clear
+    // while leaving room for runner load.
+    config.multi_agent_v2.default_wait_timeout_ms = 200;
     turn.config = Arc::new(config);
     let session = Arc::new(session);
     let turn = Arc::new(turn);
 
     let early = timeout(
-        Duration::from_millis(/*millis*/ 20),
+        Duration::from_millis(/*millis*/ 50),
         WaitAgentHandlerV2::default().handle(invocation(
             session.clone(),
             turn.clone(),
