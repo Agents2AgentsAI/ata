@@ -1674,13 +1674,36 @@ tr044_b() {
 }
 
 # TR-044 C: /side inside /side is blocked (recursion guard). The
-# guard fires in chatwidget unit tests (tui/src/chatwidget/tests/side.rs)
-# but in a live tmux session the second /side doesn't surface the
-# expected error on screen — needs deeper investigation. Skipping with
-# a marker so this gap is visible.
+# error message from `ensure_slash_command_allowed_in_side_conversation`
+# now surfaces in live tmux too (was previously hidden because the /side
+# stack overflow killed ata before the chat history could render — fixed
+# in commit 002e487b61 / `arg0_dispatch_or_else` dedicated thread).
 tr044_c() {
   start_test "TR-044 C"
-  skip_test "expected error string from chatwidget/tests/side.rs not visible in live tmux; needs investigation"
+  local sess=$SESSION-044c
+  if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # /side requires a completed turn first.
+  send_text "$sess" "respond with hi"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 60; then fail_assert "priming turn didn't complete"; kill_ata "$sess"; end_test; return; fi
+  # Enter side with a fast arithmetic question so we don't burn a long turn.
+  send_text "$sess" "/side what is 2+2"
+  send_key  "$sess" Enter
+  if ! wait_for_idle "$sess" 90; then fail_assert "side turn didn't complete"; kill_ata "$sess"; end_test; return; fi
+  # Verify we're actually in side before exercising the recursion guard.
+  local marker=$WORK/044c-in-side.txt
+  capture "$sess" "$marker"
+  assert_contains "$marker" "Side from main thread" "side context label visible before recursion attempt"
+  # Now the recursion attempt: /side again should be rejected with a
+  # specific error string in the history, and ata must stay alive.
+  send_text "$sess" "/side again"
+  send_key  "$sess" Enter
+  sleep 2
+  local out=$WORK/044c.txt
+  capture "$sess" "$out"
+  assert_contains "$out" "'/side' is unavailable in side conversations" "recursion guard error in history"
+  assert_contains "$out" "Side from main thread" "still in side after rejected /side"
+  kill_ata "$sess"
   end_test
 }
 
