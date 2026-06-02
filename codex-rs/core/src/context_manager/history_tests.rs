@@ -1043,7 +1043,12 @@ fn record_items_truncates_function_call_output_content() {
 }
 
 #[test]
-fn record_items_truncates_custom_tool_call_output_content() {
+fn record_items_preserves_custom_tool_call_output_content() {
+    // CustomToolCallOutput is produced by tools that own their per-call
+    // truncation (e.g. code-mode's `@exec max_output_tokens`). The global
+    // policy MUST NOT re-truncate, or it clobbers the explicit per-call
+    // budget the producer already applied. See process_item in history.rs
+    // and upstream PR #23564.
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
@@ -1060,15 +1065,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     match &history.items[0] {
         ResponseItem::CustomToolCallOutput { output, .. } => {
             let output = output.text_content().unwrap_or_default();
-            assert_ne!(output, long_output);
-            assert!(
-                output.contains("tokens truncated"),
-                "expected token-based truncation marker, got {output}"
-            );
-            assert!(
-                output.contains("tokens truncated") || output.contains("bytes truncated"),
-                "expected truncation marker, got {output}"
-            );
+            assert_eq!(output, long_output, "CustomToolCallOutput must be preserved verbatim");
         }
         other => panic!("unexpected history item: {other:?}"),
     }
