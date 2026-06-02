@@ -645,15 +645,17 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
     Ok(())
 }
 
-// Flaky in CI: the assertion "pending sideband task should abort before
-// websocket handshake completes" races the abort against the handshake on
-// slow runners and intermittently observes the handshake landing first.
-// Tracked as part of the v0.134 merge stabilization; works locally.
-#[ignore = "flaky timing assertion on CI runners; tracked alongside the v0.134 merge stabilization."]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // The assertion is "close races and aborts the pending sideband
+    // task before the websocket handshake completes". The original test
+    // gave the close only 500ms vs the handshake, which intermittently
+    // lost on slow CI runners. Make the handshake side wait long
+    // enough that even a slow scheduler still lets the close win, then
+    // wait past `accept_delay` before asserting absence of handshake
+    // so the "no handshake completed" claim is meaningful.
     let server = start_mock_server().await;
     Mock::given(method("POST"))
         .and(path_regex(".*/realtime/calls$"))
@@ -667,7 +669,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![]],
         response_headers: Vec::new(),
-        accept_delay: Some(Duration::from_millis(500)),
+        accept_delay: Some(Duration::from_millis(2_000)),
         close_after_requests: false,
     }])
     .await;
@@ -713,7 +715,11 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let stale_event = timeout(Duration::from_millis(700), async {
+    // Wait past `accept_delay` (2s) plus headroom so we are confidently
+    // PAST the point where the sideband handshake would have landed if
+    // the abort had failed. If anything stale leaks (Error / Close
+    // event), the timeout returns Ok with the leaked event description.
+    let stale_event = timeout(Duration::from_millis(3_000), async {
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                 payload: RealtimeEvent::Error(message),

@@ -94,15 +94,14 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-// ATA ships a large surface of extra tools (cron, monitor, document reader,
-// dataset/repo/paper/zotero, etc.) beyond the upstream baseline. Enumerating
-// every one of them in this upstream test is brittle and not what the test
-// is really checking. The test's intent ("tool names are consistent across
-// requests") is preserved by the duplicated tool-name vector comparison
-// below, but the static expected list no longer matches ATA's full tool
-// surface, so we skip the assertion until upstream relaxes the check or we
-// rework it to compare body0 and body1 tool arrays directly.
-#[ignore = "ATA-specific tool surface diverges from upstream baseline; the consistency check is covered by other tests."]
+// Upstream asserts the exact tool list. ATA ships many extra tools
+// (cron, monitor, document reader, dataset/repo/paper/zotero, etc.)
+// so the literal list does not match. The test's REAL intent is the
+// cross-request invariant: tool names and instructions sent on
+// request N must equal the ones sent on request N+1, so prompt
+// caching can take effect. Assert that directly. Also assert that
+// the upstream baseline subset is present so we can't accidentally
+// drop a core tool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -120,12 +119,7 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
     )
     .await;
 
-    let TestCodex {
-        codex,
-        config,
-        thread_manager,
-        ..
-    } = test_codex()
+    let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
             config.user_instructions = Some("be consistent and helpful".to_string());
             config.model = Some("gpt-5.2".to_string());
@@ -141,17 +135,6 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         })
         .build(&server)
         .await?;
-    let base_instructions = thread_manager
-        .get_models_manager()
-        .get_model_info(
-            config
-                .model
-                .as_deref()
-                .expect("test config should have a model"),
-            &config.to_models_manager_config(),
-        )
-        .await
-        .base_instructions;
 
     codex
         .submit(Op::UserInput {
@@ -181,12 +164,31 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let mut expected_tools_names = if cfg!(windows) {
+    let body0 = req1.single_request().body_json();
+    let body1 = req2.single_request().body_json();
+
+    // Real invariant: identical instructions and identical tool list
+    // across the two requests (i.e. prompt cache key is stable).
+    assert_eq!(
+        body0["instructions"], body1["instructions"],
+        "instructions diverged between request 1 and request 2"
+    );
+    let tools0 = tool_name_vec(&body0);
+    let tools1 = tool_name_vec(&body1);
+    assert_eq!(
+        tools0, tools1,
+        "tool list diverged between request 1 and request 2"
+    );
+
+    // Curated subset: the upstream baseline tools that should always be
+    // present on this model/config. This guards against accidentally
+    // dropping a core tool without re-enumerating ATA's full surface.
+    let mut baseline = if cfg!(windows) {
         vec!["shell_command"]
     } else {
         vec!["exec_command", "write_stdin"]
     };
-    expected_tools_names.extend([
+    baseline.extend([
         "update_plan",
         "get_goal",
         "create_goal",
@@ -197,28 +199,31 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         "tool_search",
         "web_search",
     ]);
-    let body0 = req1.single_request().body_json();
-
-    let expected_instructions = if expected_tools_names.contains(&"apply_patch") {
-        base_instructions
-    } else {
-        [base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS.to_string()].join("\n")
-    };
-
-    assert_eq!(
-        body0["instructions"],
-        serde_json::json!(expected_instructions),
-    );
-    assert_tool_names(&body0, &expected_tools_names);
-
-    let body1 = req2.single_request().body_json();
-    assert_eq!(
-        body1["instructions"],
-        serde_json::json!(expected_instructions),
-    );
-    assert_tool_names(&body1, &expected_tools_names);
+    let tools_set: std::collections::HashSet<&str> =
+        tools0.iter().map(String::as_str).collect();
+    for required in &baseline {
+        assert!(
+            tools_set.contains(required),
+            "expected core tool `{required}` to be present; got tools={tools0:?}"
+        );
+    }
 
     Ok(())
+}
+
+fn tool_name_vec(body: &serde_json::Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            t.get("name")
+                .and_then(|value| value.as_str())
+                .or_else(|| t.get("type").and_then(|value| value.as_str()))
+                .unwrap()
+                .to_string()
+        })
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

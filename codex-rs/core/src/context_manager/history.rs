@@ -459,6 +459,14 @@ impl ContextManager {
                     ),
                 }
             }
+            // CustomToolCallOutput is produced by tools that own their own
+            // per-call truncation (e.g. code-mode's `@exec
+            // max_output_tokens`). Re-truncating here via the global
+            // `tool_output_token_limit` policy would clobber the
+            // per-call budget the producer already applied — upstream
+            // PR #23564 was meant to honour the explicit per-call value
+            // but the secondary rewrite in this function defeated it.
+            // Trust the producer's truncation.
             ResponseItem::CustomToolCallOutput {
                 call_id,
                 name,
@@ -466,7 +474,7 @@ impl ContextManager {
             } => ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
                 name: name.clone(),
-                output: truncate_function_output_payload(output, policy_with_serialization_budget),
+                output: output.clone(),
             },
             ResponseItem::Message { .. }
             | ResponseItem::Reasoning { .. }
