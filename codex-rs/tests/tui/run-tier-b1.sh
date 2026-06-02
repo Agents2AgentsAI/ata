@@ -428,10 +428,19 @@ tr006_a() {
   printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":0,"text":"%s"}\n' "$marker" >> "$HOME/.ata/history.jsonl"
 
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
-  send_key "$sess" Up
-  sleep 1
+  # boot_ata returns when the welcome banner is up and no "esc to interrupt"
+  # spinner is visible. That does NOT guarantee that SessionConfigured has
+  # fired (which is what calls set_history_metadata and turns on history
+  # navigation). If we send Up before that lands, the keypress is dropped
+  # because should_handle_navigation returns false. Same root cause as
+  # TR-006 C — wait for the persistent entry count to be wired before Up.
+  sleep 2
   local out=$WORK/006a.txt
-  capture "$sess" "$out"
+  # History entries are fetched async via LookupMessageHistoryEntry; on slow
+  # CI runners a fixed 1s sleep races the round-trip. Poll for the seeded
+  # marker to land in the pane.
+  tmux send-keys -t "$sess" Up
+  poll_pane_for "$sess" "$out" "$marker" 10 || true
   assert_contains "$out" "$marker" "seeded history entry recalled via Up-arrow"
 
   # Restore caller's history.
