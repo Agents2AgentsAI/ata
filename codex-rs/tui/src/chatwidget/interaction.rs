@@ -51,6 +51,36 @@ impl ChatWidget {
                 self.on_ctrl_c();
                 return;
             }
+            // Space: push-to-talk when voice mode is active and STT is enabled.
+            // Intercept before the composer handler so PTT works during agent
+            // turns and idle. Skip when the composer has non-whitespace text
+            // (user is typing) or when a blocking popup is active.
+            #[cfg(not(target_os = "linux"))]
+            KeyEvent {
+                code: KeyCode::Char(' '),
+                kind,
+                modifiers,
+                ..
+            } if modifiers.is_empty()
+                && self.bottom_pane.ptt_space_allowed()
+                && self
+                    .voice_mode_state
+                    .as_ref()
+                    .is_some_and(|s| s.is_active() && s.stt_enabled && !s.tts_only)
+                && !self.is_main_composer_typing() =>
+            {
+                match kind {
+                    KeyEventKind::Press => self.on_ptt_press(),
+                    KeyEventKind::Release => {
+                        if let Some(ref mut s) = self.voice_mode_state {
+                            s.key_release_supported = true;
+                        }
+                        self.on_ptt_release();
+                    }
+                    KeyEventKind::Repeat => self.on_ptt_repeat(),
+                }
+                return;
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 modifiers,
@@ -453,6 +483,20 @@ impl ChatWidget {
     // Review mode counts as cancellable work so Ctrl+C interrupts instead of quitting.
     fn is_cancellable_work_active(&self) -> bool {
         self.bottom_pane.is_task_running() || self.review.is_review_mode
+    }
+
+    /// True if the main composer has non-whitespace text and no modal/popup is
+    /// active — used to gate Space-key PTT so the user can still type a space
+    /// into a real message they're drafting.
+    #[cfg(not(target_os = "linux"))]
+    fn is_main_composer_typing(&self) -> bool {
+        self.bottom_pane.no_modal_or_popup_active()
+            && !self.bottom_pane.composer_is_empty()
+            && self
+                .bottom_pane
+                .composer_text()
+                .chars()
+                .any(|c| !c.is_whitespace())
     }
 
     fn pause_active_goal_for_interrupt(&self) {

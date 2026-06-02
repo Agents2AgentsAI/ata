@@ -1298,6 +1298,22 @@ impl BottomPane {
         self.can_launch_external_editor()
     }
 
+    /// True when the Space key is available for voice push-to-talk: the
+    /// composer popup is not open, and either no view is active (main
+    /// composer focus) or the active view itself accepts voice context
+    /// (e.g. the reading view's voice-question flow). Composer popups
+    /// block PTT so Space can operate toggles/steppers.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn ptt_space_allowed(&self) -> bool {
+        if self.composer.popup_active() {
+            return false;
+        }
+        match self.view_stack.last() {
+            None => true,
+            Some(view) => view.voice_context().is_some(),
+        }
+    }
+
     pub(crate) fn show_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.push_view(view);
     }
