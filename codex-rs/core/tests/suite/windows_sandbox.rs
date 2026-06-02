@@ -194,23 +194,14 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
     Ok(())
 }
 
-/// The elevated Windows sandbox setup spawns subprocesses AS the real
-/// user via `CreateProcessWithLogonW`. That requires a logon-eligible
-/// user account in the current security context.
-///
-/// On GH Actions Windows runners hosted by runs-on, the agent runs as
-/// `LocalSystem`, so `USERNAME` resolves to the machine NetBIOS name
-/// plus `$` (e.g. `EC2AMAZ-…$`). That's a machine account, not a user:
-/// no password, no interactive logon. Overriding with well-known group
-/// names like `Administrators` makes `LookupAccountNameW` succeed but
-/// then `CreateProcessWithLogonW` returns ERROR_ACCESS_DENIED (5)
-/// because you can't logon AS a group. The runner image also doesn't
-/// have a usable built-in `Administrator` user with known credentials.
-///
-/// This is architectural: the elevated sandbox needs a real user to
-/// be, and LocalSystem context has none. Self-skip is the honest
-/// engineering answer — the test will run for free on any real
-/// interactive Windows user session.
+/// Returns true if the current process is running with `USERNAME` set to
+/// a machine/service account (suffix `$`), i.e. LocalSystem context.
+/// On GH Actions Windows runners hosted by runs-on this is the default,
+/// and the setup helper's `LookupAccountNameW(USERNAME)` returns
+/// ERROR_NONE_MAPPED (1332). Override with a well-known name so the
+/// hardcoded SID shortcut bypasses the lookup. This only changes which
+/// principal gets the ACL grant; the test's assertion (deny-read ACL
+/// precedence) is principal-independent.
 fn current_username_is_machine_account() -> bool {
     matches!(
         std::env::var_os("USERNAME").and_then(|v| v.into_string().ok()),
@@ -221,15 +212,8 @@ fn current_username_is_machine_account() -> bool {
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
-    if current_username_is_machine_account() {
-        eprintln!(
-            "[skip] USERNAME={:?} is a machine account; elevated sandbox \
-             requires a real user with logon credentials and there is none \
-             in LocalSystem context",
-            std::env::var_os("USERNAME")
-        );
-        return Ok(());
-    }
+    let _username_guard = current_username_is_machine_account()
+        .then(|| EnvVarGuard::set("USERNAME", std::ffi::OsStr::new("Administrators")));
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;

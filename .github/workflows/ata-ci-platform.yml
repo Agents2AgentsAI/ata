@@ -756,6 +756,36 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --bins -p codex-windows-sandbox --target ${{ matrix.target }} --profile ci-test
 
+      # The elevated Windows sandbox test
+      # (`windows_elevated_enforces_exact_and_glob_deny_read_policy`) ends
+      # up calling `CreateProcessWithLogonW`, which depends on the
+      # Secondary Logon Service (`seclogon`). On the runs-on Windows
+      # Server 2025 AMI that service ships set to `Manual / Stopped` for
+      # hardening, so the API returns ERROR_ACCESS_DENIED (5). Start it
+      # before tests run. Idempotent — no-op if already running.
+      - name: Ensure Secondary Logon Service is running (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name seclogon -ErrorAction SilentlyContinue
+          if ($null -eq $svc) {
+            Write-Host "seclogon service is not present on this runner image"
+            exit 0
+          }
+          Write-Host "seclogon initial state: $($svc.Status) (StartType=$($svc.StartType))"
+          if ($svc.StartType -eq 'Disabled') {
+            Set-Service -Name seclogon -StartupType Manual
+            Write-Host "seclogon StartType set to Manual"
+          }
+          if ($svc.Status -ne 'Running') {
+            Start-Service -Name seclogon
+            (Get-Service -Name seclogon).WaitForStatus('Running', '00:00:30')
+            Write-Host "seclogon started"
+          } else {
+            Write-Host "seclogon already running"
+          }
+          Get-Service -Name seclogon | Format-List Name, Status, StartType
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
