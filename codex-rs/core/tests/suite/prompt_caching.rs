@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
@@ -69,24 +68,6 @@ fn assert_default_env_context(text: &str, cwd: &str) {
     assert!(
         text.ends_with("</environment_context>"),
         "expected closing environment_context tag: {text}"
-    );
-}
-
-fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
-    assert_eq!(
-        body["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| {
-                t.get("name")
-                    .and_then(|value| value.as_str())
-                    .or_else(|| t.get("type").and_then(|value| value.as_str()))
-                    .unwrap()
-                    .to_string()
-            })
-            .collect::<Vec<_>>(),
-        expected_names
     );
 }
 
