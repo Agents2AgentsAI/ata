@@ -692,6 +692,16 @@ jobs:
           # links many Windows test binaries in parallel.
           echo "CARGO_PROFILE_CI_TEST_DEBUG=0" >> "$GITHUB_ENV"
 
+      # `cargo nextest run` only builds tests + lib targets. The Windows
+      # sandbox integration tests in `codex-core` stage the
+      # `codex-windows-sandbox-setup` and `codex-command-runner` binaries
+      # next to the test exe; those are `[[bin]]` targets in another crate
+      # and nextest does not build them automatically. Pre-build them here
+      # so `cargo_bin()` can locate them.
+      - name: Build Windows sandbox helper bins for tests
+        if: runner.os == 'Windows'
+        run: cargo build --bins -p codex-windows-sandbox --target ${{ matrix.target }} --profile ci-test
+
       - name: tests
         id: test
         run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }} --cargo-profile ci-test --timings
