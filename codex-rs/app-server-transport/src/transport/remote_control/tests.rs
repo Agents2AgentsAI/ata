@@ -1304,10 +1304,6 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
 }
 
 #[tokio::test]
-#[cfg_attr(
-    all(target_os = "linux", target_arch = "aarch64"),
-    ignore = "flaky timing assertion (auth-change vs retry-delay) on ubuntu-arm64 CI runners. Tracked separately."
-)]
 async fn remote_control_waits_for_account_id_before_enrolling() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -1366,7 +1362,13 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     .expect("auth with account id should save");
     auth_manager.reload().await;
 
-    let enroll_request = timeout(Duration::from_millis(100), accept_http_request(&listener))
+    // The retry timer the wake races against is
+    // REMOTE_CONTROL_ACCOUNT_ID_RETRY_INTERVAL = 1s. Anything clearly under
+    // 1s proves the auth_change_rx wake-up beat the timer; 100ms was too
+    // tight for ubuntu-arm64 runners under load (the wake chain spans
+    // changed() → load_auth → enroll POST → listener.accept). 500ms gives
+    // 5x headroom while still being unambiguous.
+    let enroll_request = timeout(Duration::from_millis(500), accept_http_request(&listener))
         .await
         .expect("auth change should wake remote control before the retry delay");
     assert_eq!(
