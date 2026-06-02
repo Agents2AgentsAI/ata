@@ -194,9 +194,34 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
     Ok(())
 }
 
+/// Returns true if the current process is running with `USERNAME` set to
+/// a machine/service account (suffix `$`). On GH Actions Windows runners
+/// hosted by runs-on, the agent runs as `LocalSystem`, and `USERNAME`
+/// resolves to the machine NetBIOS name plus `$` (e.g. `EC2AMAZ-…$`).
+/// `LookupAccountNameW` for that name returns ERROR_NONE_MAPPED (1332)
+/// in this context. The setup helper then can't resolve a SID for the
+/// "real user" and aborts before the test can exercise the deny-read
+/// ACL logic this test actually cares about.
+fn current_username_is_machine_account() -> bool {
+    matches!(
+        std::env::var_os("USERNAME").and_then(|v| v.into_string().ok()),
+        Some(name) if name.ends_with('$')
+    )
+}
+
 #[tokio::test]
 #[serial(codex_home)]
 async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
+    // When the test process inherits a machine-account USERNAME (CI
+    // LocalSystem context), override it with the well-known
+    // `Administrators` group name. The setup helper's `resolve_sid` has
+    // a hardcoded SID shortcut for `Administrators`, so the lookup
+    // completes without touching `LookupAccountNameW`. The test's
+    // assertion is about deny-read ACL precedence — that holds for any
+    // principal granted read; using a well-known SID does not change
+    // what's being verified.
+    let _username_guard = current_username_is_machine_account()
+        .then(|| EnvVarGuard::set("USERNAME", std::ffi::OsStr::new("Administrators")));
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;
