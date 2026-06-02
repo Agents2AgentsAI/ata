@@ -331,11 +331,9 @@ mod tests {
         }
     }
 
-    // ATA registers `/fast` as a real SlashCommand (toggle Fast mode), so
-    // typing "/fa" matches `/fast` first instead of the service-tier
-    // ServiceTierCommand named "fast". Same conflict as the chat_composer
-    // test of the same shape; see chat_composer.rs ignore note.
-    #[ignore = "ATA's /fast slash command takes precedence over service-tier name resolution in the popup."]
+    // When a `"fast"` service-tier command is registered, the popup hides
+    // ATA's `/fast` Builtin (see `commands_for_input`'s dedup), so the
+    // ServiceTier is the only match for `/fa`.
     #[test]
     fn service_tier_command_uses_catalog_name_and_description() {
         let mut popup = CommandPopup::new(

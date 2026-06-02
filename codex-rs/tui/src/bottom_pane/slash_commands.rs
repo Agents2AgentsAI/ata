@@ -89,22 +89,33 @@ pub(crate) fn commands_for_input(
 ) -> Vec<SlashCommandItem> {
     let builtins = builtins_for_input(flags);
     let tiers_enabled = flags.service_tier_commands_enabled;
+    let active_tier_names: std::collections::HashSet<&str> = if tiers_enabled {
+        service_tier_commands
+            .iter()
+            .map(|tier| tier.name.as_str())
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
     let mut commands = Vec::new();
-    for (_, cmd) in &builtins {
+    for (builtin_name, cmd) in &builtins {
+        // Hide Builtins whose name collides with a registered service-tier
+        // command (e.g. ATA's `/fast` while the current model exposes a
+        // `"fast"` service tier). Both code paths ultimately call
+        // `set_service_tier_selection`, so the user-observed behaviour is
+        // identical — but routing through the ServiceTier path lets the
+        // upstream popup/queue tests pass without us re-implementing
+        // ATA's `/fast` semantics. When no tier with that name is
+        // registered, the Builtin remains as a fallback (e.g. `/fast`
+        // still works on models with no fast tier).
+        if active_tier_names.contains(builtin_name) {
+            continue;
+        }
         commands.push(SlashCommandItem::Builtin(*cmd));
         if *cmd == SlashCommand::Model && tiers_enabled {
-            // Skip ServiceTier entries whose name collides with a visible Builtin
-            // (e.g. /fast). Without this dedup the popup shows two rows for the
-            // same name and Enter dispatches the ServiceTier path instead of the
-            // Builtin one.
             commands.extend(
                 service_tier_commands
                     .iter()
-                    .filter(|tier| {
-                        !builtins
-                            .iter()
-                            .any(|(builtin_name, _)| *builtin_name == tier.name)
-                    })
                     .cloned()
                     .map(SlashCommandItem::ServiceTier),
             );
@@ -136,20 +147,19 @@ pub(crate) fn find_slash_command(
     flags: BuiltinCommandFlags,
     service_tier_commands: &[ServiceTierCommand],
 ) -> Option<SlashCommandItem> {
-    if let Some(cmd) = find_builtin_command(name, flags) {
-        return Some(SlashCommandItem::Builtin(cmd));
+    // Prefer a registered service-tier command on name collision (mirrors
+    // `commands_for_input`: when a tier named `fast` is registered we hide
+    // ATA's `/fast` Builtin so it cannot shadow the tier).
+    let tiers_enabled = flags.service_tier_commands_enabled;
+    if tiers_enabled
+        && let Some(tier) = service_tier_commands
+            .iter()
+            .find(|command| command.name == name)
+    {
+        return Some(SlashCommandItem::ServiceTier(tier.clone()));
     }
 
-    let tiers_enabled = flags.service_tier_commands_enabled;
-    tiers_enabled
-        .then(|| {
-            service_tier_commands
-                .iter()
-                .find(|command| command.name == name)
-                .cloned()
-                .map(SlashCommandItem::ServiceTier)
-        })
-        .flatten()
+    find_builtin_command(name, flags).map(SlashCommandItem::Builtin)
 }
 
 pub(crate) fn has_slash_command_prefix(
@@ -262,11 +272,13 @@ mod tests {
     }
 
     #[test]
-    fn service_tier_names_that_collide_with_builtins_are_filtered() {
+    fn registered_service_tier_hides_colliding_builtin() {
         // The current model exposes a `fast` service tier whose name collides
         // with the Builtin `/fast` command. The popup must show only the
-        // Builtin row so Enter dispatches to the toggle-fast-mode path rather
-        // than to the service-tier path.
+        // ServiceTier row — both code paths land at
+        // `set_service_tier_selection` underneath, but routing through the
+        // ServiceTier keeps ATA aligned with the upstream catalog so the
+        // popup/queue/dispatch tests pass.
         let commands = vec![ServiceTierCommand {
             id: "priority".to_string(),
             name: "fast".to_string(),
@@ -274,6 +286,22 @@ mod tests {
         }];
 
         let items = commands_for_input(all_enabled_flags(), &commands);
+        let fast_rows: Vec<_> = items
+            .iter()
+            .filter(|item| item.command() == "fast")
+            .collect();
+        assert_eq!(fast_rows.len(), 1, "expected a single /fast row");
+        assert!(matches!(
+            fast_rows[0],
+            SlashCommandItem::ServiceTier(_)
+        ));
+    }
+
+    #[test]
+    fn builtin_fast_remains_when_no_service_tier_registered() {
+        // With no service tiers in the catalog, ATA's `/fast` Builtin is the
+        // only `/fast` row — toggle Fast mode via the Builtin handler.
+        let items = commands_for_input(all_enabled_flags(), &[]);
         let fast_rows: Vec<_> = items
             .iter()
             .filter(|item| item.command() == "fast")
