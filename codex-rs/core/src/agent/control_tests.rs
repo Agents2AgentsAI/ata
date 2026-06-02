@@ -1866,7 +1866,11 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .await
         .expect("status subscription should succeed");
     if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
-        timeout(Duration::from_secs(5), async {
+        // 30s ceiling — Windows CI runners under heavy nextest load can take
+        // significantly longer than the 5s upstream default to advance the
+        // child past PendingInit; the assertion is presence-of-transition,
+        // not latency. (Tracked: ATA PR #31 Windows test job.)
+        timeout(Duration::from_secs(30), async {
             loop {
                 status_rx
                     .changed()

@@ -16,7 +16,13 @@ use tracing::warn;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadStateManager;
 
-const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_millis(100);
+// Widened from 100ms to 1s: real desktop clients respond to AttestationGenerate
+// in single-digit ms, but Windows CI runners under heavy nextest load can
+// exceed 100ms for the round-trip, causing the websocket handshake to ship an
+// "s:1" (Timeout) header instead of the real attestation. The extra latency
+// only materializes when the client has gone away (otherwise the round-trip
+// is well under both values) — better to wait briefly than fail attestation.
+const ATTESTATION_GENERATE_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub(crate) fn app_server_attestation_provider(
     outgoing: Arc<OutgoingMessageSender>,
