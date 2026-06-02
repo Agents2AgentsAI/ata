@@ -676,10 +676,14 @@ tr_fast_a() {
   sleep 1.5
   local out=$WORK/fast.txt
   capture "$sess" "$out"
-  # /fast prints "Fast mode set to on" / "Fast mode set to off". After
-  # two toggles both lines appear in the transcript regardless of which
-  # state we started in.
-  assert_contains "$out" "Fast mode set to" "fast toggle was acknowledged"
+  # /fast toggles ATA's fast mode by flipping the underlying
+  # "fast"/"priority" service tier. With ATA's dedup routing through the
+  # ServiceTier path (when the model's catalog exposes a `fast` tier),
+  # toggles emit "Service tier set to priority"/"Service tier set to
+  # default"; without such a tier the Builtin emits "Fast mode set to
+  # on"/"Fast mode set to off". Either confirms the toggle.
+  assert_match "$out" "Fast mode set to|Service tier set to (priority|default)" \
+    "fast toggle was acknowledged"
   kill_ata "$sess"
   end_test
 }
