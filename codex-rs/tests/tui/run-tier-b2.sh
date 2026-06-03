@@ -1864,9 +1864,12 @@ tr062_d() {
   local out=$WORK/062d.txt
   capture "$sess" "$out"
   # The agent should either say no results or report not finding any.
-  # Use a case-insensitive match so capitalized openings like "No papers
-  # were found" count — the agent's exact wording shouldn't matter here.
-  if ! grep -qiE -- "(no (results|papers|matches|matching)|couldn't find|did not find|none found)" "$out"; then
+  # Use a case-insensitive match and accept any reasonable phrasing the
+  # model might pick — "no papers were found", "I found no paper results
+  # for X", "couldn't find any matching papers", "didn't find anything",
+  # etc. The exact wording shouldn't matter; what matters is that the
+  # agent reported the no-results path.
+  if ! grep -qiE -- "(no [a-z ]*(results|papers|matches|matching|found)|found no|couldn't find|could not find|didn't find|did not find|none found)" "$out"; then
     fail_assert "agent reports no-results path" "$(tail -c 800 "$out")"
   fi
   kill_ata "$sess"
