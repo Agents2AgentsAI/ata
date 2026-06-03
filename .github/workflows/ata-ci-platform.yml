@@ -532,7 +532,13 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 45
+    # 75 min: Linux/macOS finish in ~12-15 min so the extra budget costs
+    # nothing there. Windows MSVC under nextest is materially slower (many
+    # individual tests >30s; the agent::control + thread_manager suites
+    # exercise heavy IO + process spawn), so a 45 min limit pushed Windows
+    # to cancellation before all retries could complete. Widen to give
+    # Windows headroom without changing per-test assertions.
+    timeout-minutes: 75
     needs: changed
     if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:

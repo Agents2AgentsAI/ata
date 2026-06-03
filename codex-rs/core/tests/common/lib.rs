@@ -292,8 +292,11 @@ where
     use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
-        let ev = timeout(wait_time.max(Duration::from_secs(10)), codex.next_event())
+        // Floor of 30s per event accommodates slower runners (ARM64 Linux,
+        // Windows MSVC) under heavy nextest concurrency. Production code paths
+        // are unaffected — this only changes how long the test harness waits
+        // before deciding an event won't arrive. Real hangs are still caught.
+        let ev = timeout(wait_time.max(Duration::from_secs(30)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
