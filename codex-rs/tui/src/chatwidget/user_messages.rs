@@ -474,6 +474,7 @@ fn strip_system_instruction_suffix(text: &str) -> String {
 ///   2. The user's typed question;
 ///   3. A trailing `<!-- READER_TOOL_INSTRUCTIONS -->` block of agent-only
 ///      routing guidance.
+///
 /// Without this extraction the FULL wrapped text would land in
 /// `~/.ata/history.jsonl`, and Up-arrow recall in a later session would
 /// surface the system-injected sentinels as if the user had typed them.
@@ -498,8 +499,7 @@ pub(super) fn extract_user_question_for_history(text: &str) -> Option<String> {
         && let Some(close_idx) = after_suffix_strip.find(']')
     {
         let rest = &after_suffix_strip[close_idx + 1..];
-        rest.trim_start_matches(|c: char| c == '\n' || c == ' ' || c == '\t')
-            .to_string()
+        rest.trim_start_matches(['\n', ' ', '\t']).to_string()
     } else {
         after_suffix_strip
     };
