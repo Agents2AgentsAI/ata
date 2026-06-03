@@ -461,6 +461,51 @@ fn strip_system_instruction_suffix(text: &str) -> String {
     }
 }
 
+/// Strip reader/voice/close synthetic wrappers from `text` and return only the
+/// user-visible question portion suitable for cross-session message history
+/// recall (Up-arrow). Returns `None` when the text contains no wrapper and can
+/// be persisted verbatim.
+///
+/// Producers like `DocumentReaderView::submit_follow_up` build a single
+/// prompt string that combines:
+///   1. A `[The user is reading "…" and asked about the section titled "…"]`
+///      preamble (or `[The user closed the document reader for "…" …]` after
+///      a reader close);
+///   2. The user's typed question;
+///   3. A trailing `<!-- READER_TOOL_INSTRUCTIONS -->` block of agent-only
+///      routing guidance.
+/// Without this extraction the FULL wrapped text would land in
+/// `~/.ata/history.jsonl`, and Up-arrow recall in a later session would
+/// surface the system-injected sentinels as if the user had typed them.
+pub(super) fn extract_user_question_for_history(text: &str) -> Option<String> {
+    const READER_PREAMBLE_PREFIX: &str = "[The user is reading ";
+    const READER_CLOSE_PREFIX: &str = "[The user closed the document reader";
+    // Reader-close is a fully-synthetic feedback message — the user typed
+    // nothing — so suppress it from history entirely. Return Some("") which
+    // the caller's `Override` branch routes to "not persisted".
+    if text.starts_with(READER_CLOSE_PREFIX) {
+        return Some(String::new());
+    }
+    let has_reader_wrapper = text.contains("<!-- READER_TOOL_INSTRUCTIONS -->")
+        || text.starts_with(READER_PREAMBLE_PREFIX);
+    if !has_reader_wrapper {
+        return None;
+    }
+    let after_suffix_strip = strip_system_instruction_suffix(text);
+    // Drop the leading "[The user is reading …]" preamble line plus its blank
+    // separator so only the user's typed question lands in history.
+    let stripped = if after_suffix_strip.starts_with('[')
+        && let Some(close_idx) = after_suffix_strip.find(']')
+    {
+        let rest = &after_suffix_strip[close_idx + 1..];
+        rest.trim_start_matches(|c: char| c == '\n' || c == ' ' || c == '\t')
+            .to_string()
+    } else {
+        after_suffix_strip
+    };
+    Some(stripped.trim().to_string())
+}
+
 pub(super) fn merge_user_messages_with_history_record(
     messages: Vec<(UserMessage, UserMessageHistoryRecord)>,
 ) -> (UserMessage, UserMessageHistoryRecord) {

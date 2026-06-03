@@ -1018,6 +1018,11 @@ impl BottomPane {
         let was_running = self.is_task_running;
         self.is_task_running = running;
         self.composer.set_task_running(running);
+        // Propagate to the active overlay (e.g. reading view) so views that
+        // hide the global StatusIndicatorWidget can surface their own busy hint.
+        if let Some(view) = self.view_stack.last_mut() {
+            view.set_task_running(running);
+        }
 
         if running {
             if !was_running {

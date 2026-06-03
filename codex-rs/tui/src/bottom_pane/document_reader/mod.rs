@@ -387,6 +387,11 @@ pub(crate) struct DocumentReaderView {
     /// navigate to the modified section.  Set on construction (when reopening
     /// after close) and cleared on user interaction or after auto-navigating.
     pending_auto_navigate: bool,
+
+    /// Whether the agent is currently running a task. Drives the footer
+    /// `esc to interrupt` hint; the reader overlay hides the global
+    /// StatusIndicatorWidget that would otherwise carry that signal.
+    task_running: bool,
 }
 
 impl DocumentReaderView {
@@ -480,6 +485,7 @@ impl DocumentReaderView {
             show_toc: false,
             toc_selected_index: 0,
             pending_auto_navigate: true,
+            task_running: false,
         }
     }
 
@@ -572,6 +578,16 @@ impl DocumentReaderView {
                 section.content.push('\n');
             }
             let fold_start = section.content.len();
+            // When the append resolves a Tab-to-ask pending question, prepend
+            // the question itself ("You asked: …") so the inline answer keeps
+            // the user-asked context even after `resolve_pending` clears the
+            // transient header. The marker stays inside the fold region so it
+            // can be collapsed alongside the rest of the answer.
+            if let Some(question) = pending_question.as_deref() {
+                section
+                    .content
+                    .push_str(&format!("You asked: \"{question}\"\n\n"));
+            }
             section.content.push_str(&content);
 
             // Record fold region: explicit foldable flag from the model, or
@@ -2990,6 +3006,10 @@ impl BottomPaneView for DocumentReaderView {
             }
         }
     }
+
+    fn set_task_running(&mut self, running: bool) {
+        self.task_running = running;
+    }
 }
 
 impl Renderable for DocumentReaderView {
@@ -3701,6 +3721,7 @@ impl Renderable for DocumentReaderView {
             self.voice_status.as_deref(), // used for showing "r: read" hint
             self.voice_tts_paused,
             search_match_info.as_deref(),
+            self.task_running,
             w,
         );
         Paragraph::new(hints).render(

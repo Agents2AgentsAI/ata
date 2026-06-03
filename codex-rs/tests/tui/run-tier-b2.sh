@@ -94,10 +94,32 @@ capture()   { tmux capture-pane -t "$1" -p > "$2"; }
 # indicator. Returns 0 on success, 1 on timeout.
 wait_for_idle() {
   local name=$1 timeout=${2:-90}
+  # First, give the turn a chance to start. Some submission paths (e.g. reader
+  # Tab-to-ask) take a moment before "esc to interrupt" appears in the pane,
+  # and fast turns can come and go within ~1s, so we poll at 0.1s intervals
+  # over a ~10s window. If the busy indicator never shows, assume the turn was
+  # a no-op or already completed and skip to the idle check.
+  local saw_busy=0
+  local i=0
+  while [ $i -lt 100 ]; do
+    if tmux capture-pane -t "$name" -p 2>/dev/null | grep -qF "esc to interrupt"; then
+      saw_busy=1
+      break
+    fi
+    sleep 0.1
+    i=$(( i + 1 ))
+  done
   local deadline=$(( $(date +%s) + timeout ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! tmux capture-pane -t "$name" -p 2>/dev/null | grep -qF "esc to interrupt"; then
-      sleep 2
+      # Sleep longer when we caught the busy phase to give the rollout JSONL
+      # writer time to flush the final tool-call entries before the caller
+      # inspects them.
+      if [ "$saw_busy" -eq 1 ]; then
+        sleep 3
+      else
+        sleep 2
+      fi
       return 0
     fi
     sleep 1
@@ -360,7 +382,7 @@ tr031_a() {
   fi
   local out=$WORK/031a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  assert_contains "$out" "q: close"      "reader still rendering"
   # Routing guard.
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
@@ -408,7 +430,7 @@ tr032_a() {
   else
     fail_assert "no sign of a new third section after add request" "$(tail -c 800 "$out")"
   fi
-  assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  assert_contains "$out" "q: close"      "reader still rendering"
   # Routing guard — must use add_document_section, not patch/update/append.
   local sess_jsonl
   sess_jsonl=$(recent_session_jsonl)
@@ -437,7 +459,7 @@ tr033_a() {
   if ! grep -qiE "espresso|crema|pressure" "$out"; then
     fail_assert "no espresso content found in pane after append request" "$(tail -c 800 "$out")"
   fi
-  assert_contains "$out" "Sections (n/p"  "reader still rendering"
+  assert_contains "$out" "q: close"      "reader still rendering"
   # Routing guard — append, NOT update / patch / add. This is THE
   # "rendering looks fine, wrong tool got called" regression PLAN.md
   # is specifically guarding against.
@@ -469,7 +491,7 @@ tr037_a() {
   if ! grep -qiE "bitter|extract|over-extract|tannin|roast" "$out"; then
     fail_assert "no bitterness-related content in inline answer" "$(tail -c 800 "$out")"
   fi
-  assert_contains "$out" "Sections (n/p"  "still in reader after answer"
+  assert_contains "$out" "q: close"      "still in reader after answer"
   # Routing guard — Tab-to-ask Q&A goes through append_to_section with
   # foldable: true (distinguishing it from TR-033's foldable: false
   # explicit content additions).
@@ -532,7 +554,7 @@ tr002_a() {
   # answer should both appear inside the reader frame.
   assert_contains "$out" "You asked:"     "inline question marker"
   assert_contains "$out" "color"          "agent response references the question"
-  assert_contains "$out" "Sections (n/p"  "still in reader after the answer"
+  assert_contains "$out" "q: close"      "still in reader after the answer"
   kill_ata "$sess"
   end_test
 }

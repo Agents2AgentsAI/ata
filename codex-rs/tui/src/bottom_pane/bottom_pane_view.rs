@@ -225,6 +225,12 @@ pub(crate) trait BottomPaneView: Renderable {
     /// the agent never called an update tool.
     fn handle_turn_complete(&mut self) {}
 
+    /// Notify the view that the agent task is running or has stopped. Most
+    /// overlay views ignore this; the reading view uses it to surface an
+    /// `esc to interrupt` busy hint in its footer (otherwise the reader hides
+    /// the global StatusIndicatorWidget the composer would normally render).
+    fn set_task_running(&mut self, _running: bool) {}
+
     /// Deliver a fresh `/scheduling` snapshot to the view if it owns the
     /// scheduling panel. Non-scheduling views default to a no-op.
     fn handle_scheduling_snapshot(

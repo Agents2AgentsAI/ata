@@ -145,7 +145,13 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
 
-        let render_in_history = !self.turn_lifecycle.agent_turn_running;
+        // Reader-close synthetic submissions are agent-only follow-ups ("Check
+        // whether follow-up Q&A added new insights…") whose prompt explicitly
+        // says "do not announce this action to the user — just do it silently
+        // or skip." Render them silently so the chat history doesn't display
+        // the reader-close preamble.
+        let is_silent_synthetic = text.starts_with("[The user closed the document reader");
+        let render_in_history = !self.turn_lifecycle.agent_turn_running && !is_silent_synthetic;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -365,7 +371,17 @@ impl ChatWidget {
             .collect::<Vec<_>>();
         let history_text = match &history_record {
             UserMessageHistoryRecord::UserMessageText if !text.is_empty() => {
-                Some(encode_history_mentions(&text, &encoded_mentions))
+                // Reader Tab-to-ask and reader-close producers wrap the user's text
+                // with system-only preamble/suffix. Strip those so cross-session
+                // Up-arrow recall surfaces only the user's typed question (or
+                // nothing for fully-synthetic reader-close feedback).
+                match super::user_messages::extract_user_question_for_history(&text) {
+                    Some(cleaned) if !cleaned.is_empty() => {
+                        Some(encode_history_mentions(&cleaned, &encoded_mentions))
+                    }
+                    Some(_) => None,
+                    None => Some(encode_history_mentions(&text, &encoded_mentions)),
+                }
             }
             UserMessageHistoryRecord::Override(history) if !history.text.is_empty() => {
                 Some(encode_history_mentions(&history.text, &encoded_mentions))

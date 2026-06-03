@@ -206,6 +206,19 @@ impl ChatWidget {
             self.submit_user_message_with_mode(text, mask);
             return;
         }
+        // Reader Tab-to-ask and reader-close producers wrap the user's text
+        // with system-only preamble/suffix. Override the cross-session history
+        // record with just the user's typed portion so Up-arrow recall in a
+        // later session doesn't surface those synthetic sentinels.
+        let history_override =
+            super::user_messages::extract_user_question_for_history(&text).map(|cleaned| {
+                super::UserMessageHistoryRecord::Override(
+                    super::user_messages::UserMessageHistoryOverride {
+                        text: cleaned,
+                        text_elements: Vec::new(),
+                    },
+                )
+            });
         let user_message = UserMessage {
             text,
             local_images: Vec::new(),
@@ -215,6 +228,8 @@ impl ChatWidget {
         };
         if self.is_plan_streaming_in_tui() {
             self.queue_user_message(user_message);
+        } else if let Some(history_record) = history_override {
+            self.submit_user_message_with_history_record(user_message, history_record);
         } else {
             self.submit_user_message(user_message);
         }
