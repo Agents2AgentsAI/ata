@@ -88,6 +88,13 @@ kill_ata() { tmux kill-session -t "$1" 2>/dev/null || true; }
 
 send_text() { tmux send-keys -t "$1" "$2"; sleep 0.6; }
 send_key()  { tmux send-keys -t "$1" "$2"; sleep 0.4; }
+# Capture the visible pane plus the most recent scrollback. Many agent
+# responses (especially multi-source synthesis like TR-035 A) are too
+# long to fit in the 40-row viewport, so the parts the test cares about
+# scroll off the top and `tmux capture-pane -p` (visible only) misses
+# them entirely. -S -3000 grabs the last 3000 lines of scrollback,
+# which is enough for every Tier B2 prompt in practice.
+capture_full() { tmux capture-pane -t "$1" -p -S -3000 > "$2"; }
 capture()   { tmux capture-pane -t "$1" -p > "$2"; }
 
 # Wait for the turn to complete by watching the "esc to interrupt"
@@ -2020,8 +2027,11 @@ tr035_a() {
     fail_assert "multi-source synthesis did not finish within 8 min"
     kill_ata "$sess"; end_test; return
   fi
+  # Multi-source synthesis often produces a response longer than the
+  # 40-row terminal viewport, scrolling the Hacker News section off
+  # the top. Use capture_full so the assertion sees the full response.
   local out=$WORK/035a.txt
-  capture "$sess" "$out"
+  capture_full "$sess" "$out"
   # Content predicate — both sources represented.
   if ! grep -qiE "hacker news|HN Signal|hn signal" "$out"; then
     fail_assert "response does not mention Hacker News" "$(tail -c 1000 "$out")"
