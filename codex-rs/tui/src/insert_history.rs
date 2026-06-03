@@ -115,7 +115,14 @@ where
         }
         queue!(writer, ResetScrollRegion)?;
 
-        let cursor_top = area.top().saturating_sub(1);
+        // The just-vacated row is `area.top()` (the original viewport top, before we shift
+        // `area.y` down by `scroll_amount`). Start writing there; the per-line loop below
+        // emits `\r\n` only BETWEEN lines, so the first line lands at that vacated row.
+        // The previous `area.top().saturating_sub(1)` + always-leading-`\r\n` was correct
+        // for `area.top() > 0` but collapsed at `area.top() == 0` because the saturation
+        // dropped the -1 offset, pushing the first line INTO the new viewport (row 1) where
+        // the next draw partially overwrote it — leaving only the leading icon visible.
+        let cursor_top = area.top();
         area.y += scroll_amount;
         should_update_area = true;
         cursor_top
@@ -145,9 +152,27 @@ where
     // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
     queue!(writer, MoveTo(/*x*/ 0, cursor_top))?;
 
-    for line in &wrapped {
-        queue!(writer, Print("\r\n"))?;
-        write_history_line(writer, line, wrap_width)?;
+    // Two write modes:
+    //   • Scrolled-down branch (viewport_was_at_top || normal case after scroll): the rows
+    //     starting at `cursor_top` are already blank from the RI scroll above, so write the
+    //     first line directly and emit `\r\n` only between subsequent lines.
+    //   • Else branch (viewport already at screen bottom): rely on the scroll-region trick —
+    //     each leading `\r\n` at the bottom of the region scrolls the region up, making the
+    //     bottom row blank for the next write. Keep the original always-leading-`\r\n` shape.
+    if area.bottom() >= screen_size.height {
+        for line in &wrapped {
+            queue!(writer, Print("\r\n"))?;
+            write_history_line(writer, line, wrap_width)?;
+        }
+    } else {
+        let mut first = true;
+        for line in &wrapped {
+            if !first {
+                queue!(writer, Print("\r\n"))?;
+            }
+            write_history_line(writer, line, wrap_width)?;
+            first = false;
+        }
     }
 
     queue!(writer, ResetScrollRegion)?;
