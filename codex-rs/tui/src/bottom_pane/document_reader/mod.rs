@@ -751,7 +751,8 @@ impl DocumentReaderView {
                     let fold_end = byte_offset + effective_new_text.len() - suffix_len;
 
                     if fold_start < fold_end {
-                        let diff_text = &effective_new_text[prefix_len..effective_new_text.len() - suffix_len];
+                        let diff_text =
+                            &effective_new_text[prefix_len..effective_new_text.len() - suffix_len];
                         let fold_summary = summary.or(pending_question).unwrap_or_else(|| {
                             diff_text
                                 .trim()
