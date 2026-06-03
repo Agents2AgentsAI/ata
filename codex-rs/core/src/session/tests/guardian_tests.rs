@@ -406,6 +406,11 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
     );
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context_raw);
+    // Windows process-spawn overhead routinely pushes "echo hi" past the
+    // 1000ms budget on shared CI runners, so use the same widened budget
+    // that the earlier guardian test in this file already adopted (and
+    // that upstream openai/codex applied in 5537ac363d post-v0.134).
+    let expiration_ms: u64 = if cfg!(windows) { 2_500 } else { 1_000 };
 
     let handler = crate::tools::handlers::ShellCommandHandler::from(
         codex_tools::ShellCommandBackendConfig::Classic,
@@ -426,7 +431,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                     "command": "echo hi",
                     "login": false,
                     "workdir": workdir,
-                    "timeout_ms": 1_000_u64,
+                    "timeout_ms": expiration_ms,
                 })
                 .to_string(),
             },
