@@ -1018,15 +1018,20 @@ tr021_a() {
   fi
   local out=$WORK/021a.txt
   capture "$sess" "$out"
-  # Content guard — proves HN actually answered.
-  if ! grep -qF "news.ycombinator.com" "$out"; then
-    fail_assert "no HN URL cited in response" "$(tail -c 800 "$out")"
+  local sess_jsonl
+  sess_jsonl=$(recent_session_jsonl)
+  # Content guard — proves HN actually answered. hn_search reliably
+  # returns hn_url/story_url fields, but the agent's prose summary
+  # sometimes omits the URL. Check the rendered pane first, and fall
+  # back to inspecting the session JSONL for the tool result URL so
+  # the test isn't flaky on the agent's wording choice.
+  if ! grep -qF "news.ycombinator.com" "$out" \
+     && ! { [ -n "$sess_jsonl" ] && grep -qF "news.ycombinator.com" "$sess_jsonl"; }; then
+    fail_assert "no HN URL cited in response or tool result" "$(tail -c 800 "$out")"
   fi
   # Routing guard (Nima's call). hn_search must be called; the generic
   # fallbacks must NOT be. If the agent shells out instead, that's the
   # silent regression PLAN.md is trying to catch.
-  local sess_jsonl
-  sess_jsonl=$(recent_session_jsonl)
   assert_tool_called     "$sess_jsonl" "hn_search"    "agent must invoke the dedicated hn_search tool"
   assert_tool_not_called "$sess_jsonl" "web_search"   "agent must not fall back to generic web_search"
   assert_tool_not_called "$sess_jsonl" "exec_command" "agent must not shell out via exec_command"
@@ -1859,8 +1864,11 @@ tr062_d() {
   local out=$WORK/062d.txt
   capture "$sess" "$out"
   # The agent should either say no results or report not finding any.
-  assert_match "$out" "(no (results|papers|matches|matching)|couldn't find|did not find|none found)" \
-               "agent reports no-results path"
+  # Use a case-insensitive match so capitalized openings like "No papers
+  # were found" count — the agent's exact wording shouldn't matter here.
+  if ! grep -qiE -- "(no (results|papers|matches|matching)|couldn't find|did not find|none found)" "$out"; then
+    fail_assert "agent reports no-results path" "$(tail -c 800 "$out")"
+  fi
   kill_ata "$sess"
   end_test
 }
@@ -1927,7 +1935,12 @@ tr066_a() {
   start_test "TR-066 A"
   local sess=$SESSION-066a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "use paper_recommendations to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors"
+  # Mirror TR-064 A / TR-065 A: be explicit about the arXiv: prefix so
+  # the test of "explicit naming + verbatim arg passthrough" matches the
+  # rest of the paper_* family. Without the explicit instruction the
+  # agent reasonably drops the prefix (the tool accepts both forms via
+  # PaperId's looks_like_arxiv heuristic), masking the routing check.
+  send_text "$sess" "use paper_recommendations with positive_paper_ids=['arXiv:2505.21323'] (keep the 'arXiv:' prefix exactly) to recommend 5 papers similar to arxiv 2505.21323 about real-time Rust executors"
   send_key  "$sess" Enter
   if ! wait_for_idle "$sess" 240; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local sess_jsonl
