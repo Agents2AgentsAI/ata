@@ -10,6 +10,7 @@ use super::QueuedUserMessage;
 use super::UserMessage;
 use super::UserMessageHistoryRecord;
 use super::user_message_preview_text;
+use super::user_messages::PendingSteerCompareKey;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct PendingInputPreview {
@@ -38,6 +39,14 @@ pub(super) struct InputQueueState {
     pub(super) rejected_steer_history_records: VecDeque<UserMessageHistoryRecord>,
     /// Steers already submitted to core but not yet committed into history.
     pub(super) pending_steers: VecDeque<PendingSteer>,
+    /// Compare keys for silently-submitted synthetic prompts (e.g. the reader
+    /// close `[The user closed the document reader …]` follow-up). When the
+    /// core echoes a committed user message whose key matches the front of
+    /// this queue, the entry is consumed and the message is NOT rendered into
+    /// chat history — the prompt was system-generated and the agent's
+    /// instructions ("do not announce this action to the user") would
+    /// otherwise be visible to the user.
+    pub(super) silent_synthetic_commit_keys: VecDeque<PendingSteerCompareKey>,
     /// When set, the next interrupt should resubmit all pending steers as one
     /// fresh user turn instead of restoring them into the composer.
     pub(super) submit_pending_steers_after_interrupt: bool,
@@ -56,6 +65,7 @@ impl InputQueueState {
         self.rejected_steers_queue.clear();
         self.rejected_steer_history_records.clear();
         self.pending_steers.clear();
+        self.silent_synthetic_commit_keys.clear();
         self.submit_pending_steers_after_interrupt = false;
     }
 

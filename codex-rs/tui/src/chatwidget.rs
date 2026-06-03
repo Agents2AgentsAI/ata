@@ -1299,6 +1299,18 @@ impl ChatWidget {
         }
 
         let compare_key = Self::pending_steer_compare_key_from_items(items);
+        // Silent-synthetic submissions (reader-close feedback prompt) must not
+        // be rendered into chat history when core echoes their commit. Match
+        // by compare key and consume the entry without rendering.
+        if self
+            .input_queue
+            .silent_synthetic_commit_keys
+            .front()
+            .is_some_and(|key| key == &compare_key)
+        {
+            self.input_queue.silent_synthetic_commit_keys.pop_front();
+            return;
+        }
         if self
             .input_queue
             .pending_steers

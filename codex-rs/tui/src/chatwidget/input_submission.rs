@@ -151,7 +151,8 @@ impl ChatWidget {
         // or skip." Render them silently so the chat history doesn't display
         // the reader-close preamble.
         let is_silent_synthetic = text.starts_with("[The user closed the document reader");
-        let render_in_history = !self.turn_lifecycle.agent_turn_running && !is_silent_synthetic;
+        let agent_turn_running = self.turn_lifecycle.agent_turn_running;
+        let render_in_history = !agent_turn_running && !is_silent_synthetic;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -321,7 +322,14 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_steer = (!render_in_history).then(|| PendingSteer {
+        let compare_key = Self::pending_steer_compare_key_from_items(&items);
+        // Only treat this as an in-flight steer when an agent turn is actually
+        // running. The silent-synthetic reader-close path also wants to
+        // suppress display, but it submits a fresh turn (agent idle) and so
+        // must NOT enter the pending-steer queue — otherwise the
+        // committed-message echo would re-render it. Track those keys
+        // separately so we can drop the echo at commit time.
+        let pending_steer = (agent_turn_running && !is_silent_synthetic).then(|| PendingSteer {
             user_message: UserMessage {
                 text: text.clone(),
                 local_images: local_images.clone(),
@@ -330,7 +338,7 @@ impl ChatWidget {
                 mention_bindings: mention_bindings.clone(),
             },
             history_record: history_record.clone(),
-            compare_key: Self::pending_steer_compare_key_from_items(&items),
+            compare_key: compare_key.clone(),
         });
         let personality = self
             .config
@@ -356,8 +364,21 @@ impl ChatWidget {
         if !self.submit_op(op.clone()) {
             return (false, None);
         }
-        if render_in_history {
+        // A silent-synthetic submission still starts a real agent turn even
+        // though it is not shown in chat. Mark the turn pending so subsequent
+        // queued user messages wait for it to complete (only when the agent
+        // is currently idle — when an existing turn is already running, the
+        // pending-start flag must stay clear so it doesn't outlive the turn
+        // it is paired with).
+        if !agent_turn_running {
             self.input_queue.user_turn_pending_start = true;
+        }
+        // Queue the compare-key so the committed-user-message echo from core
+        // can be dropped instead of rendered.
+        if is_silent_synthetic {
+            self.input_queue
+                .silent_synthetic_commit_keys
+                .push_back(compare_key);
         }
 
         // Persist the submitted text to cross-session message history. Mentions are encoded into
