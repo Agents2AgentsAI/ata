@@ -265,9 +265,15 @@ tr016_a() {
   done
   # PLAN.md TR-016: /clear on an empty session is silent. The two
   # markers that appear after a real /clear (token usage line, resume
-  # hint) must NOT be present.
+  # hint) must NOT be present. The resume hint emitted by
+  # `start_fresh_session_with_summary_hint` reads
+  # "To continue this session, run ata resume <id>"; assert on that
+  # exact prefix rather than the bare "ata resume" substring so the
+  # random startup tooltip ("You can resume a previous conversation
+  # by running `ata resume`") doesn't trigger a false-positive when
+  # the tip lottery picks it after /clear redraws the banner.
   assert_not_contains "$out" "Token usage:" "no token line on empty /clear"
-  assert_not_contains "$out" "ata resume"   "no resume hint on empty /clear"
+  assert_not_contains "$out" "To continue this session" "no resume hint on empty /clear"
   # Positive sanity check: banner redrew (proves we polled past the
   # wiped-but-not-redrawn window, not just an empty pane).
   if [ ! -s "$out" ] || ! grep -qF "Agents2Agents ata" "$out"; then
