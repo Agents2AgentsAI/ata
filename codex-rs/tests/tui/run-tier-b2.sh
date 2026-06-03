@@ -1866,7 +1866,12 @@ tr062_d() {
   start_test "TR-062 D"
   local sess=$SESSION-062d
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  send_text "$sess" "use the paper_search tool with query='zzzqqqxxxnonsense-$$' to search for papers, then report whether you found any results"; send_key "$sess" Enter
+  # Letter-only nonsense token. Earlier this test embedded the test
+  # runner's PID ($$); paper_search relevance-matched the numeric
+  # suffix against arxiv IDs/years and returned hits, so the agent
+  # correctly reported "Found results: yes." A letter-only token has
+  # no numeric substring for the upstream search to latch onto.
+  send_text "$sess" "use the paper_search tool with query='zzzqqqxxxnonsensezzqzqzqxxxx' to search for papers, then report whether you found any results"; send_key "$sess" Enter
   if ! wait_for_idle "$sess" 180; then fail_assert "agent didn't respond"; kill_ata "$sess"; end_test; return; fi
   local out=$WORK/062d.txt
   capture "$sess" "$out"
