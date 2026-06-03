@@ -3100,7 +3100,7 @@ async fn side_start_block_message_tracks_open_side_conversation() {
     assert_eq!(
         app.side_start_block_message(),
         Some(
-            "A side conversation is already open. Press Ctrl+C to return before starting another."
+            "A side conversation is already open. Press Esc to return before starting another."
         )
     );
 

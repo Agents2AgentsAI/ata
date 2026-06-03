@@ -55,16 +55,26 @@ fn send_world_writable_scan_failed(tx: &AppEventSender) {
 }
 
 pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
-    matches!(
-        key_event,
+    // ATA accepts Esc, Ctrl+C, and Ctrl+D for returning from a side
+    // conversation. Pre-merge ATA bound Esc; v0.134 upstream restricted to
+    // Ctrl+C/Ctrl+D only, which broke the universal "back" UX. Restored.
+    match key_event {
+        KeyEvent {
+            code: KeyCode::Esc,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        } => true,
         KeyEvent {
             code: KeyCode::Char(c),
             modifiers,
             kind: KeyEventKind::Press,
             ..
-        } if modifiers.contains(KeyModifiers::CONTROL)
-            && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d'))
-    )
+        } => {
+            modifiers.contains(KeyModifiers::CONTROL)
+                && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d'))
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -72,7 +82,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn side_return_shortcuts_match_ctrl_c_and_ctrl_d() {
+    fn side_return_shortcuts_match_esc_ctrl_c_and_ctrl_d() {
+        assert!(side_return_shortcut_matches(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(side_return_shortcut_matches(KeyEvent::new_with_kind(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        )));
         assert!(side_return_shortcut_matches(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL,
@@ -88,11 +107,6 @@ mod tests {
         assert!(side_return_shortcut_matches(KeyEvent::new(
             KeyCode::Char('D'),
             KeyModifiers::CONTROL,
-        )));
-        assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-            KeyEventKind::Press,
         )));
         assert!(!side_return_shortcut_matches(KeyEvent::new_with_kind(
             KeyCode::Esc,
