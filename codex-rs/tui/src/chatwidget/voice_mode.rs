@@ -148,6 +148,79 @@ pub(crate) const VOICE_MODE_OFF_INSTRUCTION: &str = "\
 Do NOT use <voice></voice> tags in your responses. \
 Respond normally with plain text.\n\n";
 
+// ─── TTS playback speed ladder ──────────────────────────────────────────────
+/// Discrete speed tiers cycled through by `+`/`-` in the reading view.
+/// Each press of `+` moves to the next-higher tier; `-` moves to the
+/// next-lower tier. Out-of-ladder starting values snap to the nearest tier
+/// before the step is applied.
+pub(crate) const TTS_SPEED_LADDER: &[f64] =
+    &[0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0];
+
+/// Snap an arbitrary speed to the nearest tier on `TTS_SPEED_LADDER`.
+pub(crate) fn snap_to_ladder(speed: f64) -> f64 {
+    if !speed.is_finite() {
+        return 1.0;
+    }
+    let mut best = TTS_SPEED_LADDER[0];
+    let mut best_diff = (speed - best).abs();
+    for &tier in TTS_SPEED_LADDER.iter().skip(1) {
+        let diff = (speed - tier).abs();
+        if diff < best_diff {
+            best_diff = diff;
+            best = tier;
+        }
+    }
+    best
+}
+
+/// Returns the smallest tier on the ladder strictly greater than `current`,
+/// or the top of the ladder if `current` is already at or above the top.
+/// Off-ladder values cleanly fall to the next tier above them — e.g. 1.05
+/// steps up to 1.1, not 1.2.
+pub(crate) fn step_speed_up(current: f64) -> f64 {
+    for &tier in TTS_SPEED_LADDER {
+        if tier > current + 1e-6 {
+            return tier;
+        }
+    }
+    *TTS_SPEED_LADDER.last().unwrap_or(&1.0)
+}
+
+/// Returns the largest tier on the ladder strictly less than `current`, or
+/// the bottom of the ladder if `current` is already at or below the bottom.
+/// Off-ladder values cleanly fall to the next tier below them — e.g. 1.05
+/// steps down to 1.0, not 0.9.
+pub(crate) fn step_speed_down(current: f64) -> f64 {
+    for &tier in TTS_SPEED_LADDER.iter().rev() {
+        if tier < current - 1e-6 {
+            return tier;
+        }
+    }
+    *TTS_SPEED_LADDER.first().unwrap_or(&1.0)
+}
+
+/// Format a speed as it appears in the voice status line: `1×`, `1.5×`,
+/// `0.5×` — drops trailing `.0` so whole-number speeds aren't padded.
+pub(crate) fn format_speed(speed: f64) -> String {
+    let rounded = (speed * 10.0).round() / 10.0;
+    if (rounded - rounded.round()).abs() < 1e-6 {
+        format!("{}\u{00D7}", rounded.round() as i64)
+    } else {
+        format!("{rounded:.1}\u{00D7}")
+    }
+}
+
+/// Build the reading-view "Speaking..." status string with the current speed
+/// appended when non-default. Returns `"▶️  Speaking..."` at 1.0× and
+/// `"▶️  Speaking (1.5×)"` otherwise.
+pub(crate) fn speaking_status_text(speed: f64) -> String {
+    if (speed - 1.0).abs() < 1e-6 {
+        "\u{25B6}\u{FE0F}  Speaking...".to_string()
+    } else {
+        format!("\u{25B6}\u{FE0F}  Speaking ({})", format_speed(speed))
+    }
+}
+
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
 /// Phases of the voice mode state machine.
@@ -862,6 +935,11 @@ pub(crate) struct VoiceModeState {
     /// connection overhead.
     pub(crate) tts_worker_tx: Option<tokio::sync::mpsc::UnboundedSender<TtsWorkerCommand>>,
 
+    /// Current TTS playback speed, snapped to [`TTS_SPEED_LADDER`]. Updated
+    /// by `+`/`-` in the reading view. Source of truth for both the status
+    /// display and `SetSpeed` commands sent to the worker.
+    pub(crate) playback_speed: f64,
+
     /// Cache of pre-generated TTS audio. Key: (document_id, section_index).
     pub(crate) tts_section_cache:
         Arc<std::sync::Mutex<std::collections::HashMap<(String, usize), TtsCacheEntry>>>,
@@ -953,6 +1031,13 @@ impl VoiceModeState {
         let tts_enabled = config.tts_enabled.unwrap_or(true);
         let stt_enabled = config.stt_enabled.unwrap_or(true);
         let verbosity = config.verbosity.unwrap_or_default();
+        let playback_speed = snap_to_ladder(
+            config
+                .elevenlabs
+                .as_ref()
+                .and_then(|e| e.speed)
+                .unwrap_or(1.0),
+        );
 
         Self {
             phase: VoiceModePhase::Off,
@@ -978,6 +1063,7 @@ impl VoiceModeState {
             tts_ordering_lock: Arc::new(tokio::sync::Mutex::new(())),
             tts_generation: Arc::new(AtomicUsize::new(0)),
             tts_worker_tx: None,
+            playback_speed,
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
@@ -1387,10 +1473,13 @@ impl super::ChatWidget {
     /// Sync the composer placeholder text to reflect the current voice mode phase.
     /// Also syncs the voice status indicator in the reading view (if active).
     fn sync_voice_placeholder(&mut self) {
-        let (label, phase, stt_enabled) = match &self.voice_mode_state {
-            Some(s) if s.phase.is_active() && !s.tts_only => {
-                (s.phase.status_label(), s.phase, s.stt_enabled)
-            }
+        let (label, phase, stt_enabled, speed) = match &self.voice_mode_state {
+            Some(s) if s.phase.is_active() && !s.tts_only => (
+                s.phase.status_label(),
+                s.phase,
+                s.stt_enabled,
+                s.playback_speed,
+            ),
             _ => return,
         };
         // When Idle and STT is disabled, show a different placeholder since
@@ -1402,13 +1491,17 @@ impl super::ChatWidget {
         };
         self.bottom_pane
             .set_placeholder_text(placeholder.to_string());
-        // Also update the reading view's voice status indicator.
+        // Also update the reading view's voice status indicator. When
+        // speaking at a non-default speed, append the speed indicator so the
+        // user can confirm their `+`/`-` press took effect.
         let reading_status = if phase == VoiceModePhase::Idle {
             if stt_enabled {
                 Some("Hold Space to ask".to_string())
             } else {
                 Some("Voice mode on (TTS only)".to_string())
             }
+        } else if phase == VoiceModePhase::Speaking {
+            Some(speaking_status_text(speed))
         } else {
             Some(label.to_string())
         };
@@ -3676,6 +3769,7 @@ impl super::ChatWidget {
             state.phase = VoiceModePhase::Speaking;
         }
         state.resume_tts();
+        let speed = state.playback_speed;
         self.start_highlight_tick();
         // Forward resume state to browser.
         if self.is_reading_view_browser_mode() {
@@ -3686,31 +3780,41 @@ impl super::ChatWidget {
             self.forward_to_reading_view_server(&ws_msg.to_string());
         }
         if !self.is_reading_view_browser_mode() {
-            let msg = "\u{25B6}\u{FE0F}  Speaking...".to_string();
-            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+            self.bottom_pane
+                .set_document_reader_voice_status(Some(speaking_status_text(speed)));
             self.bottom_pane.set_document_reader_tts_paused(false);
         }
         self.request_redraw();
         tracing::debug!("[TTS-DBG] on_voice_resume_tts: resumed successfully");
     }
 
-    /// Change the client-side TTS playback speed by `delta` (e.g. +0.1 or -0.1).
-    /// The speed is clamped to [0.75, 3.0] and rounded to the nearest 0.1.
+    /// Step the TTS playback speed up or down one tier on [`TTS_SPEED_LADDER`].
+    /// Positive `delta` moves to the next-higher tier, negative moves down;
+    /// the magnitude is ignored. Updates both the displayed status and the
+    /// running TTS worker (which respawns its child / future sentences at the
+    /// new rate).
     pub(crate) fn on_voice_playback_speed_change(&mut self, delta: f64) {
-        let Some(ref state) = self.voice_mode_state else {
+        let Some(ref mut state) = self.voice_mode_state else {
             return;
         };
-        let Some(ref player) = state.audio_player else {
-            return;
+        let current = state.playback_speed;
+        let new_speed = if delta > 0.0 {
+            step_speed_up(current)
+        } else if delta < 0.0 {
+            step_speed_down(current)
+        } else {
+            current
         };
-        let current = player.playback_speed();
-        let new_speed = ((current + delta) * 10.0).round() / 10.0;
-        let clamped = new_speed.clamp(0.75, 3.0);
-        player.set_playback_speed(clamped);
-        // Update voice status to show current speed.
+        if (new_speed - current).abs() < 1e-6 {
+            return;
+        }
+        state.playback_speed = new_speed;
+        if let Some(tx) = state.tts_worker_tx.as_ref() {
+            let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
+        }
+        self.cached_elevenlabs_speed = Some(new_speed);
         if !self.is_reading_view_browser_mode() {
-            let speed_str = format!("{clamped:.1}");
-            let msg = format!("\u{25B6}\u{FE0F}  Speaking ({speed_str}\u{00D7})");
+            let msg = format!("\u{25B6}\u{FE0F}  Speaking ({})", format_speed(new_speed));
             self.bottom_pane.set_document_reader_voice_status(Some(msg));
         }
         self.request_redraw();
@@ -4189,9 +4293,13 @@ impl super::ChatWidget {
             // hint and handler are active (sync_voice_placeholder skips
             // tts_only mode).
             if !self.is_reading_view_browser_mode() {
-                self.bottom_pane.set_document_reader_voice_status(Some(
-                    "\u{25B6}\u{FE0F}  Speaking...".to_string(),
-                ));
+                let speed = self
+                    .voice_mode_state
+                    .as_ref()
+                    .map(|s| s.playback_speed)
+                    .unwrap_or(1.0);
+                self.bottom_pane
+                    .set_document_reader_voice_status(Some(speaking_status_text(speed)));
             }
             return;
         }
@@ -4267,9 +4375,13 @@ impl super::ChatWidget {
         // hint and handler are active (sync_voice_placeholder skips
         // tts_only mode).
         if !self.is_reading_view_browser_mode() {
-            self.bottom_pane.set_document_reader_voice_status(Some(
-                "\u{25B6}\u{FE0F}  Speaking...".to_string(),
-            ));
+            let speed = self
+                .voice_mode_state
+                .as_ref()
+                .map(|s| s.playback_speed)
+                .unwrap_or(1.0);
+            self.bottom_pane
+                .set_document_reader_voice_status(Some(speaking_status_text(speed)));
         }
     }
 
@@ -4781,6 +4893,12 @@ pub(crate) enum TtsWorkerCommand {
     SendText(String),
     /// Flush remaining audio and shut down the connection.
     Finish,
+    /// Change the playback speed for upcoming sentences. For the `say`/`espeak-ng`
+    /// backend this kills any in-flight child so the next sentence respawns at the
+    /// new words-per-minute. For the ElevenLabs backend this updates the local
+    /// config; the change takes effect on the next worker connection (audio
+    /// already buffered keeps playing at the old speed).
+    SetSpeed(f64),
 }
 
 /// Long-lived TTS worker that shells out to the macOS `say` command per
@@ -4799,15 +4917,21 @@ async fn say_worker_loop(
 ) {
     use tokio::process::Command;
 
-    let speed = voice_config
+    let initial_speed = voice_config
         .elevenlabs
         .as_ref()
         .and_then(|e| e.speed)
         .unwrap_or(1.0);
-    let wpm = ((175.0_f64) * speed).clamp(80.0, 400.0) as u32;
+    // Current speed is mutable across `SetSpeed`. Each spawn recomputes wpm
+    // from this value so updates take effect on the next sentence boundary.
+    let mut speed = initial_speed;
+    let speed_to_wpm = |s: f64| ((175.0_f64) * s).clamp(80.0, 400.0) as u32;
 
     let mut current: Option<tokio::process::Child> = None;
-    tracing::info!("[TTS-TIMING] say_worker_loop: starting wpm={wpm}");
+    tracing::info!(
+        "[TTS-TIMING] say_worker_loop: starting wpm={}",
+        speed_to_wpm(speed)
+    );
 
     loop {
         if gen_ref.load(Ordering::SeqCst) != my_gen {
@@ -4815,6 +4939,36 @@ async fn say_worker_loop(
             break;
         }
         match cmd_rx.recv().await {
+            Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                if (new_speed - speed).abs() < 1e-6 {
+                    continue;
+                }
+                speed = new_speed;
+                tracing::info!(
+                    "[TTS-TIMING] say_worker_loop: speed -> {} ({} wpm)",
+                    speed,
+                    speed_to_wpm(speed),
+                );
+                // Cut the in-flight sentence so the next one (from the queue
+                // or a future SendText) plays at the new rate. Without this,
+                // the user keeps hearing the old speed until the current
+                // sentence finishes — which for a long section can be many
+                // seconds.
+                if let Some(mut child) = current.take() {
+                    #[cfg(any(target_os = "macos", target_os = "linux"))]
+                    if let Some(pid) = child.id() {
+                        // SAFETY: kill(2) is a well-defined POSIX syscall.
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGCONT);
+                        }
+                    }
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    if let Ok(mut g) = say_child_pid.lock() {
+                        *g = None;
+                    }
+                }
+            }
             Some(TtsWorkerCommand::SendText(text)) => {
                 if gen_ref.load(Ordering::SeqCst) != my_gen {
                     break;
@@ -4829,6 +4983,7 @@ async fn say_worker_loop(
                         *g = None;
                     }
                 }
+                let wpm = speed_to_wpm(speed);
                 // macOS uses the builtin `say`; Linux uses `espeak-ng`
                 // (install with `apt install espeak-ng`). Both take a
                 // rate flag in words-per-minute and accept the text as
@@ -4852,8 +5007,9 @@ async fn say_worker_loop(
                     Command::new("say")
                 };
                 tracing::info!(
-                    "[TTS-TIMING] say_worker_loop: spawning local TTS for {} chars",
-                    text.len()
+                    "[TTS-TIMING] say_worker_loop: spawning local TTS for {} chars at {} wpm",
+                    text.len(),
+                    wpm,
                 );
                 let child = cmd
                     .stdin(std::process::Stdio::null())
@@ -5037,6 +5193,21 @@ async fn tts_worker_loop(
 
                                 break;
                             }
+                        }
+                        Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                            // ElevenLabs voice_settings.speed is sent in the BOS
+                            // message and cannot be changed mid-WebSocket. Record
+                            // the new speed so the next worker connection picks it
+                            // up; audio already streaming continues at the old
+                            // speed. The next ChatWidget worker spawn reads
+                            // `cached_elevenlabs_speed`, which the keypress handler
+                            // already updated, so there is nothing else to do here.
+                            tracing::info!(
+                                "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) — \
+                                 takes effect on next worker connection (ElevenLabs API \
+                                 sets speed at WebSocket BOS only)"
+                            );
+                            config.speed = Some(new_speed);
                         }
                         Some(TtsWorkerCommand::Finish) => {
                             let _ = stream.flush().await;
@@ -6960,5 +7131,151 @@ mod tests {
             state.tts_only,
             "tts_only flag is set — on_voice_mode_agent_delta will return early"
         );
+    }
+
+    // ─── TTS playback speed ladder tests ──────────────────────────────────
+
+    #[test]
+    fn snap_to_ladder_picks_exact_tier_when_on_ladder() {
+        assert_eq!(snap_to_ladder(1.0), 1.0);
+        assert_eq!(snap_to_ladder(0.5), 0.5);
+        assert_eq!(snap_to_ladder(3.0), 3.0);
+        assert_eq!(snap_to_ladder(1.5), 1.5);
+    }
+
+    #[test]
+    fn snap_to_ladder_picks_nearest_tier_off_ladder() {
+        // 0.7 is closer to 0.8 than to 0.5
+        assert_eq!(snap_to_ladder(0.7), 0.8);
+        // 1.4 is closer to 1.5 than to 1.2
+        assert_eq!(snap_to_ladder(1.4), 1.5);
+        // 2.7 is closer to 2.5 than to 3.0
+        assert_eq!(snap_to_ladder(2.7), 2.5);
+    }
+
+    #[test]
+    fn snap_to_ladder_handles_non_finite() {
+        assert_eq!(snap_to_ladder(f64::NAN), 1.0);
+        assert_eq!(snap_to_ladder(f64::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn step_speed_up_walks_ladder() {
+        assert_eq!(step_speed_up(0.5), 0.8);
+        assert_eq!(step_speed_up(0.8), 0.9);
+        assert_eq!(step_speed_up(0.9), 1.0);
+        assert_eq!(step_speed_up(1.0), 1.1);
+        assert_eq!(step_speed_up(1.1), 1.2);
+        assert_eq!(step_speed_up(1.2), 1.5);
+        assert_eq!(step_speed_up(1.5), 1.7);
+        assert_eq!(step_speed_up(1.7), 2.0);
+        assert_eq!(step_speed_up(2.0), 2.5);
+        assert_eq!(step_speed_up(2.5), 3.0);
+    }
+
+    #[test]
+    fn step_speed_up_clamps_at_top() {
+        assert_eq!(step_speed_up(3.0), 3.0);
+        assert_eq!(step_speed_up(5.0), 3.0);
+    }
+
+    #[test]
+    fn step_speed_down_walks_ladder() {
+        assert_eq!(step_speed_down(3.0), 2.5);
+        assert_eq!(step_speed_down(2.5), 2.0);
+        assert_eq!(step_speed_down(2.0), 1.7);
+        assert_eq!(step_speed_down(1.7), 1.5);
+        assert_eq!(step_speed_down(1.5), 1.2);
+        assert_eq!(step_speed_down(1.2), 1.1);
+        assert_eq!(step_speed_down(1.1), 1.0);
+        assert_eq!(step_speed_down(1.0), 0.9);
+        assert_eq!(step_speed_down(0.9), 0.8);
+        assert_eq!(step_speed_down(0.8), 0.5);
+    }
+
+    #[test]
+    fn step_speed_down_clamps_at_bottom() {
+        assert_eq!(step_speed_down(0.5), 0.5);
+        assert_eq!(step_speed_down(0.1), 0.5);
+    }
+
+    #[test]
+    fn step_speed_returns_to_one_x_from_either_side() {
+        // The original bug: pressing `-` from 1.1 was supposed to return to
+        // 1.0 but never could because the stub player.playback_speed() always
+        // reported 1.0. With the ladder these round-trips work cleanly.
+        assert_eq!(step_speed_down(1.1), 1.0);
+        assert_eq!(step_speed_up(0.9), 1.0);
+    }
+
+    #[test]
+    fn step_speed_off_ladder_walks_in_direction() {
+        // 0.75 isn't on the ladder; `+` jumps to the next tier above (0.8).
+        assert_eq!(step_speed_up(0.75), 0.8);
+        // 1.05 isn't on the ladder; `-` returns to the tier just below (1.0).
+        assert_eq!(step_speed_down(1.05), 1.0);
+        // 0.75 → `-` is 0.5 (next tier strictly below).
+        assert_eq!(step_speed_down(0.75), 0.5);
+        // 1.05 → `+` is 1.1 (next tier strictly above).
+        assert_eq!(step_speed_up(1.05), 1.1);
+    }
+
+    #[test]
+    fn format_speed_drops_trailing_zero_for_whole_numbers() {
+        assert_eq!(format_speed(1.0), "1\u{00D7}");
+        assert_eq!(format_speed(2.0), "2\u{00D7}");
+        assert_eq!(format_speed(3.0), "3\u{00D7}");
+        assert_eq!(format_speed(1.5), "1.5\u{00D7}");
+        assert_eq!(format_speed(0.5), "0.5\u{00D7}");
+        assert_eq!(format_speed(1.7), "1.7\u{00D7}");
+    }
+
+    #[test]
+    fn speaking_status_text_omits_speed_at_default() {
+        assert_eq!(speaking_status_text(1.0), "\u{25B6}\u{FE0F}  Speaking...");
+        assert_eq!(
+            speaking_status_text(1.5),
+            "\u{25B6}\u{FE0F}  Speaking (1.5\u{00D7})"
+        );
+        assert_eq!(
+            speaking_status_text(0.5),
+            "\u{25B6}\u{FE0F}  Speaking (0.5\u{00D7})"
+        );
+    }
+
+    #[test]
+    fn voice_mode_state_initializes_playback_speed_from_config() {
+        use codex_config::config_toml::ElevenLabsToml;
+        let cfg = VoiceModeToml {
+            elevenlabs: Some(ElevenLabsToml {
+                speed: Some(1.5),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let state = VoiceModeState::new(&cfg);
+        assert_eq!(state.playback_speed, 1.5);
+    }
+
+    #[test]
+    fn voice_mode_state_defaults_playback_speed_to_one() {
+        let cfg = VoiceModeToml::default();
+        let state = VoiceModeState::new(&cfg);
+        assert_eq!(state.playback_speed, 1.0);
+    }
+
+    #[test]
+    fn voice_mode_state_snaps_off_ladder_config_speed() {
+        use codex_config::config_toml::ElevenLabsToml;
+        // 0.75 isn't on the ladder; constructor snaps it to 0.8.
+        let cfg = VoiceModeToml {
+            elevenlabs: Some(ElevenLabsToml {
+                speed: Some(0.75),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let state = VoiceModeState::new(&cfg);
+        assert_eq!(state.playback_speed, 0.8);
     }
 }
