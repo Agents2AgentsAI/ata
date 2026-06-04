@@ -292,11 +292,18 @@ where
     use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        // Floor of 30s per event accommodates slower runners (ARM64 Linux,
+        // Floor of 60s per event accommodates slower runners (ARM64 Linux,
         // Windows MSVC) under heavy nextest concurrency. Production code paths
         // are unaffected — this only changes how long the test harness waits
         // before deciding an event won't arrive. Real hangs are still caught.
-        let ev = timeout(wait_time.max(Duration::from_secs(30)), codex.next_event())
+        //
+        // The 30s floor that shipped with upstream v0.134 still timed out
+        // `compact_resume_fork::snapshot_rollback_followup_turn_trims_context_updates`
+        // on ubuntu-arm64 (took 31.7s on both retries in the post-merge CI on
+        // commit c185110fa9). Doubling the floor stays well below any real
+        // CI deadline (each test still runs in well under a minute on healthy
+        // runners) and avoids ignoring the test outright.
+        let ev = timeout(wait_time.max(Duration::from_secs(60)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");
