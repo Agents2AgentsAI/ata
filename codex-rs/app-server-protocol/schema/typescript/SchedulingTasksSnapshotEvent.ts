@@ -4,11 +4,6 @@
 import type { SchedulingCronRow } from "./SchedulingCronRow";
 import type { SchedulingMonitorRow } from "./SchedulingMonitorRow";
 
-/**
- * ATA: response payload for `Op::ListSchedulingTasks`. Always non-null —
- * when scheduling is disabled or no tasks exist, the lists are empty rather
- * than the whole event being omitted.
- */
 export type SchedulingTasksSnapshotEvent = { cron_jobs: Array<SchedulingCronRow>, monitors: Array<SchedulingMonitorRow>,
 /**
  * True iff `Feature::Scheduling` is enabled for the session. Lets the

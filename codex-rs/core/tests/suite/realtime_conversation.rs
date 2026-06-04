@@ -649,6 +649,13 @@ async fn conversation_webrtc_start_posts_generated_session() -> Result<()> {
 async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // The assertion is "close races and aborts the pending sideband
+    // task before the websocket handshake completes". The original test
+    // gave the close only 500ms vs the handshake, which intermittently
+    // lost on slow CI runners. Make the handshake side wait long
+    // enough that even a slow scheduler still lets the close win, then
+    // wait past `accept_delay` before asserting absence of handshake
+    // so the "no handshake completed" claim is meaningful.
     let server = start_mock_server().await;
     Mock::given(method("POST"))
         .and(path_regex(".*/realtime/calls$"))
@@ -662,7 +669,7 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     let realtime_server = start_websocket_server_with_headers(vec![WebSocketConnectionConfig {
         requests: vec![vec![]],
         response_headers: Vec::new(),
-        accept_delay: Some(Duration::from_millis(500)),
+        accept_delay: Some(Duration::from_millis(2_000)),
         close_after_requests: false,
     }])
     .await;
@@ -708,7 +715,11 @@ async fn conversation_webrtc_close_while_sideband_connecting_drops_pending_join(
     .await;
     assert_eq!(closed.reason.as_deref(), Some("requested"));
 
-    let stale_event = timeout(Duration::from_millis(700), async {
+    // Wait past `accept_delay` (2s) plus headroom so we are confidently
+    // PAST the point where the sideband handshake would have landed if
+    // the abort had failed. If anything stale leaks (Error / Close
+    // event), the timeout returns Ok with the leaked event description.
+    let stale_event = timeout(Duration::from_millis(3_000), async {
         wait_for_event_match(&test.codex, |msg| match msg {
             EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                 payload: RealtimeEvent::Error(message),
@@ -754,6 +765,9 @@ async fn conversation_webrtc_sideband_connect_failure_closes_with_error() -> Res
         config.experimental_realtime_ws_model = Some("realtime-test-model".to_string());
         config.experimental_realtime_ws_startup_context = Some(String::new());
         config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+        // Keep the failure-path test inside wait_for_event's timeout on Windows,
+        // where refused localhost websocket connects can take around two seconds.
+        config.model_provider.request_max_retries = Some(0);
         config.realtime.version = RealtimeWsVersion::V1;
     });
     let test = builder.build(&server).await?;
@@ -2165,6 +2179,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -2299,6 +2314,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 
@@ -3494,6 +3510,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await?;
 

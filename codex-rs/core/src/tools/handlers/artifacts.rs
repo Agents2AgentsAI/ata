@@ -1,4 +1,7 @@
-use async_trait::async_trait;
+// ATA handler still consumes `turn_context.cwd`. Upstream v0.134 deprecated
+// the field in favor of per-environment cwd accessors; migrate in a follow-up.
+#![allow(deprecated)]
+
 use codex_artifacts::ArtifactBuildRequest;
 use codex_artifacts::ArtifactCommandOutput;
 use codex_artifacts::ArtifactRuntimeManager;
@@ -9,29 +12,40 @@ use serde_json::Value as JsonValue;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::codex::Session;
-use crate::codex::TurnContext;
-use crate::exec::ExecToolCallOutput;
-use crate::exec::StreamOutput;
-use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::ExecCommandSource;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_features::Feature;
+use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::exec_output::StreamOutput;
+use codex_protocol::protocol::ExecCommandSource;
+use codex_tools::ToolExecutor;
+use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
 pub(crate) const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct ArtifactsHandler;
+pub struct ArtifactsHandler {
+    pub(crate) spec: ToolSpec,
+}
+
+impl ArtifactsHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ArtifactsToolArgs {
@@ -39,23 +53,20 @@ struct ArtifactsToolArgs {
     timeout_ms: Option<u64>,
 }
 
-#[async_trait]
-impl ToolHandler for ArtifactsHandler {
-    type Output = FunctionToolOutput;
-
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ArtifactsHandler {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(ARTIFACTS_TOOL_NAME)
     }
 
-    fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Custom { .. })
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn is_mutating(&self, _invocation: &ToolInvocation) -> bool {
-        true
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -80,7 +91,7 @@ impl ToolHandler for ArtifactsHandler {
         };
 
         let client = ArtifactsClient::from_runtime_manager(default_runtime_manager(
-            turn.config.codex_home.clone(),
+            turn.config.codex_home.to_path_buf(),
         ));
 
         let started_at = Instant::now();
@@ -89,7 +100,7 @@ impl ToolHandler for ArtifactsHandler {
         let result = client
             .execute_build(ArtifactBuildRequest {
                 source: args.source,
-                cwd: turn.cwd.clone(),
+                cwd: turn.cwd.to_path_buf(),
                 timeout: Some(Duration::from_millis(
                     args.timeout_ms
                         .unwrap_or(DEFAULT_EXECUTION_TIMEOUT.as_millis() as u64),
@@ -113,10 +124,16 @@ impl ToolHandler for ArtifactsHandler {
         )
         .await;
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             format_artifact_output(&output),
             Some(success),
-        ))
+        )))
+    }
+}
+
+impl CoreToolRuntime for ArtifactsHandler {
+    fn matches_kind(&self, payload: &ToolPayload) -> bool {
+        matches!(payload, ToolPayload::Custom { .. })
     }
 }
 
@@ -225,7 +242,6 @@ async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
         vec![ARTIFACTS_TOOL_NAME.to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        true,
     );
     let ctx = ToolEventCtx::new(session, turn, call_id, None);
     emitter.emit(ctx, ToolEventStage::Begin).await;
@@ -251,11 +267,13 @@ async fn emit_exec_end(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
         turn.cwd.clone(),
         ExecCommandSource::Agent,
-        true,
     );
     let ctx = ToolEventCtx::new(session, turn, call_id, None);
     let stage = if success {
-        ToolEventStage::Success(exec_output)
+        ToolEventStage::Success {
+            output: exec_output,
+            applied_patch_delta: None,
+        }
     } else {
         ToolEventStage::Failure(ToolEventFailure::Output(exec_output))
     };

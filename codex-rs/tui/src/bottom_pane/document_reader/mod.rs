@@ -387,6 +387,11 @@ pub(crate) struct DocumentReaderView {
     /// navigate to the modified section.  Set on construction (when reopening
     /// after close) and cleared on user interaction or after auto-navigating.
     pending_auto_navigate: bool,
+
+    /// Whether the agent is currently running a task. Drives the footer
+    /// `esc to interrupt` hint; the reader overlay hides the global
+    /// StatusIndicatorWidget that would otherwise carry that signal.
+    task_running: bool,
 }
 
 impl DocumentReaderView {
@@ -480,6 +485,7 @@ impl DocumentReaderView {
             show_toc: false,
             toc_selected_index: 0,
             pending_auto_navigate: true,
+            task_running: false,
         }
     }
 
@@ -572,6 +578,16 @@ impl DocumentReaderView {
                 section.content.push('\n');
             }
             let fold_start = section.content.len();
+            // When the append resolves a Tab-to-ask pending question, prepend
+            // the question itself ("You asked: …") so the inline answer keeps
+            // the user-asked context even after `resolve_pending` clears the
+            // transient header. The marker stays inside the fold region so it
+            // can be collapsed alongside the rest of the answer.
+            if let Some(question) = pending_question.as_deref() {
+                section
+                    .content
+                    .push_str(&format!("You asked: \"{question}\"\n\n"));
+            }
             section.content.push_str(&content);
 
             // Record fold region: explicit foldable flag from the model, or
@@ -640,6 +656,18 @@ impl DocumentReaderView {
             .get(&section_index)
             .map(|(q, _)| q.clone());
 
+        // When the patch resolves a Tab-to-ask pending question, prepend the
+        // "You asked: …" marker to the new text so the inline answer keeps
+        // the user-asked context after `resolve_pending` clears the
+        // transient indicator. This mirrors the behaviour of
+        // `append_to_section` and is what TR-002 A asserts.
+        let effective_new_text = if let Some(question) = pending_question.as_deref() {
+            format!("You asked: \"{question}\"\n\n{new_text}")
+        } else {
+            new_text.to_string()
+        };
+        let effective_new_text = effective_new_text.as_str();
+
         if let Some(section) = self.sections.get_mut(section_index) {
             if let Some(byte_offset) = section.content.find(old_text) {
                 let old_len = old_text.len();
@@ -648,7 +676,7 @@ impl DocumentReaderView {
                 // Compare old and new text line-by-line to narrow the
                 // highlighted region to only the lines that actually differ.
                 let old_lines: Vec<&str> = old_text.lines().collect();
-                let new_lines: Vec<&str> = new_text.lines().collect();
+                let new_lines: Vec<&str> = effective_new_text.lines().collect();
                 let common_prefix = old_lines
                     .iter()
                     .zip(new_lines.iter())
@@ -669,10 +697,10 @@ impl DocumentReaderView {
                 let changed_from = lines_before_match + common_prefix;
                 let changed_to = lines_before_match + new_lines.len() - common_suffix;
 
-                section.content = section.content.replacen(old_text, new_text, 1);
+                section.content = section.content.replacen(old_text, effective_new_text, 1);
 
                 // Shift existing fold regions to account for the length change.
-                let delta = new_text.len() as isize - old_len as isize;
+                let delta = effective_new_text.len() as isize - old_len as isize;
                 for fold in &mut section.folds {
                     if fold.start >= byte_offset + old_len {
                         // Fold is entirely after the replaced region — shift both bounds.
@@ -690,7 +718,7 @@ impl DocumentReaderView {
                 // if the new text is substantially longer (≥3 more lines).
                 let auto_fold = !foldable
                     && pending_question.is_some()
-                    && new_text.len().saturating_sub(old_text.len()) >= 200;
+                    && effective_new_text.len().saturating_sub(old_text.len()) >= 200;
                 if foldable || auto_fold {
                     // Auto-collapse previous folds so only the latest Q&A
                     // answer stays expanded.
@@ -701,7 +729,7 @@ impl DocumentReaderView {
                     // prefix/suffix at byte level so the fold covers inserted
                     // content, not the unchanged surrounding text.
                     let old_bytes = old_text.as_bytes();
-                    let new_bytes = new_text.as_bytes();
+                    let new_bytes = effective_new_text.as_bytes();
                     let prefix_len = old_bytes
                         .iter()
                         .zip(new_bytes.iter())
@@ -720,10 +748,11 @@ impl DocumentReaderView {
                         .count();
 
                     let fold_start = byte_offset + prefix_len;
-                    let fold_end = byte_offset + new_text.len() - suffix_len;
+                    let fold_end = byte_offset + effective_new_text.len() - suffix_len;
 
                     if fold_start < fold_end {
-                        let diff_text = &new_text[prefix_len..new_text.len() - suffix_len];
+                        let diff_text =
+                            &effective_new_text[prefix_len..effective_new_text.len() - suffix_len];
                         let fold_summary = summary.or(pending_question).unwrap_or_else(|| {
                             diff_text
                                 .trim()
@@ -2990,6 +3019,10 @@ impl BottomPaneView for DocumentReaderView {
             }
         }
     }
+
+    fn set_task_running(&mut self, running: bool) {
+        self.task_running = running;
+    }
 }
 
 impl Renderable for DocumentReaderView {
@@ -3701,6 +3734,7 @@ impl Renderable for DocumentReaderView {
             self.voice_status.as_deref(), // used for showing "r: read" hint
             self.voice_tts_paused,
             search_match_info.as_deref(),
+            self.task_running,
             w,
         );
         Paragraph::new(hints).render(
@@ -4764,9 +4798,13 @@ mod tests {
             None,
         );
 
+        // When the patch resolves a pending Tab-to-ask question, the
+        // section content is prepended with `You asked: "…"` so the
+        // user's question stays visible alongside the inline answer
+        // (mirrors `append_to_section`; required by TR-002 A).
         assert_eq!(
             view.sections[1].content,
-            "Improved method details.\nMore method details."
+            "You asked: \"test question\"\n\nImproved method details.\nMore method details."
         );
         assert!(view.sections[1].recently_updated);
         assert!(!view.pending_sections.contains_key(&1));

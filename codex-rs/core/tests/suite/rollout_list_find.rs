@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use codex_core::EventPersistenceMode;
 use codex_core::RolloutRecorder;
 use codex_core::RolloutRecorderParams;
 use codex_core::config::ConfigBuilder;
@@ -102,9 +101,9 @@ async fn find_locates_rollout_file_by_id() {
 #[tokio::test]
 async fn find_handles_gitignore_covering_codex_home_directory() {
     let repo = TempDir::new().unwrap();
-    let codex_home = repo.path().join(".ata");
+    let codex_home = repo.path().join(".codex");
     std::fs::create_dir_all(&codex_home).unwrap();
-    std::fs::write(repo.path().join(".gitignore"), ".ata/**\n").unwrap();
+    std::fs::write(repo.path().join(".gitignore"), ".codex/**\n").unwrap();
     let id = Uuid::new_v4();
     let expected = write_minimal_rollout_with_id(&codex_home, id);
 
@@ -189,10 +188,7 @@ async fn find_locates_rollout_file_written_by_recorder() -> std::io::Result<()> 
             /*thread_source*/ None,
             BaseInstructions::default(),
             Vec::new(),
-            EventPersistenceMode::Limited,
         ),
-        /*state_db_ctx*/ None,
-        /*state_builder*/ None,
     )
     .await?;
     recorder.persist().await?;

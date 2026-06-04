@@ -69,9 +69,13 @@ async fn websocket_transport_second_ctrl_c_forces_exit_while_turn_running() -> R
     assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
 
     send_sigint(&process)?;
+    // The forced-restart path is fast in isolation but the 2s deadline used
+    // to race macOS CI runner load (test passed locally, flaked on CI).
+    // 10s keeps the failure mode obvious while leaving room for runner
+    // contention.
     let status = wait_for_process_exit_within(
         &mut process,
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         "timed out waiting for forced Ctrl-C restart shutdown",
     )
     .await?;
@@ -124,6 +128,34 @@ async fn websocket_transport_second_sigterm_forces_exit_while_turn_running() -> 
         &mut process,
         Duration::from_secs(2),
         "timed out waiting for forced SIGTERM restart shutdown",
+    )
+    .await?;
+    assert!(status.success(), "expected graceful exit, got {status}");
+
+    expect_websocket_disconnect(&mut ws).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn websocket_transport_repeated_sighup_keeps_waiting_for_running_turn() -> Result<()> {
+    let GracefulCtrlCFixture {
+        _codex_home,
+        _server,
+        mut process,
+        mut ws,
+    } = start_ctrl_c_restart_fixture(Duration::from_secs(3)).await?;
+
+    send_sighup(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    send_sighup(&process)?;
+    assert_process_does_not_exit_within(&mut process, Duration::from_millis(300)).await?;
+
+    let status = wait_for_process_exit_within(
+        &mut process,
+        Duration::from_secs(10),
+        "timed out waiting for graceful repeated SIGHUP restart shutdown",
     )
     .await?;
     assert!(status.success(), "expected graceful exit, got {status}");
@@ -234,6 +266,10 @@ fn send_sigint(process: &Child) -> Result<()> {
 
 fn send_sigterm(process: &Child) -> Result<()> {
     send_signal(process, "-TERM")
+}
+
+fn send_sighup(process: &Child) -> Result<()> {
+    send_signal(process, "-HUP")
 }
 
 fn send_signal(process: &Child, signal: &str) -> Result<()> {

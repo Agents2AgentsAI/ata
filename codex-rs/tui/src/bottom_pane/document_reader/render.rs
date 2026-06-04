@@ -253,8 +253,21 @@ pub(super) fn hints_line(
     voice_status: Option<&str>,
     voice_paused: bool,
     search_match_info: Option<&str>,
+    task_running: bool,
     width: u16,
 ) -> Line<'static> {
+    // When the agent is running, the reader hides the global
+    // StatusIndicatorWidget that would normally show "Working … esc to
+    // interrupt". Surface the same signal here so users (and `wait_for_idle`-
+    // style test harnesses) can see that a turn is in flight.
+    if task_running {
+        let hints = vec![
+            "Working".cyan().bold(),
+            " • ".dim(),
+            "esc to interrupt".dim(),
+        ];
+        return wrap_hints_with_borders(hints, width);
+    }
     let hints: Vec<Span<'static>> = if let Some(input) = line_number_input {
         vec![
             ":".cyan().bold(),
@@ -347,7 +360,10 @@ pub(super) fn hints_line(
         h
     };
 
-    // Wrap in side borders to match the card.
+    wrap_hints_with_borders(hints, width)
+}
+
+fn wrap_hints_with_borders(hints: Vec<Span<'static>>, width: u16) -> Line<'static> {
     let hints_width: usize = hints
         .iter()
         .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))

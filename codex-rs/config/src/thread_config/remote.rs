@@ -153,6 +153,9 @@ fn model_provider_from_proto(
     let id = provider.id;
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
+        Ok(proto::WireApi::AnthropicMessages) => WireApi::AnthropicMessages,
+        Ok(proto::WireApi::GeminiGenerate) => WireApi::GeminiGenerate,
+        Ok(proto::WireApi::CopilotInline) => WireApi::CopilotInline,
         Ok(proto::WireApi::Unspecified) => {
             return Err(parse_error("remote thread config omitted wire_api"));
         }
@@ -283,10 +286,9 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
-        // ATA multi-provider WireApi variants — not yet wired to proto.
-        WireApi::AnthropicMessages | WireApi::GeminiGenerate | WireApi::CopilotInline => {
-            unimplemented!("ATA multi-provider WireApi not wired for thread_config remote proto")
-        }
+        WireApi::AnthropicMessages => proto::WireApi::AnthropicMessages,
+        WireApi::GeminiGenerate => proto::WireApi::GeminiGenerate,
+        WireApi::CopilotInline => proto::WireApi::CopilotInline,
     }
 }
 
@@ -404,6 +406,23 @@ mod tests {
 
         assert_eq!(id, "local");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn ata_multi_provider_wire_apis_roundtrip_through_proto() {
+        for wire_api in [
+            WireApi::AnthropicMessages,
+            WireApi::GeminiGenerate,
+            WireApi::CopilotInline,
+        ] {
+            let mut provider = expected_provider();
+            provider.wire_api = wire_api;
+            let proto = model_provider_to_proto("ata", provider.clone());
+            let (id, actual) = model_provider_from_proto(proto).expect("ata wire_api from proto");
+            assert_eq!(id, "ata");
+            assert_eq!(actual.wire_api, wire_api);
+            assert_eq!(actual, provider);
+        }
     }
 
     fn proto_sources() -> Vec<proto::ThreadConfigSource> {

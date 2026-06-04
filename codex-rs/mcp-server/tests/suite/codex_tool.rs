@@ -1,5 +1,3 @@
-#![cfg(not(target_os = "windows"))]
-
 use std::collections::HashMap;
 use std::env;
 use std::path::Path;
@@ -100,7 +98,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await?;
 
-    // Send an "ata" tool request, which should hit the responses endpoint.
+    // Send a "codex" tool request, which should hit the responses endpoint.
     // In turn, it should reply with a tool call, which the MCP should forward
     // as an elicitation.
     let codex_request_id = mcp_process
@@ -157,7 +155,7 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     .expect("task_complete_notification timeout")
     .expect("task_complete_notification resp");
 
-    // Verify the original `ata` tool call completes and that the file was created.
+    // Verify the original `codex` tool call completes and that the file was created.
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
@@ -258,11 +256,16 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     ])
     .await?;
 
-    // Send an "ata" tool request that will trigger the apply_patch command
+    // Send a "codex" tool request that will trigger the apply_patch command
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             cwd: Some(cwd.path().to_string_lossy().to_string()),
             prompt: "please modify the test file".to_string(),
+            // This test exercises patch approval elicitation, not local sandbox setup.
+            config: Some(HashMap::from([(
+                "sandbox_mode".to_string(),
+                json!("danger-full-access"),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -298,7 +301,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         Some(create_expected_patch_approval_elicitation_request_params(
             expected_changes,
             /*grant_root*/ None, // No grant_root expected
-            /*reason*/ None, // No reason expected
+            /*reason*/ None,
             codex_request_id.to_string(),
             params.codex_event_id.clone(),
             params.thread_id,
@@ -315,7 +318,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         )
         .await?;
 
-    // Verify the original `ata` tool call completes
+    // Verify the original `codex` tool call completes
     let codex_response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp_process.read_stream_until_response_message(RequestId::Number(codex_request_id)),
@@ -371,7 +374,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
 
-    // Send an "ata" tool request, which should hit the responses endpoint.
+    // Send a "codex" tool request, which should hit the responses endpoint.
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
             prompt: "How are you?".to_string(),
@@ -403,7 +406,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
                     .get("structuredContent")
                     .and_then(|v| v.get("threadId"))
                     .and_then(serde_json::Value::as_str)
-                    .expect("ata tool response should include structuredContent.threadId"),
+                    .expect("codex tool response should include structuredContent.threadId"),
                 "content": "Enjoy!"
             }
         })

@@ -2,7 +2,6 @@ use super::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::AgentPath;
-use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
@@ -121,7 +120,6 @@ fn developer_msg_with_fragments(texts: &[&str]) -> ResponseItem {
 fn reference_context_item() -> TurnContextItem {
     TurnContextItem {
         turn_id: Some("reference-turn".to_string()),
-        trace_id: None,
         cwd: PathBuf::from("/tmp/reference-cwd"),
         current_date: Some("2026-03-23".to_string()),
         timezone: Some("America/Los_Angeles".to_string()),
@@ -135,12 +133,7 @@ fn reference_context_item() -> TurnContextItem {
         collaboration_mode: None,
         realtime_active: Some(false),
         effort: None,
-        summary: ReasoningSummary::Auto,
-        user_instructions: None,
-        developer_instructions: None,
-        final_output_json_schema: None,
-        truncation_policy: Some(codex_protocol::protocol::TruncationPolicy::Tokens(10_000)),
-        code_intel_roots: Vec::new(),
+        summary: codex_protocol::config_types::ReasoningSummary::Auto,
     }
 }
 
@@ -1050,7 +1043,12 @@ fn record_items_truncates_function_call_output_content() {
 }
 
 #[test]
-fn record_items_truncates_custom_tool_call_output_content() {
+fn record_items_preserves_custom_tool_call_output_content() {
+    // CustomToolCallOutput is produced by tools that own their per-call
+    // truncation (e.g. code-mode's `@exec max_output_tokens`). The global
+    // policy MUST NOT re-truncate, or it clobbers the explicit per-call
+    // budget the producer already applied. See process_item in history.rs
+    // and upstream PR #23564.
     let mut history = ContextManager::new();
     let policy = TruncationPolicy::Tokens(1_000);
     let line = "custom output that is very long\n";
@@ -1067,14 +1065,9 @@ fn record_items_truncates_custom_tool_call_output_content() {
     match &history.items[0] {
         ResponseItem::CustomToolCallOutput { output, .. } => {
             let output = output.text_content().unwrap_or_default();
-            assert_ne!(output, long_output);
-            assert!(
-                output.contains("tokens truncated"),
-                "expected token-based truncation marker, got {output}"
-            );
-            assert!(
-                output.contains("tokens truncated") || output.contains("bytes truncated"),
-                "expected truncation marker, got {output}"
+            assert_eq!(
+                output, long_output,
+                "CustomToolCallOutput must be preserved verbatim"
             );
         }
         other => panic!("unexpected history item: {other:?}"),
@@ -1759,6 +1752,26 @@ fn non_base64_image_urls_are_unchanged() {
         estimate_response_item_model_visible_bytes(&function_output_item),
         serde_json::to_string(&function_output_item).unwrap().len() as i64
     );
+}
+
+#[test]
+fn encrypted_function_output_uses_plaintext_byte_estimate() {
+    let encrypted_content = "A".repeat(1_868);
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-encrypted".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::EncryptedContent {
+                encrypted_content: encrypted_content.clone(),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - encrypted_content.len() as i64
+        + estimate_encrypted_function_output_length(encrypted_content.len()) as i64;
+
+    assert_eq!(estimated, expected);
 }
 
 #[test]

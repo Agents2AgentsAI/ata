@@ -38,8 +38,26 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
     find_ancestor_git_entry(base).map(|(repo_root, _)| repo_root)
 }
 
+/// Return the repository root for `cwd` using the provided filesystem.
+///
+/// This mirrors [`get_git_repo_root`] for local paths, but works when `cwd`
+/// only exists inside a selected remote environment.
+pub async fn get_git_repo_root_with_fs(
+    fs: &dyn ExecutorFileSystem,
+    cwd: &AbsolutePathBuf,
+) -> Option<AbsolutePathBuf> {
+    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
+        Ok(metadata) if metadata.is_directory => cwd.clone(),
+        _ => cwd.parent()?,
+    };
+    find_ancestor_git_entry_with_fs(fs, &base)
+        .await
+        .map(|(repo_root, _)| repo_root)
+}
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
+const DISABLED_HOOKS_PATH: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct GitInfo {
@@ -158,6 +176,108 @@ pub async fn get_head_commit_hash(cwd: &Path) -> Option<GitSha> {
     }
 }
 
+pub fn canonicalize_git_remote_url(url: &str) -> Option<String> {
+    let url = trim_git_suffix(url.trim().trim_end_matches('/'));
+    if url.is_empty() {
+        return None;
+    }
+
+    if let Some((scheme, rest)) = url.split_once("://") {
+        return canonicalize_git_url_like_remote(scheme, rest);
+    }
+
+    if let Some((host_part, path)) = parse_scp_like_remote(url) {
+        return canonicalize_git_remote_host_path(host_part, path, /*default_port*/ None);
+    }
+
+    let (host_part, path) = url.split_once('/')?;
+    canonicalize_git_remote_host_path(host_part, path, /*default_port*/ None)
+}
+
+fn canonicalize_git_url_like_remote(scheme: &str, rest: &str) -> Option<String> {
+    let default_port = match scheme {
+        "git" => Some("9418"),
+        "http" => Some("80"),
+        "https" => Some("443"),
+        "ssh" => Some("22"),
+        _ => return None,
+    };
+
+    let rest = rest
+        .find(['?', '#'])
+        .map_or(rest, |suffix_index| &rest[..suffix_index]);
+    let (host_part, path) = rest.split_once('/')?;
+    canonicalize_git_remote_host_path(host_part, path, default_port)
+}
+
+fn parse_scp_like_remote(remote: &str) -> Option<(&str, &str)> {
+    if remote.contains('/')
+        && remote
+            .find('/')
+            .is_some_and(|slash| remote.find(':').is_none_or(|colon| slash < colon))
+    {
+        return None;
+    }
+
+    let (host_part, path) = remote.split_once(':')?;
+    if host_part.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((host_part, path))
+}
+
+fn canonicalize_git_remote_host_path(
+    host_part: &str,
+    path: &str,
+    default_port: Option<&str>,
+) -> Option<String> {
+    let host = normalize_remote_host(
+        host_part
+            .rsplit_once('@')
+            .map_or(host_part, |(_, host)| host)
+            .trim()
+            .trim_end_matches('/'),
+        default_port,
+    );
+    if host.is_empty() {
+        return None;
+    }
+
+    let path = trim_git_suffix(path.trim().trim_matches('/'));
+    let components = path
+        .split('/')
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>();
+    let [owner, repo, ..] = components.as_slice() else {
+        return None;
+    };
+    if matches!((*owner, *repo), ("." | "..", _) | (_, "." | "..")) {
+        return None;
+    }
+    let path = components.join("/");
+
+    if host == "github.com" {
+        Some(format!("{host}/{}", path.to_ascii_lowercase()))
+    } else {
+        Some(format!("{host}/{path}"))
+    }
+}
+
+fn normalize_remote_host(host: &str, default_port: Option<&str>) -> String {
+    let host = host.to_ascii_lowercase();
+    if let Some(default_port) = default_port
+        && let Some((host_without_port, port)) = host.rsplit_once(':')
+        && port == default_port
+    {
+        return host_without_port.to_string();
+    }
+    host
+}
+
+fn trim_git_suffix(value: &str) -> &str {
+    value.strip_suffix(".git").unwrap_or(value)
+}
+
 pub async fn get_has_changes(cwd: &Path) -> Option<bool> {
     let output = run_git_command_with_timeout(&["status", "--porcelain"], cwd).await?;
     if !output.status.success() {
@@ -273,6 +393,9 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
+        // Keep internal Git helper commands independent of configured hook directories.
+        .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
+        .args(["-c", "core.fsmonitor=false"])
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
@@ -623,11 +746,8 @@ pub async fn resolve_root_git_project_for_trust(
     fs: &dyn ExecutorFileSystem,
     cwd: &AbsolutePathBuf,
 ) -> Option<AbsolutePathBuf> {
-    let base = match fs.get_metadata(cwd, /*sandbox*/ None).await {
-        Ok(metadata) if metadata.is_directory => cwd.clone(),
-        _ => cwd.parent()?,
-    };
-    let (repo_root, dot_git) = find_ancestor_git_entry_with_fs(fs, &base).await?;
+    let repo_root = get_git_repo_root_with_fs(fs, cwd).await?;
+    let dot_git = repo_root.join(".git");
     if fs
         .get_metadata(&dot_git, /*sandbox*/ None)
         .await
@@ -654,12 +774,20 @@ pub async fn resolve_root_git_project_for_trust(
 }
 
 fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let system_temp_dirs = system_temp_dirs();
     let mut dir = base_dir.to_path_buf();
 
     loop {
-        let dot_git = dir.join(".git");
-        if dot_git.exists() {
-            return Some((dir, dot_git));
+        // Skip well-known system temp dirs — a `.git` directly under them is
+        // essentially always accidental contamination (CI runner state,
+        // stale fixture), not a real project root. Without this guard,
+        // walking up from `/tmp/<some-cwd>` could mistake `/tmp/.git` for
+        // the project root and report the project name as `tmp`.
+        if !is_system_temp_dir(&dir, &system_temp_dirs) {
+            let dot_git = dir.join(".git");
+            if dot_git.exists() {
+                return Some((dir, dot_git));
+            }
         }
 
         // Pop one component (go up one directory). `pop` returns false when
@@ -670,6 +798,38 @@ fn find_ancestor_git_entry(base_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     }
 
     None
+}
+
+/// Returns true if `dir` matches any well-known system temp directory. The
+/// match is intentionally broad: we check `std::env::temp_dir()`, the GitHub
+/// Actions `RUNNER_TEMP` env, plus hard-coded `/tmp`, `/var/tmp`, and
+/// `/private/tmp` (macOS) so we catch the stray-`.git` case even when the
+/// stray is not under the env-derived temp dir.
+pub fn is_system_temp_dir(dir: &Path, system_temp_dirs: &[PathBuf]) -> bool {
+    let dir_canonical = dir.canonicalize().ok();
+    system_temp_dirs.iter().any(|candidate| {
+        if dir == candidate.as_path() {
+            return true;
+        }
+        match (&dir_canonical, candidate.canonicalize()) {
+            (Some(d), Ok(c)) => *d == c,
+            _ => false,
+        }
+    })
+}
+
+/// Collect all well-known system temp directories that may contain a stray
+/// `.git` from CI runner pollution or fixture leftover. Returns absolute
+/// paths; duplicates are not deduplicated since the cost is negligible.
+pub fn system_temp_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![std::env::temp_dir()];
+    if let Some(runner_temp) = std::env::var_os("RUNNER_TEMP") {
+        dirs.push(PathBuf::from(runner_temp));
+    }
+    for hardcoded in ["/tmp", "/var/tmp", "/private/tmp"] {
+        dirs.push(PathBuf::from(hardcoded));
+    }
+    dirs
 }
 
 async fn find_ancestor_git_entry_with_fs(
@@ -723,4 +883,100 @@ pub async fn current_branch_name(cwd: &Path) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|name| !name.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn canonicalize_git_remote_url_normalizes_github_variants() {
+        for remote in [
+            "git@github.com:OpenAI/Codex.git",
+            "ssh://git@github.com/openai/codex.git",
+            "ssh://git@github.com:22/OpenAI/Codex.git",
+            "https://github.com/openai/codex.git",
+            "https://github.com:443/openai/codex.git",
+            "https://token@github.com/openai/codex/",
+            "github.com/OpenAI/Codex.git",
+        ] {
+            assert_eq!(
+                canonicalize_git_remote_url(remote),
+                Some("github.com/openai/codex".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn canonicalize_git_remote_url_handles_ghe_without_lowercasing_path() {
+        assert_eq!(
+            canonicalize_git_remote_url("git@ghe.company.com:Org/Repo.git"),
+            Some("ghe.company.com/Org/Repo".to_string())
+        );
+        assert_eq!(
+            canonicalize_git_remote_url("ssh://git@ghe.company.com:2222/Org/Repo.git"),
+            Some("ghe.company.com:2222/Org/Repo".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_git_remote_url_rejects_non_repository_values() {
+        for remote in ["", "file:///tmp/repo", "github.com/openai", "/tmp/repo"] {
+            assert_eq!(canonicalize_git_remote_url(remote), None);
+        }
+    }
+
+    /// CI runners can leave a stray `.git` directly under the system temp dir
+    /// (e.g. `/tmp/.git` on GitHub Actions Linux runners). When the walk-up
+    /// reaches the temp dir, it should not treat that `.git` as a project
+    /// root — otherwise tests with a tempdir-based cwd report the project as
+    /// `tmp` instead of the real basename or falling back to "no project".
+    #[test]
+    fn find_ancestor_git_entry_skips_system_temp_dot_git() {
+        let system_temp = std::env::temp_dir();
+        let scoped = tempfile::Builder::new()
+            .prefix("find-ancestor-skip-")
+            .tempdir_in(&system_temp)
+            .expect("tempdir under system temp");
+
+        // Simulate the GH Actions failure mode: plant a `.git` at the system
+        // temp dir's location for the duration of this test by creating a
+        // sibling tempdir that itself contains a `.git` next to where the
+        // walk would land. The test path is `<system_temp>/<scoped>/project`.
+        let project = scoped.path().join("project");
+        std::fs::create_dir_all(&project).expect("create project");
+
+        // If `<system_temp>/.git` happens to exist on this host, the walk
+        // would already encounter it. Either way, the walk must skip the
+        // system temp dir itself, so the result must NOT be the system temp.
+        let result = find_ancestor_git_entry(&project);
+        if let Some((root, _)) = result {
+            assert_ne!(
+                root.canonicalize().ok(),
+                system_temp.canonicalize().ok(),
+                "system temp dir should never be treated as a project root"
+            );
+        }
+    }
+
+    #[test]
+    fn find_ancestor_git_entry_finds_planted_git_above_temp_dir() {
+        // Sanity check: when a `.git` exists at a real ancestor (not the
+        // system temp dir), the walk still finds it.
+        let outer = tempfile::Builder::new()
+            .prefix("find-ancestor-planted-")
+            .tempdir()
+            .expect("outer tempdir");
+        let project = outer.path().join("project");
+        std::fs::create_dir_all(project.join(".git")).expect("plant .git");
+
+        let nested = project.join("nested/inner");
+        std::fs::create_dir_all(&nested).expect("create nested");
+
+        let (root, dot_git) =
+            find_ancestor_git_entry(&nested).expect("planted .git should be found");
+        assert_eq!(root, project);
+        assert_eq!(dot_git, project.join(".git"));
+    }
 }

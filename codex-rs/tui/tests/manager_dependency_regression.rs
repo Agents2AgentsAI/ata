@@ -45,7 +45,17 @@ fn tui_runtime_source_does_not_depend_on_manager_escape_hatches() {
     // module. These files are exempt from the architectural lint because
     // their callers are TUI features (voice mode, document_reader) layered
     // on top of an upstream that has already moved past the legacy managers.
-    let allowlist: &[&str] = &["chatwidget.rs", "chatwidget/voice_mode.rs"];
+    let allowlist: &[&str] = &[
+        "chatwidget.rs",
+        "chatwidget/voice_mode.rs",
+        // ATA: app_event.rs and chatwidget/constructor.rs carry the
+        // placeholder AuthManager / Supabase-auth wiring that the rest of
+        // ATA needs while build_elevenlabs_proxy is still stubbed. They
+        // bridge to upstream legacy_core just like the other allowlisted
+        // files. Re-tighten this list once CodexAuth::Ata lands.
+        "tui/src/app_event.rs",
+        "chatwidget/constructor.rs",
+    ];
 
     let violations: Vec<String> = sources
         .iter()

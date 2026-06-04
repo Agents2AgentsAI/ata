@@ -401,6 +401,35 @@ jobs:
         # fragmentation). Cap at 2 jobs — slower but reliably fits.
         run: echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
 
+      # macOS runners periodically lose connectivity to
+      # chromium.googlesource.com mid-fetch, which makes the
+      # `libwebrtc -> yuv-sys -> libyuv` submodule grab in
+      # `codex-realtime-webrtc` (macOS-only) flake out cargo's own
+      # 4-attempt retry. Pre-fetch with our own outer retry+backoff so
+      # subsequent cargo invocations (chef cook, clippy, nextest) read
+      # from a warm cache instead of re-racing the network.
+      - name: Pre-fetch git dependencies (macOS, libwebrtc retry)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            echo "::group::cargo fetch attempt $attempt"
+            if cargo fetch --target ${{ matrix.target }}; then
+              echo "::endgroup::"
+              echo "cargo fetch succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if [ $attempt -lt 5 ]; then
+              SLEEP_S=$((30 * attempt))
+              echo "Attempt $attempt failed; waiting ${SLEEP_S}s..."
+              sleep $SLEEP_S
+            fi
+          done
+          echo "cargo fetch failed after 5 attempts"
+          exit 1
+
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
@@ -503,7 +532,13 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 45
+    # 75 min: Linux/macOS finish in ~12-15 min so the extra budget costs
+    # nothing there. Windows MSVC under nextest is materially slower (many
+    # individual tests >30s; the agent::control + thread_manager suites
+    # exercise heavy IO + process spawn), so a 45 min limit pushed Windows
+    # to cancellation before all retries could complete. Widen to give
+    # Windows headroom without changing per-test assertions.
+    timeout-minutes: 75
     needs: changed
     if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
     defaults:
@@ -691,6 +726,71 @@ jobs:
           # Avoid sporadic LINK LNK1318 PDB corruption failures when nextest
           # links many Windows test binaries in parallel.
           echo "CARGO_PROFILE_CI_TEST_DEBUG=0" >> "$GITHUB_ENV"
+
+      # See matching step in the lint_build job — chromium.googlesource.com
+      # flakes during the libwebrtc submodule grab on macOS. Pre-fetch with
+      # our own retry so nextest's first attempt finds everything cached.
+      - name: Pre-fetch git dependencies (macOS, libwebrtc retry)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            echo "::group::cargo fetch attempt $attempt"
+            if cargo fetch --target ${{ matrix.target }}; then
+              echo "::endgroup::"
+              echo "cargo fetch succeeded on attempt $attempt"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if [ $attempt -lt 5 ]; then
+              SLEEP_S=$((30 * attempt))
+              echo "Attempt $attempt failed; waiting ${SLEEP_S}s..."
+              sleep $SLEEP_S
+            fi
+          done
+          echo "cargo fetch failed after 5 attempts"
+          exit 1
+
+      # `cargo nextest run` only builds tests + lib targets. The Windows
+      # sandbox integration tests in `codex-core` stage the
+      # `codex-windows-sandbox-setup` and `codex-command-runner` binaries
+      # next to the test exe; those are `[[bin]]` targets in another crate
+      # and nextest does not build them automatically. Pre-build them here
+      # so `cargo_bin()` can locate them.
+      - name: Build Windows sandbox helper bins for tests
+        if: runner.os == 'Windows'
+        run: cargo build --bins -p codex-windows-sandbox --target ${{ matrix.target }} --profile ci-test
+
+      # The elevated Windows sandbox test
+      # (`windows_elevated_enforces_exact_and_glob_deny_read_policy`) ends
+      # up calling `CreateProcessWithLogonW`, which depends on the
+      # Secondary Logon Service (`seclogon`). On the runs-on Windows
+      # Server 2025 AMI that service ships set to `Manual / Stopped` for
+      # hardening, so the API returns ERROR_ACCESS_DENIED (5). Start it
+      # before tests run. Idempotent — no-op if already running.
+      - name: Ensure Secondary Logon Service is running (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $svc = Get-Service -Name seclogon -ErrorAction SilentlyContinue
+          if ($null -eq $svc) {
+            Write-Host "seclogon service is not present on this runner image"
+            exit 0
+          }
+          Write-Host "seclogon initial state: $($svc.Status) (StartType=$($svc.StartType))"
+          if ($svc.StartType -eq 'Disabled') {
+            Set-Service -Name seclogon -StartupType Manual
+            Write-Host "seclogon StartType set to Manual"
+          }
+          if ($svc.Status -ne 'Running') {
+            Start-Service -Name seclogon
+            (Get-Service -Name seclogon).WaitForStatus('Running', '00:00:30')
+            Write-Host "seclogon started"
+          } else {
+            Write-Host "seclogon already running"
+          }
+          Get-Service -Name seclogon | Format-List Name, Status, StartType
 
       - name: tests
         id: test

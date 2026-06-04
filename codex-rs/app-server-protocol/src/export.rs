@@ -2358,15 +2358,6 @@ mod tests {
             command_execution_request_approval_ts.contains("additionalPermissions"),
             true
         );
-        // Replaces a stale `skillMetadata` assertion: upstream openai/codex#15906
-        // removed `skill_metadata` from CommandExecutionRequestApprovalParams.
-        // `availableDecisions` is the other `#[experimental]` field on the
-        // same struct, so it preserves the intent of this assertion (the
-        // experimental-API exporter retains multiple experimental fields).
-        assert_eq!(
-            command_execution_request_approval_ts.contains("availableDecisions"),
-            true
-        );
 
         Ok(())
     }
@@ -2756,7 +2747,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let _guard = TempDirGuard(output_dir.clone());
         let path = output_dir.join("CommandExecParams.ts");
         let content = r#"import type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
-import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
 export type CommandExecParams = {/**
@@ -2779,12 +2769,12 @@ size?: CommandExecTerminalSize | null, /**
  */
 sandboxPolicy?: SandboxPolicy | null,
 /**
- * Optional full permissions profile for this command.
+ * Optional active permissions profile id for this command.
  *
  * Defaults to the user's configured permissions when omitted. Cannot be
  * combined with `sandboxPolicy`.
  */
-permissionProfile?: PermissionProfile | null};
+permissionProfile?: string | null};
 "#;
         fs::write(&path, content)?;
 
@@ -2797,14 +2787,7 @@ permissionProfile?: PermissionProfile | null};
         filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
 
         let filtered = fs::read_to_string(&path)?;
-        assert_eq!(
-            filtered.contains("permissionProfile?: PermissionProfile"),
-            false
-        );
-        assert_eq!(
-            filtered.contains(r#"import type { PermissionProfile } from "./PermissionProfile";"#),
-            false
-        );
+        assert_eq!(filtered.contains("permissionProfile?: string"), false);
         assert_eq!(filtered.contains("sandboxPolicy?: SandboxPolicy"), true);
         assert_eq!(
             filtered.contains(r#"import type { SandboxPolicy } from "./SandboxPolicy";"#),
@@ -2843,10 +2826,6 @@ permissionProfile?: PermissionProfile | null};
             command_execution_request_approval_json.contains("additionalPermissions"),
             false
         );
-        assert_eq!(
-            command_execution_request_approval_json.contains("skillMetadata"),
-            false
-        );
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert_eq!(
@@ -2859,7 +2838,6 @@ permissionProfile?: PermissionProfile | null};
             fs::read_to_string(output_dir.join("codex_app_server_protocol.schemas.json"))?;
         assert_eq!(bundle_json.contains("mockExperimentalField"), false);
         assert_eq!(bundle_json.contains("additionalPermissions"), false);
-        assert_eq!(bundle_json.contains("skillMetadata"), false);
         assert_eq!(bundle_json.contains("MockExperimentalMethodParams"), false);
         assert_eq!(
             bundle_json.contains("MockExperimentalMethodResponse"),
@@ -2869,7 +2847,6 @@ permissionProfile?: PermissionProfile | null};
             fs::read_to_string(output_dir.join("codex_app_server_protocol.v2.schemas.json"))?;
         assert_eq!(flat_v2_bundle_json.contains("mockExperimentalField"), false);
         assert_eq!(flat_v2_bundle_json.contains("additionalPermissions"), false);
-        assert_eq!(flat_v2_bundle_json.contains("skillMetadata"), false);
         assert_eq!(
             flat_v2_bundle_json.contains("MockExperimentalMethodParams"),
             false

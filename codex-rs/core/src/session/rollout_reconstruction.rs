@@ -290,6 +290,17 @@ impl Session {
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
                     history.drop_last_n_user_turns(rollback.num_turns);
                 }
+                RolloutItem::EventMsg(EventMsg::PresentDocument(event)) => {
+                    // Reading-view: rehydrate the in-memory document cache so a
+                    // resumed agent can call `present_reading_view(document_id)`
+                    // without title/content and serve the cached version instead
+                    // of regenerating from scratch.
+                    self.document_cache.restore_document(
+                        event.document_id.clone(),
+                        event.title.clone(),
+                        &event.content,
+                    );
+                }
                 RolloutItem::EventMsg(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::SessionMeta(_) => {}

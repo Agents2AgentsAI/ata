@@ -111,6 +111,21 @@ capture() {
   tmux capture-pane -t "$name" -p > "$out"
 }
 
+# Poll the pane for a literal substring up to N seconds. Returns 0 once it
+# appears (with the final capture saved to $out), 1 on timeout. Use this in
+# place of fixed sleeps after slash-command Enter / menu transitions, where
+# the picker can take longer than ~1.5s to render under CI load.
+poll_pane_for() {
+  local name=$1 out=$2 needle=$3 timeout=${4:-5}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    capture "$name" "$out"
+    if grep -qF -- "$needle" "$out"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+
 assert_contains() {
   local file=$1 needle=$2 desc=${3:-}
   if ! grep -qF -- "$needle" "$file"; then
@@ -170,7 +185,10 @@ tr003_a() {
   local sess=$SESSION-003a
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   local out=$WORK/003a.txt
-  capture "$sess" "$out"
+  # Include scrollback: the welcome card (banner + YOLO mode + directory lines)
+  # can scroll out of the visible pane once announcement-tip / MCP startup
+  # cells render below it. The card itself is still in the scroll buffer.
+  tmux capture-pane -t "$sess" -p -S -200 > "$out"
   assert_contains "$out" "Agents2Agents ata (v" "banner with version"
   assert_contains "$out" "YOLO mode"             "permissions line shows YOLO"
   assert_contains "$out" "directory:"            "directory line present"
@@ -247,9 +265,15 @@ tr016_a() {
   done
   # PLAN.md TR-016: /clear on an empty session is silent. The two
   # markers that appear after a real /clear (token usage line, resume
-  # hint) must NOT be present.
+  # hint) must NOT be present. The resume hint emitted by
+  # `start_fresh_session_with_summary_hint` reads
+  # "To continue this session, run ata resume <id>"; assert on that
+  # exact prefix rather than the bare "ata resume" substring so the
+  # random startup tooltip ("You can resume a previous conversation
+  # by running `ata resume`") doesn't trigger a false-positive when
+  # the tip lottery picks it after /clear redraws the banner.
   assert_not_contains "$out" "Token usage:" "no token line on empty /clear"
-  assert_not_contains "$out" "ata resume"   "no resume hint on empty /clear"
+  assert_not_contains "$out" "To continue this session" "no resume hint on empty /clear"
   # Positive sanity check: banner redrew (proves we polled past the
   # wiped-but-not-redrawn window, not just an empty pane).
   if [ ! -s "$out" ] || ! grep -qF "Agents2Agents ata" "$out"; then
@@ -298,19 +322,18 @@ tr018_b() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/model"
   send_key  "$sess" Enter
-  sleep 1.5
+  local out_step1=$WORK/018b-step1.txt
+  poll_pane_for "$sess" "$out_step1" "Select Model and Effort" || true
   send_key  "$sess" Enter  # select gpt-5.5 (highlighted)
-  sleep 1.5
   local out=$WORK/018b.txt
-  capture "$sess" "$out"
+  poll_pane_for "$sess" "$out" "Select Reasoning Level" || true
   assert_contains "$out" "Select Reasoning Level" "step 2 reasoning picker open"
   assert_contains "$out" "Medium (default)" "Medium shown as default"
   assert_contains "$out" "Low"  "Low option listed"
   assert_contains "$out" "High" "High option listed"
   send_key "$sess" Escape
-  sleep 1
   local out2=$WORK/018b-back.txt
-  capture "$sess" "$out2"
+  poll_pane_for "$sess" "$out2" "Select Model and Effort" || true
   assert_contains "$out2" "Select Model and Effort" "Esc returns to step 1"
   assert_not_contains "$out2" "Select Reasoning Level" "step 2 closed"
   kill_ata "$sess"
@@ -341,9 +364,9 @@ tr010_a() {
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/experimental"
   send_key  "$sess" Enter
-  sleep 1.5
   local out=$WORK/010a.txt
-  capture "$sess" "$out"
+  # Picker can take >1.5s on a loaded runner; poll until the title appears.
+  poll_pane_for "$sess" "$out" "Experimental features" 10 || true
   assert_contains "$out" "Experimental features"     "title shown"
   assert_contains "$out" "Terminal resize reflow"    "first toggle listed"
   assert_contains "$out" "Press space to select"     "footer hint present"
@@ -411,10 +434,19 @@ tr006_a() {
   printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":0,"text":"%s"}\n' "$marker" >> "$HOME/.ata/history.jsonl"
 
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
-  send_key "$sess" Up
-  sleep 1
+  # boot_ata returns when the welcome banner is up and no "esc to interrupt"
+  # spinner is visible. That does NOT guarantee that SessionConfigured has
+  # fired (which is what calls set_history_metadata and turns on history
+  # navigation). If we send Up before that lands, the keypress is dropped
+  # because should_handle_navigation returns false. Same root cause as
+  # TR-006 C — wait for the persistent entry count to be wired before Up.
+  sleep 2
   local out=$WORK/006a.txt
-  capture "$sess" "$out"
+  # History entries are fetched async via LookupMessageHistoryEntry; on slow
+  # CI runners a fixed 1s sleep races the round-trip. Poll for the seeded
+  # marker to land in the pane.
+  tmux send-keys -t "$sess" Up
+  poll_pane_for "$sess" "$out" "$marker" 10 || true
   assert_contains "$out" "$marker" "seeded history entry recalled via Up-arrow"
 
   # Restore caller's history.
@@ -650,10 +682,14 @@ tr_fast_a() {
   sleep 1.5
   local out=$WORK/fast.txt
   capture "$sess" "$out"
-  # /fast prints "Fast mode set to on" / "Fast mode set to off". After
-  # two toggles both lines appear in the transcript regardless of which
-  # state we started in.
-  assert_contains "$out" "Fast mode set to" "fast toggle was acknowledged"
+  # /fast toggles ATA's fast mode by flipping the underlying
+  # "fast"/"priority" service tier. With ATA's dedup routing through the
+  # ServiceTier path (when the model's catalog exposes a `fast` tier),
+  # toggles emit "Service tier set to priority"/"Service tier set to
+  # default"; without such a tier the Builtin emits "Fast mode set to
+  # on"/"Fast mode set to off". Either confirms the toggle.
+  assert_match "$out" "Fast mode set to|Service tier set to (priority|default)" \
+    "fast toggle was acknowledged"
   kill_ata "$sess"
   end_test
 }
@@ -911,17 +947,27 @@ tr006_c() {
     printf '{"session_id":"00000000-0000-0000-0000-000000000000","ts":3,"text":"%s"}\n' "$m3"
   } >> "$HOME/.ata/history.jsonl"
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; [ -n "$hist_bak" ] && mv "$hist_bak" "$HOME/.ata/history.jsonl"; return; fi
-  send_key "$sess" Up; sleep 0.4
-  local u1=$WORK/006c-up1.txt; capture "$sess" "$u1"
+  # boot_ata returns when the welcome banner is up and no "esc to interrupt"
+  # spinner is visible. That does NOT guarantee that SessionConfigured has
+  # fired (which is what calls set_history_metadata and turns on history
+  # navigation). If we send Up before that lands, the keypress is dropped
+  # because should_handle_navigation returns false. Wait for the persistent
+  # entry count to be wired before driving Up.
+  sleep 2
+  # History entries are fetched async via LookupMessageHistoryEntry; on slow
+  # CI runners a fixed 0.4s sleep races the round-trip. Use the global
+  # poll_pane_for helper to wait for each Up/Down to land in the pane.
+  tmux send-keys -t "$sess" Up
+  local u1=$WORK/006c-up1.txt; poll_pane_for "$sess" "$u1" "$m3" 10 || true
   assert_contains "$u1" "$m3" "Up #1 shows newest entry"
-  send_key "$sess" Up; sleep 0.4
-  local u2=$WORK/006c-up2.txt; capture "$sess" "$u2"
+  tmux send-keys -t "$sess" Up
+  local u2=$WORK/006c-up2.txt; poll_pane_for "$sess" "$u2" "$m2" 10 || true
   assert_contains "$u2" "$m2" "Up #2 shows middle entry"
-  send_key "$sess" Up; sleep 0.4
-  local u3=$WORK/006c-up3.txt; capture "$sess" "$u3"
+  tmux send-keys -t "$sess" Up
+  local u3=$WORK/006c-up3.txt; poll_pane_for "$sess" "$u3" "$m1" 10 || true
   assert_contains "$u3" "$m1" "Up #3 shows oldest entry"
-  send_key "$sess" Down; sleep 0.4
-  local d1=$WORK/006c-down1.txt; capture "$sess" "$d1"
+  tmux send-keys -t "$sess" Down
+  local d1=$WORK/006c-down1.txt; poll_pane_for "$sess" "$d1" "$m2" 10 || true
   assert_contains "$d1" "$m2" "Down moves forward to middle entry"
   if [ -n "$hist_bak" ]; then mv "$hist_bak" "$HOME/.ata/history.jsonl"; else rm -f "$HOME/.ata/history.jsonl"; fi
   kill_ata "$sess"
@@ -967,13 +1013,15 @@ tr017_b() {
     fail_assert "ata (non-yolo) never reached the composer"
     end_test; kill_ata "$sess"; return
   fi
-  send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
+  send_text "$sess" "/permissions"; send_key "$sess" Enter
+  local out_picker=$WORK/017b-picker.txt
+  poll_pane_for "$sess" "$out_picker" "Update Model Permissions" || true
   # Down twice to Full Access (Default → Auto-review → Full Access).
   send_key "$sess" Down; sleep 0.3
   send_key "$sess" Down; sleep 0.3
-  send_key "$sess" Enter; sleep 1
+  send_key "$sess" Enter
   local out=$WORK/017b.txt
-  capture "$sess" "$out"
+  poll_pane_for "$sess" "$out" "Enable full access?" || true
   assert_contains "$out" "Enable full access?"        "elevation confirmation header"
   assert_contains "$out" "Yes, continue anyway"       "session-only option"
   assert_contains "$out" "Yes, and don't ask again"   "persist-to-config option"

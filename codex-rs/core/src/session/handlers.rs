@@ -40,17 +40,21 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SchedulingCronRow;
+use codex_protocol::protocol::SchedulingMonitorRow;
+use codex_protocol::protocol::SchedulingTaskKind;
+use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
+use codex_protocol::protocol::ThreadSettingsAppliedEvent;
+use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::protocol::ThreadSettingsSnapshot;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 
 use crate::context_manager::is_user_turn_boundary;
-use codex_protocol::config_types::CollaborationMode;
-use codex_protocol::config_types::ModeKind;
-use codex_protocol::config_types::Settings;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
@@ -83,172 +87,6 @@ pub async fn realtime_conversation_list_voices(sess: &Session, sub_id: String) {
     .await;
 }
 
-/// ATA: gather a serializable snapshot of the session's cron / monitor
-/// registries and emit it as `EventMsg::SchedulingTasksSnapshot`. The TUI
-/// `/scheduling` panel consumes this event to render the inspection view.
-///
-/// When `Feature::Scheduling` is disabled the registries are `None` on the
-/// Session, so we emit an empty snapshot with `scheduling_enabled: false`.
-/// That distinction matters for the panel — "off" vs "on but empty" render
-/// differently.
-pub async fn list_scheduling_tasks(sess: &Session, sub_id: String) {
-    use codex_protocol::protocol::SchedulingCronRow;
-    use codex_protocol::protocol::SchedulingMonitorRow;
-    use codex_protocol::protocol::SchedulingTasksSnapshotEvent;
-
-    let scheduling_enabled = sess.cron_registry().is_some();
-
-    // Two cron sources to merge:
-    //   1. OS-level entries from the user's system crontab (persistent).
-    //   2. In-session entries from the per-session CronRegistry (die with ata).
-    // Both render in the same "Cron" section of the panel.
-    let mut cron_jobs: Vec<SchedulingCronRow> = if scheduling_enabled {
-        codex_scheduling::os_cron::list()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| {
-                let next_fire_at = codex_scheduling::os_cron::next_fire_after_now_five_field(
-                    &e.cron_expr_five_field,
-                )
-                .map(|t| t.to_rfc3339());
-                let stats = codex_scheduling::os_cron::fire_stats(&e.task_id);
-                SchedulingCronRow {
-                    task_id: e.task_id.as_str().to_string(),
-                    cron_expr: e.cron_expr_five_field,
-                    prompt: e.prompt,
-                    status: "Scheduled".to_string(),
-                    fire_count: stats.fire_count,
-                    last_fired_at: stats.last_fired_at.map(|t| t.to_rfc3339()),
-                    next_fire_at,
-                    name: e.name,
-                    // OS-cron history lives in the log file; the TUI reads it
-                    // directly on detail open.
-                    recent_events: Vec::new(),
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    if let Some(reg) = sess.cron_registry() {
-        for job in reg.list() {
-            let recent_events = job
-                .recent_fires
-                .iter()
-                .map(|r| {
-                    format!(
-                        "{}  {}",
-                        r.fired_at.with_timezone(&chrono::Local).format("%H:%M:%S"),
-                        r.outcome
-                    )
-                })
-                .collect();
-            cron_jobs.push(SchedulingCronRow {
-                task_id: job.id.as_str().to_string(),
-                cron_expr: job.cron_expr,
-                prompt: job.prompt,
-                status: format!("{:?}", job.status),
-                fire_count: job.fire_count,
-                last_fired_at: job.last_fired_at.map(|ts| ts.to_rfc3339()),
-                next_fire_at: job.next_fire_at.map(|ts| ts.to_rfc3339()),
-                name: job.name,
-                recent_events,
-            });
-        }
-    }
-
-    let monitors: Vec<SchedulingMonitorRow> = sess
-        .monitor_runtime()
-        .map(|rt| {
-            rt.registry
-                .list()
-                .into_iter()
-                .map(|m| {
-                    let tail = rt.registry.tail_snapshot(&m.id);
-                    SchedulingMonitorRow {
-                        task_id: m.id.as_str().to_string(),
-                        command: m.command,
-                        status: format!("{:?}", m.status),
-                        lines_emitted: m.lines_emitted,
-                        started_at: m.started_at.map(|ts| ts.to_rfc3339()),
-                        stopped_at: m.stopped_at.map(|ts| ts.to_rfc3339()),
-                        name: m.name,
-                        tail,
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    sess.send_event_raw(Event {
-        id: sub_id,
-        msg: EventMsg::SchedulingTasksSnapshot(SchedulingTasksSnapshotEvent {
-            cron_jobs,
-            monitors,
-            scheduling_enabled,
-        }),
-    })
-    .await;
-}
-
-/// ATA: remove a single scheduling task from the registry, aborting it first
-/// if it's still running. Then re-emit a snapshot so the panel reflects the
-/// removal without waiting for its next auto-refresh tick.
-pub async fn delete_scheduling_task(
-    sess: &Session,
-    sub_id: String,
-    task_id: String,
-    kind: codex_protocol::protocol::SchedulingTaskKind,
-) {
-    use codex_protocol::protocol::SchedulingTaskKind;
-    let id = codex_scheduling::TaskId::from(task_id);
-    let kind_str = match kind {
-        SchedulingTaskKind::Cron => "cron",
-        SchedulingTaskKind::Monitor => "monitor",
-    };
-    match kind {
-        SchedulingTaskKind::Cron => {
-            // The panel doesn't distinguish OS cron from in-session cron, so
-            // try both. Whichever owns this task_id will remove it; the other
-            // is a harmless no-op.
-            if let Some(reg) = sess.cron_registry() {
-                let _ = reg.remove(&id);
-                let _ = codex_scheduling::os_cron::delete(&id);
-            }
-        }
-        SchedulingTaskKind::Monitor => {
-            if let Some(rt) = sess.monitor_runtime() {
-                let _ = rt.abort(&id);
-                let _ = rt.registry.remove(&id);
-            }
-        }
-    }
-    tracing::info!(
-        target: "codex_scheduling::panel",
-        task_id = %id,
-        kind = kind_str,
-        "panel.row_deleted"
-    );
-    // Phase 4: durable state is now stale; rewrite so the deletion sticks
-    // across `/quit`.
-    sess.persist_scheduling_state();
-    list_scheduling_tasks(sess, sub_id).await;
-}
-
-pub async fn override_turn_context(sess: &Session, sub_id: String, updates: SessionSettingsUpdate) {
-    if let Err(err) = sess.update_settings(updates).await {
-        sess.send_event_raw(Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: err.to_string(),
-                codex_error_info: Some(CodexErrorInfo::BadRequest),
-            }),
-        })
-        .await;
-    }
-}
-
 pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     user_input_or_turn_inner(
         sess,
@@ -259,134 +97,132 @@ pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
     .await;
 }
 
+pub async fn update_thread_settings(
+    sess: &Arc<Session>,
+    sub_id: String,
+    thread_settings: ThreadSettingsOverrides,
+) {
+    let updates = thread_settings_update(sess, thread_settings).await;
+    let msg = match sess.update_settings(updates).await {
+        Ok(()) => thread_settings_applied_event(sess).await,
+        Err(err) => EventMsg::Error(ErrorEvent {
+            message: format!("invalid thread settings override: {err}"),
+            codex_error_info: Some(CodexErrorInfo::BadRequest),
+        }),
+    };
+    sess.send_event_raw(Event { id: sub_id, msg }).await;
+}
+
+async fn thread_settings_update(
+    sess: &Session,
+    thread_settings: ThreadSettingsOverrides,
+) -> SessionSettingsUpdate {
+    let ThreadSettingsOverrides {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        model,
+        effort,
+        summary,
+        service_tier,
+        collaboration_mode,
+        personality,
+    } = thread_settings;
+    let collaboration_mode = match collaboration_mode {
+        Some(collaboration_mode) => collaboration_mode,
+        None => {
+            let state = sess.state.lock().await;
+            // Model and reasoning effort live in CollaborationMode settings today, so
+            // partial thread-settings updates refresh those fields on the active mode.
+            state
+                .session_configuration
+                .collaboration_mode
+                .with_updates(model, effort, /*developer_instructions*/ None)
+        }
+    };
+    SessionSettingsUpdate {
+        cwd,
+        workspace_roots,
+        profile_workspace_roots,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        permission_profile,
+        active_permission_profile,
+        windows_sandbox_level,
+        collaboration_mode: Some(collaboration_mode),
+        reasoning_summary: summary,
+        service_tier,
+        personality,
+        ..Default::default()
+    }
+}
+
+async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
+    let snapshot = {
+        let state = sess.state.lock().await;
+        state.session_configuration.thread_config_snapshot()
+    };
+    EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
+        thread_settings: ThreadSettingsSnapshot {
+            model: snapshot.model,
+            model_provider_id: snapshot.model_provider_id,
+            service_tier: snapshot.service_tier,
+            approval_policy: snapshot.approval_policy,
+            approvals_reviewer: snapshot.approvals_reviewer,
+            permission_profile: snapshot.permission_profile,
+            active_permission_profile: snapshot.active_permission_profile,
+            cwd: snapshot.cwd,
+            reasoning_effort: snapshot.reasoning_effort,
+            reasoning_summary: snapshot.reasoning_summary,
+            personality: snapshot.personality,
+            collaboration_mode: snapshot.collaboration_mode,
+        },
+    })
+}
+
 pub(super) async fn user_input_or_turn_inner(
     sess: &Arc<Session>,
     sub_id: String,
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
 ) {
-    let (items, updates, responsesapi_client_metadata) = match op {
-        Op::UserTurn {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = collaboration_mode.or_else(|| {
-                Some(CollaborationMode {
-                    mode: ModeKind::Default,
-                    settings: Settings {
-                        model: model.clone(),
-                        reasoning_effort: effort,
-                        developer_instructions: None,
-                    },
-                })
-            });
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd: Some(cwd),
-                    approval_policy: Some(approval_policy),
-                    approvals_reviewer,
-                    sandbox_policy: Some(sandbox_policy),
-                    permission_profile,
-                    active_permission_profile: None,
-                    windows_sandbox_level: None,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                None,
-            )
-        }
-        Op::UserInputWithTurnContext {
-            cwd,
-            approval_policy,
-            approvals_reviewer,
-            sandbox_policy,
-            permission_profile,
-            active_permission_profile,
-            windows_sandbox_level,
-            model,
-            effort,
-            summary,
-            service_tier,
-            final_output_json_schema,
-            items,
-            responsesapi_client_metadata,
-            collaboration_mode,
-            personality,
-            environments,
-        } => {
-            let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                Some(collab_mode)
-            } else {
-                let state = sess.state.lock().await;
-                Some(
-                    state
-                        .session_configuration
-                        .collaboration_mode
-                        .with_updates(model, effort, /*developer_instructions*/ None),
-                )
-            };
-            (
-                items,
-                SessionSettingsUpdate {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    active_permission_profile,
-                    windows_sandbox_level,
-                    collaboration_mode,
-                    reasoning_summary: summary,
-                    service_tier,
-                    final_output_json_schema: Some(final_output_json_schema),
-                    environments,
-                    personality,
-                    app_server_client_name: None,
-                    app_server_client_version: None,
-                },
-                responsesapi_client_metadata,
-            )
-        }
-        Op::UserInput {
-            items,
-            environments,
-            final_output_json_schema,
-            responsesapi_client_metadata,
-        } => (
-            items,
-            SessionSettingsUpdate {
-                final_output_json_schema: Some(final_output_json_schema),
-                environments,
-                ..Default::default()
-            },
-            responsesapi_client_metadata,
-        ),
-        _ => unreachable!(),
+    let Op::UserInput {
+        items,
+        environments,
+        final_output_json_schema,
+        responsesapi_client_metadata,
+        thread_settings,
+    } = op
+    else {
+        unreachable!();
     };
+    let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
+    let mut updates = if emit_thread_settings_applied {
+        thread_settings_update(sess, thread_settings).await
+    } else {
+        SessionSettingsUpdate::default()
+    };
+    updates.final_output_json_schema = Some(final_output_json_schema);
+    updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.
         return;
     };
+    if emit_thread_settings_applied {
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: thread_settings_applied_event(sess).await,
+        })
+        .await;
+    }
     sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
         .await;
     let accepted_items = match sess
@@ -466,7 +302,9 @@ pub async fn inter_agent_communication(
     communication: InterAgentCommunication,
 ) {
     let trigger_turn = communication.trigger_turn;
-    sess.enqueue_mailbox_communication(communication);
+    sess.input_queue
+        .enqueue_mailbox_communication(communication)
+        .await;
     if trigger_turn {
         sess.maybe_start_turn_for_pending_work_with_sub_id(sub_id)
             .await;
@@ -626,16 +464,8 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(
-        Arc::clone(&turn_context),
-        vec![UserInput::Text {
-            text: turn_context.compact_prompt().to_string(),
-            // Compaction prompt is synthesized; no UI element ranges to preserve.
-            text_elements: Vec::new(),
-        }],
-        CompactTask,
-    )
-    .await;
+    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+        .await;
 }
 
 pub async fn thread_rollback(sess: &Arc<Session>, sub_id: String, num_turns: u32) {
@@ -770,21 +600,34 @@ pub async fn set_thread_memory_mode(sess: &Arc<Session>, sub_id: String, mode: T
     }
 }
 
-pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     let _ = sess.conversation.shutdown().await;
     sess.services
         .unified_exec_manager
         .terminate_all_processes()
         .await;
-    #[cfg(any(feature = "lsp", feature = "treesitter"))]
-    super::code_intel::shutdown_code_intel(&sess.services).await;
     let mcp_shutdown = {
         let mut manager = sess.services.mcp_connection_manager.write().await;
         manager.begin_shutdown()
     };
     mcp_shutdown.await;
     sess.guardian_review_session.shutdown().await;
+}
+
+async fn emit_thread_stop_lifecycle(sess: &Session) {
+    for contributor in sess.services.extensions.thread_lifecycle_contributors() {
+        contributor
+            .on_thread_stop(codex_extension_api::ThreadStopInput {
+                session_store: &sess.services.session_extension_data,
+                thread_store: &sess.services.thread_extension_data,
+            })
+            .await;
+    }
+}
+
+pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+    shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
     let turn_count = history
@@ -797,6 +640,8 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         i64::try_from(turn_count).unwrap_or(0),
         &[],
     );
+
+    emit_thread_stop_lifecycle(sess.as_ref()).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -839,6 +684,7 @@ pub async fn review(
         .await;
     sess.refresh_mcp_servers_if_requested(&turn_context, Some(sess.mcp_elicitation_reviewer()))
         .await;
+    #[allow(deprecated)]
     match resolve_review_request(review_request, &turn_context.cwd) {
         Ok(resolved) => {
             spawn_review_thread(
@@ -863,12 +709,118 @@ pub async fn review(
     }
 }
 
+/// Build and emit a `SchedulingTasksSnapshot` reflecting the current state of
+/// the session's cron + monitor registries. Routed through the normal event
+/// pipeline so the app-server forwards it to the TUI's `/scheduling` panel
+/// as a `SchedulingTasksSnapshotNotification`.
+pub async fn list_scheduling_tasks(sess: &Arc<Session>, sub_id: String) {
+    let snapshot = build_scheduling_snapshot(sess);
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::SchedulingTasksSnapshot(snapshot),
+    })
+    .await;
+}
+
+/// Remove one scheduling task (cron job or monitor) from the session, aborting
+/// the per-monitor tokio task first if it's still running. Always emits a
+/// fresh snapshot so the `/scheduling` panel removes the row immediately
+/// instead of waiting for the next auto-refresh tick.
+pub async fn delete_scheduling_task(
+    sess: &Arc<Session>,
+    sub_id: String,
+    task_id: String,
+    kind: SchedulingTaskKind,
+) {
+    let id: codex_scheduling::TaskId = task_id.into();
+    match kind {
+        SchedulingTaskKind::Cron => {
+            if let Some(registry) = sess.cron_registry() {
+                registry.remove(&id);
+            }
+        }
+        SchedulingTaskKind::Monitor => {
+            if let Some(runtime) = sess.monitor_runtime() {
+                runtime.abort(&id);
+                runtime.registry.remove(&id);
+            }
+        }
+    }
+    sess.persist_scheduling_state();
+    let snapshot = build_scheduling_snapshot(sess);
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::SchedulingTasksSnapshot(snapshot),
+    })
+    .await;
+}
+
+fn build_scheduling_snapshot(sess: &Arc<Session>) -> SchedulingTasksSnapshotEvent {
+    let scheduling_enabled = sess.features().enabled(codex_features::Feature::Scheduling);
+
+    let cron_jobs = sess
+        .cron_registry()
+        .map(|registry| {
+            registry
+                .list()
+                .into_iter()
+                .map(|job| SchedulingCronRow {
+                    task_id: job.id.to_string(),
+                    cron_expr: job.cron_expr,
+                    prompt: job.prompt,
+                    status: format!("{:?}", job.status),
+                    fire_count: job.fire_count,
+                    last_fired_at: job.last_fired_at.map(|t| t.to_rfc3339()),
+                    next_fire_at: job.next_fire_at.map(|t| t.to_rfc3339()),
+                    name: job.name,
+                    recent_events: job
+                        .recent_fires
+                        .iter()
+                        .map(|rec| format!("{} {}", rec.fired_at.to_rfc3339(), rec.outcome))
+                        .collect(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let monitors = sess
+        .monitor_runtime()
+        .map(|runtime| {
+            runtime
+                .registry
+                .list()
+                .into_iter()
+                .map(|task| {
+                    let tail = runtime.registry.tail_snapshot(&task.id);
+                    SchedulingMonitorRow {
+                        task_id: task.id.to_string(),
+                        command: task.command,
+                        status: format!("{:?}", task.status),
+                        lines_emitted: task.lines_emitted,
+                        started_at: task.started_at.map(|t| t.to_rfc3339()),
+                        stopped_at: task.stopped_at.map(|t| t.to_rfc3339()),
+                        name: task.name,
+                        tail,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    SchedulingTasksSnapshotEvent {
+        cron_jobs,
+        monitors,
+        scheduling_enabled,
+    }
+}
+
 pub(super) async fn submission_loop(
     sess: Arc<Session>,
     config: Arc<Config>,
     rx_sub: Receiver<Submission>,
 ) {
     // To break out of this loop, send Op::Shutdown.
+    let mut shutdown_received = false;
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         let dispatch_span = submission_dispatch_span(&sub);
@@ -913,54 +865,12 @@ pub(super) async fn submission_loop(
                     realtime_conversation_list_voices(&sess, sub.id.clone()).await;
                     false
                 }
-                Op::OverrideTurnContext {
-                    cwd,
-                    approval_policy,
-                    approvals_reviewer,
-                    sandbox_policy,
-                    permission_profile,
-                    windows_sandbox_level,
-                    model,
-                    effort,
-                    summary,
-                    service_tier,
-                    collaboration_mode,
-                    personality,
-                } => {
-                    let collaboration_mode = if let Some(collab_mode) = collaboration_mode {
-                        collab_mode
-                    } else {
-                        let state = sess.state.lock().await;
-                        state.session_configuration.collaboration_mode.with_updates(
-                            model.clone(),
-                            effort,
-                            /*developer_instructions*/ None,
-                        )
-                    };
-                    override_turn_context(
-                        &sess,
-                        sub.id.clone(),
-                        SessionSettingsUpdate {
-                            cwd,
-                            approval_policy,
-                            approvals_reviewer,
-                            sandbox_policy,
-                            permission_profile,
-                            windows_sandbox_level,
-                            collaboration_mode: Some(collaboration_mode),
-                            reasoning_summary: summary,
-                            service_tier,
-                            personality,
-                            ..Default::default()
-                        },
-                    )
-                    .await;
+                Op::UserInput { .. } => {
+                    user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
                     false
                 }
-                Op::UserInput { .. }
-                | Op::UserInputWithTurnContext { .. }
-                | Op::UserTurn { .. } => {
-                    user_input_or_turn(&sess, sub.id.clone(), sub.op).await;
+                Op::ThreadSettings { thread_settings } => {
+                    update_thread_settings(&sess, sub.id.clone(), thread_settings).await;
                     false
                 }
                 Op::InterAgentCommunication { communication } => {
@@ -1035,7 +945,6 @@ pub(super) async fn submission_loop(
                     approve_guardian_denied_action(&sess, event).await;
                     false
                 }
-                // ATA scheduling: snapshot for the `/scheduling` panel.
                 Op::ListSchedulingTasks => {
                     list_scheduling_tasks(&sess, sub.id.clone()).await;
                     false
@@ -1050,25 +959,16 @@ pub(super) async fn submission_loop(
         .instrument(dispatch_span)
         .await;
         if should_exit {
+            shutdown_received = true;
             break;
         }
     }
     // If the submission loop exits because the channel closed without an
-    // explicit shutdown op, still run process teardown for child processes
-    // owned by this session.
-    sess.services
-        .unified_exec_manager
-        .terminate_all_processes()
-        .await;
-    #[cfg(any(feature = "lsp", feature = "treesitter"))]
-    super::code_intel::shutdown_code_intel(&sess.services).await;
-    let mcp_shutdown = {
-        let mut manager = sess.services.mcp_connection_manager.write().await;
-        manager.begin_shutdown()
-    };
-    mcp_shutdown.await;
-    // Also drain cached guardian state on this implicit shutdown path.
-    sess.guardian_review_session.shutdown().await;
+    // explicit shutdown op, still run session teardown.
+    if !shutdown_received {
+        shutdown_session_runtime(&sess).await;
+        emit_thread_stop_lifecycle(sess.as_ref()).await;
+    }
     debug!("Agent loop exited");
 }
 
@@ -1109,7 +1009,9 @@ Approved action:
     }];
 
     if let Err(items) = sess.inject_response_items(items).await {
-        sess.queue_response_items_for_next_turn(items).await;
+        sess.input_queue
+            .queue_response_items_for_next_turn(items)
+            .await;
     }
 }
 

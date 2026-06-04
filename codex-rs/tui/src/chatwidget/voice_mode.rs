@@ -1277,24 +1277,18 @@ fn resolve_elevenlabs_api_key_from_config(voice_config: &VoiceModeToml) -> Optio
 }
 
 /// Build an `ElevenLabsProxy` for ATA-authenticated users.
-/// Returns `None` if not in ATA mode or if auth is unavailable.
-///
-/// ATA-Supabase-routed proxy is only enabled when the user is authenticated
-/// via the ATA Supabase flow. In the current v0.129.0 baseline the
-/// `AuthMode::Ata` variant is not yet wired through `codex-login`; this helper
-/// therefore short-circuits and falls back to direct ElevenLabs API key auth.
+/// Build the ATA-Supabase-routed ElevenLabs proxy if the user is signed in
+/// via the ATA Supabase flow (`CodexAuth::Ata`). Returns `None` for any other
+/// auth mode so that voice mode falls back to the direct ElevenLabs API key
+/// path documented in `build_elevenlabs_config`.
 fn build_elevenlabs_proxy(
-    _auth_manager: &crate::legacy_core::AuthManager,
+    auth_manager: &crate::legacy_core::AuthManager,
 ) -> Option<codex_elevenlabs::ElevenLabsProxy> {
-    return None;
-    // Restore once `AuthMode::Ata` + `CodexAuth::Ata` land in codex-login:
-    // let auth = _auth_manager.auth_cached()?;
-    // let token = match &auth {
-    //     crate::legacy_core::auth::CodexAuth::Ata(ata) => ata.access_token.clone(),
-    //     _ => return None,
-    // };
-    #[allow(unreachable_code)]
-    let token = String::new();
+    let auth = auth_manager.auth_cached()?;
+    let token = match &auth {
+        codex_login::CodexAuth::Ata(ata) => ata.access_token().to_string(),
+        _ => return None,
+    };
 
     let base_url = std::env::var("ATA_ELEVENLABS_PROXY_URL")
         .ok()
@@ -1571,6 +1565,106 @@ impl super::ChatWidget {
     pub(crate) fn update_elevenlabs_api_key(&mut self, key: String) {
         self.cached_elevenlabs_api_key = Some(key);
         self.add_info_message("ElevenLabs API key saved.".to_string(), None);
+    }
+
+    /// Apply the full voice-settings payload from `VoiceSetupView` to the
+    /// running session AND persist it to `~/.ata/config.toml`. The startup
+    /// `enabled` toggle and `tts_backend` only take effect on next session
+    /// start; the other six fields apply immediately via
+    /// `apply_voice_settings` + the cached ElevenLabs overrides.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_and_persist_voice_settings(
+        &mut self,
+        startup_enabled: bool,
+        tts_enabled: bool,
+        stt_enabled: bool,
+        elevenlabs_api_key: Option<String>,
+        language_code: Option<Option<String>>,
+        speed: Option<f64>,
+        verbosity: VoiceVerbosity,
+        tts_backend: TtsBackend,
+    ) {
+        // Live state — picks up immediately for the running session.
+        self.apply_voice_settings(tts_enabled, stt_enabled, verbosity);
+        self.update_elevenlabs_voice_settings(language_code.clone(), speed);
+        if let Some(key) = elevenlabs_api_key.clone() {
+            self.cached_elevenlabs_api_key = Some(key);
+        }
+
+        // Persist to disk. We build the edit list synchronously so we can
+        // pass it into a spawned task; the apply itself is async.
+        let codex_home = self.config.codex_home.clone();
+        let verbosity_str = match verbosity {
+            VoiceVerbosity::Concise => "concise",
+            VoiceVerbosity::Verbose => "verbose",
+        };
+        let tts_backend_str = match tts_backend {
+            TtsBackend::Elevenlabs => "elevenlabs",
+            TtsBackend::Say => "say",
+        };
+        tokio::spawn(async move {
+            use crate::legacy_core::config::edit::ConfigEdit;
+            let mut edits: Vec<ConfigEdit> = vec![
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "enabled".into()],
+                    value: startup_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "tts_enabled".into()],
+                    value: tts_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "stt_enabled".into()],
+                    value: stt_enabled.into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "verbosity".into()],
+                    value: verbosity_str.to_string().into(),
+                },
+                ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "tts_backend".into()],
+                    value: tts_backend_str.to_string().into(),
+                },
+            ];
+            if let Some(key) = elevenlabs_api_key {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "elevenlabs".into(), "api_key".into()],
+                    value: key.into(),
+                });
+            }
+            // language_code: outer Some = touched. Inner None = explicit
+            // auto-detect (clear the key); inner Some = set the language.
+            if let Some(inner) = language_code {
+                match inner {
+                    Some(lang) => edits.push(ConfigEdit::SetPath {
+                        segments: vec![
+                            "voice_mode".into(),
+                            "elevenlabs".into(),
+                            "language_code".into(),
+                        ],
+                        value: lang.into(),
+                    }),
+                    None => edits.push(ConfigEdit::ClearPath {
+                        segments: vec![
+                            "voice_mode".into(),
+                            "elevenlabs".into(),
+                            "language_code".into(),
+                        ],
+                    }),
+                }
+            }
+            if let Some(s) = speed {
+                edits.push(ConfigEdit::SetPath {
+                    segments: vec!["voice_mode".into(), "elevenlabs".into(), "speed".into()],
+                    value: s.into(),
+                });
+            }
+            if let Err(err) =
+                crate::legacy_core::config::edit::apply(codex_home.as_path(), edits).await
+            {
+                tracing::warn!(%err, "failed to persist voice_mode settings to config.toml");
+            }
+        });
     }
 
     /// Cache the last-saved ElevenLabs language and speed so re-opening
@@ -3324,7 +3418,7 @@ impl super::ChatWidget {
             } else {
                 // The `voice_input` flag from main is not yet wired in
                 // v0.129.0; submit as a plain text message for now.
-                let msg = super::UserMessage::from_text(text);
+                let msg = super::UserMessage::from(text);
                 self.submit_user_message(msg);
             }
         } else {

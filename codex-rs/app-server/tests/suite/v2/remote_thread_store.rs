@@ -75,6 +75,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         config: Arc::new(config),
         cli_overrides: Vec::new(),
         loader_overrides,
+        strict_config: false,
         cloud_requirements: CloudRequirementsLoader::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
@@ -222,15 +223,18 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
     // That is not thread persistence; keep the assertion focused on rollout,
     // session, sqlite, and other unexpected thread-store artifacts.
     entries.remove("shell_snapshots");
+    // ATA: `workspaces` is initialized by the ATA workspace-aware config
+    // loader during normal session startup. It is not thread persistence;
+    // keep the assertion focused on rollout, session, sqlite, and other
+    // unexpected thread-store artifacts.
+    entries.remove("workspaces");
     assert_eq!(
         entries,
         BTreeSet::from([
             "config.toml".to_string(),
             "installation_id".to_string(),
-            "lsp".to_string(),
             "memories".to_string(),
             "skills".to_string(),
-            "workspaces".to_string(),
         ]),
         "non-local thread persistence should not create unexpected files in codex_home"
     );

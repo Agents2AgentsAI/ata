@@ -1,5 +1,7 @@
 use codex_scheduling::TaskId;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 
@@ -7,29 +9,39 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::monitor_spec::MONITOR_WATCH_FOR_TOOL_NAME;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
 
 use super::MonitorWatchForArgs;
 use super::MonitorWatchForMatch;
 use super::MonitorWatchForResponse;
 
-pub struct MonitorWatchForHandler;
+pub struct MonitorWatchForHandler {
+    pub(crate) spec: ToolSpec,
+}
 
-impl ToolHandler for MonitorWatchForHandler {
-    type Output = FunctionToolOutput;
+impl MonitorWatchForHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MonitorWatchForHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(MONITOR_WATCH_FOR_TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session, payload, ..
         } = invocation;
@@ -243,11 +255,18 @@ fn strip_stream_prefix(tail_line: &str) -> (&str, &str) {
     }
 }
 
-fn ok_response(response: MonitorWatchForResponse) -> Result<FunctionToolOutput, FunctionCallError> {
+fn ok_response(
+    response: MonitorWatchForResponse,
+) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
     let body = serde_json::to_string(&response).map_err(|err| {
         FunctionCallError::RespondToModel(format!(
             "monitor_watch_for response serialization failed: {err}"
         ))
     })?;
-    Ok(FunctionToolOutput::from_text(body, Some(true)))
+    Ok(boxed_tool_output(FunctionToolOutput::from_text(
+        body,
+        Some(true),
+    )))
 }
+
+impl CoreToolRuntime for MonitorWatchForHandler {}

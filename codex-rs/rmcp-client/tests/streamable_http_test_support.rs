@@ -68,7 +68,7 @@ fn init_params() -> InitializeRequestParams {
         client_info: Implementation {
             name: "codex-test".into(),
             version: "0.0.0-test".into(),
-            title: Some("Codex rmcp recovery test".into()),
+            title: Some("Ata rmcp recovery test".into()),
             description: None,
             icons: None,
             website_url: None,

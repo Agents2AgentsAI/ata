@@ -1,3 +1,8 @@
+// Wired into session/mod.rs on origin/main via `Feature::CodexGitCommit` and
+// `Config.commit_attribution`. Both were dropped by the v0.134 upstream merge;
+// allow dead code until the field + call site can be restored in a follow-up.
+#![allow(dead_code)]
+
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 
 fn build_commit_message_trailer(config_attribution: Option<&str>) -> Option<String> {

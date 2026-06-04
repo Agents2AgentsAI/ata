@@ -47,6 +47,7 @@ impl App {
 fn send_world_writable_scan_failed(tx: &AppEventSender) {
     tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
         preset: None,
+        profile_selection: None,
         sample_paths: Vec::new(),
         extra_count: 0usize,
         failed_scan: true,
@@ -54,6 +55,9 @@ fn send_world_writable_scan_failed(tx: &AppEventSender) {
 }
 
 pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
+    // ATA accepts Esc, Ctrl+C, and Ctrl+D for returning from a side
+    // conversation. Pre-merge ATA bound Esc; v0.134 upstream restricted to
+    // Ctrl+C/Ctrl+D only, which broke the universal "back" UX. Restored.
     match key_event {
         KeyEvent {
             code: KeyCode::Esc,
@@ -65,10 +69,9 @@ pub(super) fn side_return_shortcut_matches(key_event: KeyEvent) -> bool {
             modifiers,
             kind: KeyEventKind::Press,
             ..
-        } if modifiers.contains(KeyModifiers::CONTROL)
-            && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d')) =>
-        {
-            true
+        } => {
+            modifiers.contains(KeyModifiers::CONTROL)
+                && (c.eq_ignore_ascii_case(&'c') || c.eq_ignore_ascii_case(&'d'))
         }
         _ => false,
     }

@@ -74,7 +74,6 @@
               ]
             },
             "mime_type": {
-              "description": "MIME type for the file. Stored internally for provider adapters (Anthropic, Gemini) that need it when converting to their native format. Skipped during serialization because the OpenAI Responses API does not accept this field on `input_file` blocks; the MIME type is already embedded in the `file_data` data-URI.",
               "type": [
                 "string",
                 "null"
@@ -123,7 +122,6 @@
               ]
             },
             "mime_type": {
-              "description": "MIME type for provider adapters or tools that need a type hint. Not part of the stable public wire shape.",
               "type": [
                 "string",
                 "null"
@@ -214,13 +212,31 @@
           ],
           "title": "InputImageFunctionCallOutputContentItem",
           "type": "object"
+        },
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "encrypted_content"
+              ],
+              "title": "EncryptedContentFunctionCallOutputContentItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "EncryptedContentFunctionCallOutputContentItem",
+          "type": "object"
         }
       ]
     },
     "ImageDetail": {
       "enum": [
-        "auto",
-        "low",
         "high",
         "original"
       ],
@@ -804,6 +820,22 @@
             "type"
           ],
           "title": "CompactionResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "compaction_trigger"
+              ],
+              "title": "CompactionTriggerResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "CompactionTriggerResponseItem",
           "type": "object"
         },
         {

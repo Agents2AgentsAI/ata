@@ -100,6 +100,7 @@ impl FileSystemSandboxRunner {
             cwd: cwd.clone(),
             env: self.helper_env.clone(),
             additional_permissions: None,
+            workspace_kb_root: None,
         };
         sandbox_manager
             .transform(SandboxTransformRequest {

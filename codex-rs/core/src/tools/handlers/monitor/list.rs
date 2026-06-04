@@ -1,30 +1,42 @@
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::monitor_spec::MONITOR_LIST_TOOL_NAME;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
 
 use super::MonitorListResponse;
 use super::MonitorSummary;
 
-pub struct MonitorListHandler;
+pub struct MonitorListHandler {
+    pub(crate) spec: ToolSpec,
+}
 
-impl ToolHandler for MonitorListHandler {
-    type Output = FunctionToolOutput;
+impl MonitorListHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for MonitorListHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(MONITOR_LIST_TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session, payload, ..
         } = invocation;
@@ -64,6 +76,11 @@ impl ToolHandler for MonitorListHandler {
                 "monitor_list response serialization failed: {err}"
             ))
         })?;
-        Ok(FunctionToolOutput::from_text(body, Some(true)))
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
+            body,
+            Some(true),
+        )))
     }
 }
+
+impl CoreToolRuntime for MonitorListHandler {}

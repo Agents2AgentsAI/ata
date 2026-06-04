@@ -32,7 +32,6 @@ use serde_json::Value;
 use serde_json::from_slice;
 use serde_json::json;
 use tokio::sync::oneshot;
-use tokio::time::Duration;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -104,6 +103,7 @@ async fn submit_user_input(codex: &CodexThread, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap_or_else(|err| panic!("submit user input: {err}"));
@@ -113,24 +113,29 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.config.cwd.to_path_buf(),
-            approval_policy: AskForApproval::Never,
-            approvals_reviewer: None,
-            sandbox_policy,
-            permission_profile,
-            model: test.session_configured.model.clone(),
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await
         .unwrap_or_else(|err| panic!("submit user turn: {err}"));
@@ -227,7 +232,6 @@ fn assert_two_responses_input_snapshot(snapshot_name: &str, requests: &[Vec<u8>]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "TODO(aibrahim): flaky"]
 async fn injected_user_input_triggers_follow_up_request_with_deltas() {
-    let _follow_up_timeout = Duration::from_secs(30);
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
 
     let first_chunks = vec![
@@ -287,6 +291,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
@@ -305,13 +310,10 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            thread_settings: Default::default(),
         })
         .await
         .unwrap();
-
-    // Give the submission loop time to enqueue this input onto the active turn
-    // before we release the gated completion event.
-    tokio::time::sleep(Duration::from_millis(100)).await;
 
     let _ = gate_completed_tx.send(());
 

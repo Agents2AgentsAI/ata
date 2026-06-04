@@ -17,8 +17,6 @@ use crate::state::MultiRootState;
 use crate::state::SessionServices;
 #[cfg(any(feature = "lsp", feature = "treesitter"))]
 use codex_features::Feature;
-#[cfg(any(feature = "lsp", feature = "treesitter"))]
-use codex_tools::ToolsConfig;
 
 // ---------------------------------------------------------------------------
 // Config builders
@@ -537,11 +535,13 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                             result = sess.services.unified_exec_manager.exec_command(
                                 crate::unified_exec::ExecCommandRequest {
                                     command: command.clone(),
+                                    shell_type: sess.services.user_shell.shell_type.clone(),
                                     hook_command,
                                     process_id,
                                     yield_time_ms: 10_000,
                                     max_output_tokens: None,
                                     cwd: turn_environment.cwd.clone(),
+                                    sandbox_cwd: turn_environment.cwd.clone(),
                                     environment: Arc::clone(&turn_environment.environment),
                                     network: turn_context.network.clone(),
                                     tty: false,
@@ -577,6 +577,7 @@ pub(super) async fn setup_lsp_install_callback(sess: &Arc<super::Session>) {
                                         input: "",
                                         yield_time_ms: 10_000,
                                         max_output_tokens: None,
+                                        truncation_policy: turn_context.truncation_policy,
                                     }
                                 ) => poll
                             };
@@ -615,16 +616,6 @@ pub(super) async fn shutdown_code_intel(services: &SessionServices) {
 // ---------------------------------------------------------------------------
 // Tool-router injection
 // ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-#[cfg(any(feature = "lsp", feature = "treesitter"))]
-pub(super) fn inject_multi_root_state(
-    _tools_config: &mut ToolsConfig,
-    _services: &SessionServices,
-) {
-    // multi_root_state is now accessed directly from SessionServices
-    // rather than being stored on ToolsConfig.
-}
 
 #[cfg(all(test, feature = "lsp"))]
 mod tests {

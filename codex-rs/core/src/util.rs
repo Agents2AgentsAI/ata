@@ -2,11 +2,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codex_protocol::ThreadId;
 use rand::Rng;
 use tracing::error;
-
-use codex_shell_command::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
@@ -94,6 +91,9 @@ pub fn backoff(attempt: u64) -> Duration {
 
 const REDACTED_SECRET: &str = "[REDACTED_SECRET]";
 
+/// ATA: redact secrets from an error-response body before logging. Used by
+/// `crate::auth::*` to keep tokens and API keys out of log output when an
+/// OAuth provider returns a non-2xx response.
 pub(crate) fn redact_error_body(body: &str) -> String {
     let redacted_json = serde_json::from_str::<serde_json::Value>(body)
         .map(|mut value| {
@@ -184,22 +184,6 @@ pub fn normalize_thread_name(name: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
-}
-
-pub fn resume_command(thread_name: Option<&str>, thread_id: Option<ThreadId>) -> Option<String> {
-    let resume_target = thread_name
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .or_else(|| thread_id.map(|thread_id| thread_id.to_string()));
-    resume_target.map(|target| {
-        let needs_double_dash = target.starts_with('-');
-        let escaped = shlex_join(&[target]);
-        if needs_double_dash {
-            format!("ata resume -- {escaped}")
-        } else {
-            format!("ata resume {escaped}")
-        }
-    })
 }
 
 #[cfg(test)]

@@ -1782,6 +1782,7 @@ mod tests {
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            strict_config: false,
         })
         .await
         .unwrap();

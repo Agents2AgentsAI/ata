@@ -2,10 +2,12 @@ mod shared;
 
 mod account;
 mod apps;
+mod attestation;
 mod collaboration_mode;
 mod command_exec;
 mod config;
 mod document_reader;
+mod environment;
 mod experimental_feature;
 mod feedback;
 mod fs;
@@ -28,10 +30,12 @@ mod windows_sandbox;
 
 pub use account::*;
 pub use apps::*;
+pub use attestation::*;
 pub use collaboration_mode::*;
 pub use command_exec::*;
 pub use config::*;
 pub use document_reader::*;
+pub use environment::*;
 pub use experimental_feature::*;
 pub use feedback::*;
 pub use fs::*;

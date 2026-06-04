@@ -16,7 +16,6 @@ workspace = true
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 codex-protocol = { workspace = true }
-codex-v8-shim = { workspace = true }
 deno_core_icudata = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

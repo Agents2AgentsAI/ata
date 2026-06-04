@@ -12,7 +12,7 @@ Expects `/usr/bin/sandbox-exec` to be present.
 
 When using the workspace-write sandbox policy, the Seatbelt profile allows
 writes under the configured writable roots while keeping `.git` (directory or
-pointer file), the resolved `gitdir:` target, and `.ata` read-only.
+pointer file), the resolved `gitdir:` target, and `.codex` read-only.
 
 Network access and filesystem read/write roots are controlled by
 `SandboxPolicy`. Seatbelt consumes the resolved policy and enforces it.
@@ -22,19 +22,7 @@ Seatbelt also keeps the legacy default preferences read access
 
 ### Linux
 
-Expects the binary containing `codex-core` to run the equivalent of `ata sandbox linux` (legacy alias: `codex debug landlock`) when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
-
-Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on Linux.
-They can continue to use the legacy Landlock path when the split filesystem
-policy is sandbox-equivalent to the legacy model after `cwd` resolution.
-
-Split filesystem policies that need direct `FileSystemSandboxPolicy`
-enforcement, such as read-only or denied carveouts under a broader writable
-root, automatically route through bubblewrap. The legacy Landlock path is used
-only when the split filesystem policy round-trips through the legacy
-`SandboxPolicy` model without changing semantics. That includes overlapping
-cases like `/repo = write`, `/repo/a = none`, `/repo/a/b = write`, where the
-more specific writable child must reopen under a denied parent.
+Expects the binary containing `codex-core` to run the equivalent of `codex sandbox` when `arg0` is `codex-linux-sandbox`. See the `codex-arg0` crate for details.
 
 Legacy `SandboxPolicy` / `sandbox_mode` configs are still supported on Linux.
 They can continue to use the legacy Landlock path when the split filesystem

@@ -7,7 +7,6 @@ use tokio::time::Instant;
 use tokio::time::Sleep;
 
 use super::UnifiedExecContext;
-use super::UnifiedExecProcessManager;
 use super::process::UnifiedExecProcess;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
 use crate::session::session::Session;
@@ -107,7 +106,6 @@ pub(crate) fn start_streaming_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_exit_watcher(
     process: Arc<UnifiedExecProcess>,
-    _manager: UnifiedExecProcessManager,
     session_ref: Arc<Session>,
     turn_ref: Arc<TurnContext>,
     call_id: String,

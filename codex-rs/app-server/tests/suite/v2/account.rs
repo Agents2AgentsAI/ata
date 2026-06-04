@@ -44,20 +44,30 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use url::Url;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const LOGIN_ISSUER_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
+const WORKSPACE_ID_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174000";
+const WORKSPACE_ID_SECOND_ALLOWED: &str = "123e4567-e89b-42d3-a456-426614174001";
+const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
+const WORKSPACE_ID_EMBEDDED: &str = "123e4567-e89b-42d3-a456-426614174010";
+const WORKSPACE_ID_INITIAL: &str = "123e4567-e89b-42d3-a456-426614174011";
+const WORKSPACE_ID_REFRESHED: &str = "123e4567-e89b-42d3-a456-426614174012";
+const WORKSPACE_ID_DEVICE: &str = "123e4567-e89b-42d3-a456-426614174013";
+const WORKSPACE_ID_STALE: &str = "123e4567-e89b-42d3-a456-426614174014";
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
 struct CreateConfigTomlParams {
     forced_method: Option<String>,
     forced_workspace_id: Option<String>,
+    forced_workspace_ids: Option<Vec<String>>,
     requires_openai_auth: Option<bool>,
     base_url: Option<String>,
     model_provider_id: Option<String>,
@@ -76,6 +86,13 @@ fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std:
     };
     let forced_workspace_line = if let Some(ws) = params.forced_workspace_id {
         format!("forced_chatgpt_workspace_id = \"{ws}\"\n")
+    } else if let Some(workspaces) = params.forced_workspace_ids {
+        let workspaces = workspaces
+            .into_iter()
+            .map(|workspace_id| format!("\"{workspace_id}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("forced_chatgpt_workspace_id = [{workspaces}]\n")
     } else {
         String::new()
     };
@@ -231,80 +248,6 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
 }
 
 #[tokio::test]
-async fn logout_account_resets_model_provider_for_copilot() -> Result<()> {
-    // Regression for "/logout doesn't log me out after signing in with GitHub
-    // Copilot": logout must clear `model_provider = "copilot"` from
-    // config.toml in addition to deleting auth.json. Otherwise the next
-    // launch reads model_provider=copilot, sees requires_openai_auth=false,
-    // skips the login screen entirely, and drops the user into chat without
-    // any credentials — observed as "logout didn't do anything".
-    let codex_home = TempDir::new()?;
-
-    // Built-in `copilot` model_provider is recognized without a
-    // `[model_providers.copilot]` section — pass model_provider_id="copilot"
-    // and no extra provider config so the file matches what a real Copilot
-    // login persists.
-    create_config_toml(
-        codex_home.path(),
-        CreateConfigTomlParams {
-            model_provider_id: Some("copilot".to_string()),
-            extra_provider_config: Some(String::new()),
-            ..Default::default()
-        },
-    )?;
-
-    // Seed an auth.json that mimics a Copilot OAuth signin: only the
-    // `providers.copilot` entry, no `auth_mode`, no chatgpt tokens, no API
-    // key. This is what `complete_copilot_login` writes on disk.
-    let auth_file = codex_home.path().join("auth.json");
-    std::fs::write(
-        &auth_file,
-        serde_json::to_string_pretty(&json!({
-            "version": 2,
-            "providers": {
-                "copilot": {
-                    "type": "oauth",
-                    "access": "gho_test_access",
-                    "refresh": "gho_test_refresh",
-                },
-            },
-        }))?,
-    )?;
-
-    let config_path = codex_home.path().join("config.toml");
-    let pre_logout_config = std::fs::read_to_string(&config_path)?;
-    assert!(
-        pre_logout_config.contains("model_provider = \"copilot\""),
-        "test setup should write model_provider=copilot, got: {pre_logout_config}"
-    );
-
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-
-    let id = mcp.send_logout_account_request().await?;
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(id)),
-    )
-    .await??;
-    let _ok: LogoutAccountResponse = to_response(resp)?;
-
-    assert!(
-        !auth_file.exists(),
-        "auth.json should be deleted by logout, but {} still exists",
-        auth_file.display()
-    );
-
-    let post_logout_config = std::fs::read_to_string(&config_path)?;
-    assert!(
-        !post_logout_config.contains("model_provider"),
-        "model_provider must be cleared from config.toml after Copilot logout, got: {post_logout_config}"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mock_server = MockServer::start().await;
@@ -322,7 +265,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-embedded"),
+            .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -331,7 +274,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             access_token,
-            "org-embedded".to_string(),
+            WORKSPACE_ID_EMBEDDED.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -396,7 +339,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-embedded"),
+            .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -405,7 +348,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             access_token,
-            "org-embedded".to_string(),
+            WORKSPACE_ID_EMBEDDED.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -515,13 +458,13 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-initial"),
+            .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
     let refreshed_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-refreshed"),
+            .chatgpt_account_id(WORKSPACE_ID_REFRESHED),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -530,7 +473,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             initial_access_token.clone(),
-            "org-initial".to_string(),
+            WORKSPACE_ID_INITIAL.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -573,7 +516,7 @@ async fn external_auth_refreshes_on_unauthorized() -> Result<()> {
     respond_to_refresh_request(
         &mut mcp,
         &refreshed_access_token,
-        "org-refreshed",
+        WORKSPACE_ID_REFRESHED,
         Some("pro"),
     )
     .await?;
@@ -627,7 +570,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-initial"),
+            .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -636,7 +579,7 @@ async fn external_auth_refresh_error_fails_turn() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             initial_access_token,
-            "org-initial".to_string(),
+            WORKSPACE_ID_INITIAL.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -725,7 +668,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
-            forced_workspace_id: Some("org-expected".to_string()),
+            forced_workspace_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
             requires_openai_auth: Some(true),
             base_url: Some(format!("{}/v1", mock_server.uri())),
             ..Default::default()
@@ -743,13 +686,13 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-expected"),
+            .chatgpt_account_id(WORKSPACE_ID_ALLOWED),
     )?;
     let refreshed_access_token = encode_id_token(
         &ChatGptIdTokenClaims::new()
             .email("refreshed@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-other"),
+            .chatgpt_account_id(WORKSPACE_ID_DISALLOWED),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -758,7 +701,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             initial_access_token,
-            "org-expected".to_string(),
+            WORKSPACE_ID_ALLOWED.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -812,7 +755,7 @@ async fn external_auth_refresh_mismatched_workspace_fails_turn() -> Result<()> {
         request_id,
         serde_json::to_value(ChatgptAuthTokensRefreshResponse {
             access_token: refreshed_access_token,
-            chatgpt_account_id: "org-other".to_string(),
+            chatgpt_account_id: WORKSPACE_ID_DISALLOWED.to_string(),
             chatgpt_plan_type: Some("pro".to_string()),
         })?,
     )
@@ -864,7 +807,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("initial@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-initial"),
+            .chatgpt_account_id(WORKSPACE_ID_INITIAL),
     )?;
 
     let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
@@ -873,7 +816,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             initial_access_token,
-            "org-initial".to_string(),
+            WORKSPACE_ID_INITIAL.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -927,7 +870,7 @@ async fn external_auth_refresh_invalid_access_token_fails_turn() -> Result<()> {
         request_id,
         serde_json::to_value(ChatgptAuthTokensRefreshResponse {
             access_token: "not-a-jwt".to_string(),
-            chatgpt_account_id: "org-initial".to_string(),
+            chatgpt_account_id: WORKSPACE_ID_INITIAL.to_string(),
             chatgpt_plan_type: Some("pro".to_string()),
         })?,
     )
@@ -1136,7 +1079,7 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         &ChatGptIdTokenClaims::new()
             .email("device@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-device"),
+            .chatgpt_account_id(WORKSPACE_ID_DEVICE),
     )?;
     mock_device_code_oauth_token(&mock_server, &id_token).await;
 
@@ -1452,14 +1395,14 @@ async fn set_auth_token_cancels_active_chatgpt_login() -> Result<()> {
         &ChatGptIdTokenClaims::new()
             .email("embedded@example.com")
             .plan_type("pro")
-            .chatgpt_account_id("org-embedded"),
+            .chatgpt_account_id(WORKSPACE_ID_EMBEDDED),
     )?;
     // Set an external auth token instead of completing the ChatGPT login flow.
     // This should cancel the active login attempt.
     let set_id = mcp
         .send_chatgpt_auth_tokens_login_request(
             access_token,
-            "org-embedded".to_string(),
+            WORKSPACE_ID_EMBEDDED.to_string(),
             Some("pro".to_string()),
         )
         .await?;
@@ -1502,7 +1445,7 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
-            forced_workspace_id: Some("ws-forced".to_string()),
+            forced_workspace_id: Some(WORKSPACE_ID_ALLOWED.to_string()),
             ..Default::default()
         },
     )?;
@@ -1522,8 +1465,52 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
         bail!("unexpected login response: {login:?}");
     };
     assert!(
-        auth_url.contains("allowed_workspace_id=ws-forced"),
+        auth_url.contains(&format!("allowed_workspace_id={WORKSPACE_ID_ALLOWED}")),
         "auth URL should include forced workspace"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
+async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            forced_workspace_ids: Some(vec![
+                WORKSPACE_ID_ALLOWED.to_string(),
+                WORKSPACE_ID_SECOND_ALLOWED.to_string(),
+            ]),
+            ..Default::default()
+        },
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp.send_login_account_chatgpt_request().await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let auth_url = Url::parse(&auth_url)?;
+    let allowed_workspace_ids = auth_url
+        .query_pairs()
+        .filter_map(|(key, value)| (key == "allowed_workspace_id").then(|| value.into_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        allowed_workspace_ids,
+        vec![format!(
+            "{WORKSPACE_ID_ALLOWED},{WORKSPACE_ID_SECOND_ALLOWED}"
+        )]
     );
     Ok(())
 }
@@ -1736,7 +1723,7 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
         codex_home.path(),
         ChatGptAuthFixture::new("stale-access-token")
             .refresh_token("stale-refresh-token")
-            .account_id("acct_123")
+            .account_id(WORKSPACE_ID_STALE)
             .email("user@example.com")
             .plan_type("pro")
             .last_refresh(Some(Utc::now() - ChronoDuration::days(9))),

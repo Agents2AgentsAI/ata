@@ -140,6 +140,34 @@ impl BottomPane {
         }
     }
 
+    /// Deliver a fresh `SchedulingTasksSnapshot` to the active `/scheduling`
+    /// view if one is open. Non-scheduling views ignore the snapshot via the
+    /// default trait impl.
+    pub(crate) fn handle_scheduling_snapshot(
+        &mut self,
+        snapshot: codex_protocol::protocol::SchedulingTasksSnapshotEvent,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_scheduling_snapshot(snapshot);
+            self.request_redraw();
+        }
+    }
+
+    /// Deliver one streamed monitor stdout/stderr line to the active
+    /// `/scheduling` view. Non-scheduling views ignore it via the default
+    /// trait impl.
+    pub(crate) fn handle_scheduling_monitor_output_delta(
+        &mut self,
+        task_id: &str,
+        stream: &str,
+        line: &str,
+    ) {
+        if let Some(view) = self.view_stack.last_mut() {
+            view.handle_scheduling_monitor_output_delta(task_id, stream, line);
+            self.request_redraw();
+        }
+    }
+
     /// Return reading view context for voice mode integration.
     ///
     /// When the active view is a document reader, this extracts the current
@@ -188,20 +216,6 @@ impl BottomPane {
             view.set_voice_tts_paused(paused);
             self.request_redraw();
         }
-    }
-
-    /// Query the TTS paused state of the active document reader.
-    #[cfg(all(test, not(target_os = "linux")))]
-    pub(crate) fn is_document_reader_tts_paused(&self) -> bool {
-        self.view_stack
-            .last()
-            .is_some_and(|v| v.voice_tts_paused())
-    }
-
-    /// Query the voice status text of the active document reader.
-    #[cfg(all(test, not(target_os = "linux")))]
-    pub(crate) fn document_reader_voice_status(&self) -> Option<String> {
-        self.view_stack.last().and_then(|v| v.voice_status())
     }
 
     /// Mark a section as pending a voice question answer (same inline

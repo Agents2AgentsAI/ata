@@ -18,12 +18,13 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::pdfium_downloader::ensure_pdfium_available;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
 use crate::tools::url_downloader::cache_entry_dir;
 use crate::tools::url_validation::normalize_url_for_cache;
+use codex_tools::ToolExecutor;
 
 const TOOL_NAME: &str = "crop_figure";
 
@@ -103,7 +104,15 @@ pub(crate) static CROP_FIGURE_TOOL: LazyLock<ToolSpec> = LazyLock::new(|| {
     })
 });
 
-pub struct CropFigureHandler;
+pub struct CropFigureHandler {
+    pub(crate) spec: ToolSpec,
+}
+
+impl CropFigureHandler {
+    pub(crate) fn new(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+}
 
 #[derive(Deserialize)]
 struct CropFigureArgs {
@@ -263,18 +272,20 @@ async fn next_figure_number(assets_dir: &std::path::Path) -> u32 {
     count + 1
 }
 
-impl ToolHandler for CropFigureHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for CropFigureHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain(TOOL_NAME)
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -426,9 +437,11 @@ impl ToolHandler for CropFigureHandler {
             "caption": args.caption,
         });
 
-        Ok(FunctionToolOutput::from_text(
+        Ok(boxed_tool_output(FunctionToolOutput::from_text(
             result.to_string(),
             Some(true),
-        ))
+        )))
     }
 }
+
+impl CoreToolRuntime for CropFigureHandler {}

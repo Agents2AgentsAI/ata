@@ -38,7 +38,7 @@ where
     let params = ExecParams {
         command: command.into_iter().map(Into::into).collect(),
         cwd: cwd.clone(),
-        expiration: 1000.into(),
+        expiration: 30_000.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,

@@ -9,6 +9,8 @@ pub(crate) mod patents;
 
 pub(crate) mod zotero;
 
+pub(crate) mod github;
+
 use crate::types::Paper;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

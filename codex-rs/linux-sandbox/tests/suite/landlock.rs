@@ -206,9 +206,6 @@ fn is_bwrap_unavailable_output(output: &codex_protocol::exec_output::ExecToolCal
             && (output.stderr.text.contains("Operation not permitted")
                 || output.stderr.text.contains("Permission denied")
                 || output.stderr.text.contains("Invalid argument")))
-        || (output.stderr.text.contains("Creating new namespace failed")
-            && (output.stderr.text.contains("Operation not permitted")
-                || output.stderr.text.contains("Permission denied")))
 }
 
 async fn should_skip_bwrap_tests() -> bool {
@@ -808,7 +805,7 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(
@@ -876,7 +873,7 @@ async fn sandbox_reenables_writable_subpaths_under_unreadable_parents() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
         FileSystemSandboxEntry {
             path: FileSystemPath::Path {
@@ -934,7 +931,7 @@ async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
             path: FileSystemPath::Path {
                 path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
             },
-            access: FileSystemAccessMode::None,
+            access: FileSystemAccessMode::Deny,
         },
     ]);
     let permission_profile = PermissionProfile::from_runtime_permissions(

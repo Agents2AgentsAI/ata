@@ -25,23 +25,28 @@ use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 
 pub(crate) struct DataBridgeHandler {
     tool_name: ToolName,
+    spec: ToolSpec,
     toolkit: Arc<codex_data_tools::DataToolkit>,
 }
 
 impl DataBridgeHandler {
     pub(crate) fn new(
         tool_name: impl Into<String>,
+        spec: ToolSpec,
         toolkit: Arc<codex_data_tools::DataToolkit>,
     ) -> Self {
         Self {
             tool_name: ToolName::plain(tool_name.into()),
+            spec,
             toolkit,
         }
     }
@@ -166,18 +171,20 @@ impl DataBridgeHandler {
     }
 }
 
-impl ToolHandler for DataBridgeHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for DataBridgeHandler {
     fn tool_name(&self) -> ToolName {
         self.tool_name.clone()
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
+    fn spec(&self) -> ToolSpec {
+        self.spec.clone()
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             tool_name, payload, ..
         } = invocation;
@@ -191,10 +198,14 @@ impl ToolHandler for DataBridgeHandler {
             }
         };
 
-        self.execute_native_tool(tool_name.name.as_str(), arguments.as_str())
-            .await
+        let output = self
+            .execute_native_tool(tool_name.name.as_str(), arguments.as_str())
+            .await?;
+        Ok(boxed_tool_output(output))
     }
 }
+
+impl CoreToolRuntime for DataBridgeHandler {}
 
 pub(crate) fn build_data_config(
     toml: Option<&DataToolsToml>,
@@ -348,6 +359,18 @@ mod tests {
 
         let handler = DataBridgeHandler::new(
             "dataset_search",
+            ToolSpec::Function(codex_tools::ResponsesApiTool {
+                name: "dataset_search".to_string(),
+                description: String::new(),
+                strict: false,
+                parameters: codex_tools::JsonSchema::object(
+                    Default::default(),
+                    None,
+                    Some(codex_tools::AdditionalProperties::Boolean(false)),
+                ),
+                output_schema: None,
+                defer_loading: None,
+            }),
             Arc::new(codex_data_tools::DataToolkit::new(
                 build_reqwest_client(),
                 config,

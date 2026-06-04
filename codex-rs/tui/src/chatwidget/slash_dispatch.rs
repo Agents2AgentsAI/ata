@@ -9,7 +9,10 @@ use super::goal_validation::GoalObjectiveValidationSource;
 use super::*;
 use crate::app_event::ThreadGoalSetMode;
 use crate::bottom_pane::prompt_args::parse_slash_name;
-use crate::bottom_pane::slash_commands;
+use crate::bottom_pane::slash_commands::BuiltinCommandFlags;
+use crate::bottom_pane::slash_commands::ServiceTierCommand;
+use crate::bottom_pane::slash_commands::SlashCommandItem;
+use crate::bottom_pane::slash_commands::find_slash_command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -27,8 +30,6 @@ struct PreparedSlashCommandArgs {
 }
 
 const SIDE_STARTING_CONTEXT_LABEL: &str = "Side starting...";
-const SIDE_REVIEW_UNAVAILABLE_MESSAGE: &str =
-    "'/side' is unavailable while code review is running.";
 const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str = "Press Esc to return to the main thread first.";
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
@@ -45,6 +46,20 @@ impl ChatWidget {
         if cmd == SlashCommand::Goal {
             self.bottom_pane.drain_pending_submission_state();
         }
+        self.bottom_pane.record_pending_slash_command_history();
+    }
+
+    pub(super) fn handle_service_tier_command_dispatch(&mut self, command: ServiceTierCommand) {
+        if self.active_side_conversation {
+            self.add_error_message(format!(
+                "'/{}' is unavailable in side conversations. {SIDE_SLASH_COMMAND_UNAVAILABLE_HINT}",
+                command.name
+            ));
+            self.bottom_pane.drain_pending_submission_state();
+            self.bottom_pane.record_pending_slash_command_history();
+            return;
+        }
+        self.toggle_service_tier_from_ui(command);
         self.bottom_pane.record_pending_slash_command_history();
     }
 
@@ -72,7 +87,7 @@ impl ChatWidget {
             return false;
         }
         if let Some(mask) = collaboration_modes::plan_mask(self.model_catalog.as_ref()) {
-            self.set_collaboration_mask(mask);
+            self.set_collaboration_mask_from_user_action(mask);
             true
         } else {
             self.add_info_message(
@@ -96,9 +111,12 @@ impl ChatWidget {
         });
     }
 
-    fn request_empty_side_conversation(&mut self) {
+    fn request_empty_side_conversation(&mut self, cmd: SlashCommand) {
         let Some(parent_thread_id) = self.thread_id else {
-            self.add_error_message("'/side' is unavailable before the session starts.".to_string());
+            let command = cmd.command();
+            self.add_error_message(format!(
+                "'/{command}' is unavailable before the session starts."
+            ));
             return;
         };
 
@@ -185,7 +203,10 @@ impl ChatWidget {
                 self.open_model_popup();
             }
             SlashCommand::Fast => {
-                self.toggle_fast_mode_from_ui();
+                self.run_fast_slash_command("");
+            }
+            SlashCommand::Workspace => {
+                self.run_workspace_slash_command("");
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -216,6 +237,7 @@ impl ChatWidget {
                 if let Some(thread_id) = self.thread_id {
                     self.app_event_tx
                         .send(AppEvent::OpenThreadGoalMenu { thread_id });
+                    self.append_message_history_entry("/goal".to_string());
                 } else {
                     self.add_info_message(
                         GOAL_USAGE.to_string(),
@@ -223,18 +245,8 @@ impl ChatWidget {
                     );
                 }
             }
-            SlashCommand::Collab => {
-                if !self.collaboration_modes_enabled() {
-                    self.add_info_message(
-                        "Collaboration modes are disabled.".to_string(),
-                        Some("Enable collaboration modes to use /collab.".to_string()),
-                    );
-                    return;
-                }
-                self.open_collaboration_modes_popup();
-            }
-            SlashCommand::Side => {
-                self.request_empty_side_conversation();
+            SlashCommand::Side | SlashCommand::Btw => {
+                self.request_empty_side_conversation(cmd);
             }
             SlashCommand::Agent | SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
@@ -290,7 +302,10 @@ impl ChatWidget {
                         &[],
                     );
                     self.app_event_tx
-                        .send(AppEvent::BeginWindowsSandboxElevatedSetup { preset });
+                        .send(AppEvent::BeginWindowsSandboxElevatedSetup {
+                            preset,
+                            profile_selection: None,
+                        });
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -306,17 +321,8 @@ impl ChatWidget {
             SlashCommand::Experimental => {
                 self.open_experimental_popup();
             }
-            SlashCommand::Scheduling => {
-                self.open_scheduling_popup();
-            }
             SlashCommand::AutoReview => {
                 self.open_auto_review_denials_popup();
-            }
-            SlashCommand::Account => {
-                self.open_account_popup();
-            }
-            SlashCommand::ReadingView => {
-                self.open_reading_view_popup();
             }
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => {
@@ -334,6 +340,12 @@ impl ChatWidget {
             }
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
+            }
+            SlashCommand::SupabaseLogin => {
+                self.app_event_tx.send(AppEvent::SupabaseLoginOpen);
+            }
+            SlashCommand::SupabaseLogout => {
+                self.app_event_tx.send(AppEvent::SupabaseLogoutRequested);
             }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
@@ -407,6 +419,9 @@ impl ChatWidget {
             SlashCommand::Theme => {
                 self.open_theme_picker();
             }
+            SlashCommand::Pets => {
+                self.open_pets_picker();
+            }
             SlashCommand::Ps => {
                 self.add_ps_output();
             }
@@ -427,15 +442,6 @@ impl ChatWidget {
             }
             SlashCommand::Plugins => {
                 self.add_plugins_output();
-            }
-            SlashCommand::Workspace => {
-                self.add_workspace_summary();
-            }
-            SlashCommand::Jobs => {
-                self.add_jobs_summary();
-            }
-            SlashCommand::Research => {
-                self.open_research_popup();
             }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
@@ -480,6 +486,31 @@ impl ChatWidget {
                         grant_root: Some(PathBuf::from("/tmp")),
                     },
                 );
+            }
+            SlashCommand::Research => {
+                let items = crate::bottom_pane::build_research_tool_items(&self.config.features);
+                let view =
+                    crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
+                self.bottom_pane.show_view(Box::new(view));
+                self.request_redraw();
+            }
+            SlashCommand::ReadingView => {
+                let items =
+                    crate::bottom_pane::build_reading_view_tool_items(self.reading_view_mode);
+                let view = crate::bottom_pane::ResearchToolsView::new_reading_view(
+                    items,
+                    self.app_event_tx.clone(),
+                );
+                self.bottom_pane.show_view(Box::new(view));
+                self.request_redraw();
+            }
+            SlashCommand::Scheduling => {
+                let view = crate::bottom_pane::SchedulingView::new()
+                    .with_auto_refresh(self.app_event_tx.clone(), self.frame_requester.clone());
+                self.bottom_pane.show_view(Box::new(view));
+                self.app_event_tx
+                    .send(AppEvent::CodexOp(AppCommand::ListSchedulingTasks));
+                self.request_redraw();
             }
         }
     }
@@ -598,29 +629,14 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
-            SlashCommand::Fast => {
-                match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
-                    "status" => {
-                        let status =
-                            if matches!(self.current_service_tier(), Some(ServiceTier::Fast)) {
-                                "on"
-                            } else {
-                                "off"
-                            };
-                        self.add_info_message(
-                            format!("Fast mode is {status}."),
-                            /*hint*/ None,
-                        );
-                    }
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                    }
-                }
-            }
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
+            }
+            SlashCommand::Workspace => {
+                self.run_workspace_slash_command(trimmed);
+            }
+            SlashCommand::Fast => {
+                self.run_fast_slash_command(trimmed);
             }
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
@@ -651,9 +667,6 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
-            SlashCommand::Workspace => {
-                self.run_workspace_slash_command(trimmed);
-            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -697,6 +710,15 @@ impl ChatWidget {
                 }
                 let control_command = match trimmed.to_ascii_lowercase().as_str() {
                     "clear" => Some(GoalControlCommand::Clear),
+                    "edit" => {
+                        self.app_event_tx.send(AppEvent::OpenThreadGoalEditor {
+                            thread_id: self.thread_id,
+                        });
+                        if source == SlashCommandDispatchSource::Live {
+                            self.bottom_pane.drain_pending_submission_state();
+                        }
+                        return;
+                    }
                     "pause" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Paused)),
                     "resume" => Some(GoalControlCommand::SetStatus(AppThreadGoalStatus::Active)),
                     _ => None,
@@ -721,6 +743,7 @@ impl ChatWidget {
                                 .send(AppEvent::SetThreadGoalStatus { thread_id, status });
                         }
                     }
+                    self.append_message_history_entry(format!("/goal {trimmed}"));
                     if source == SlashCommandDispatchSource::Live {
                         self.bottom_pane.drain_pending_submission_state();
                     }
@@ -771,15 +794,17 @@ impl ChatWidget {
                     objective: objective.to_string(),
                     mode: ThreadGoalSetMode::ConfirmIfExists,
                 });
+                self.append_message_history_entry(format!("/goal {trimmed}"));
                 if source == SlashCommandDispatchSource::Live {
                     self.bottom_pane.drain_pending_submission_state();
                 }
             }
-            SlashCommand::Side if !trimmed.is_empty() => {
+            SlashCommand::Side | SlashCommand::Btw if !trimmed.is_empty() => {
                 let Some(parent_thread_id) = self.thread_id else {
-                    self.add_error_message(
-                        "'/side' is unavailable before the session starts.".to_string(),
-                    );
+                    let command = cmd.command();
+                    self.add_error_message(format!(
+                        "'/{command}' is unavailable before the session starts."
+                    ));
                     return;
                 };
                 let user_message = self.prepared_inline_user_message(
@@ -804,6 +829,17 @@ impl ChatWidget {
             SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
                 self.app_event_tx
                     .send(AppEvent::BeginWindowsSandboxGrantReadRoot { path: args });
+            }
+            SlashCommand::Pets
+                if matches!(
+                    args.trim().to_ascii_lowercase().as_str(),
+                    "disable" | "disabled" | "hide" | "hidden" | "off" | "none"
+                ) =>
+            {
+                self.app_event_tx.send(AppEvent::PetDisabled);
+            }
+            SlashCommand::Pets if !trimmed.is_empty() => {
+                self.select_pet_by_id(args);
             }
             _ => self.dispatch_command(cmd),
         }
@@ -842,7 +878,9 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
 
-        let Some(cmd) = slash_commands::find_builtin_command(name, self.builtin_command_flags())
+        let service_tier_commands = self.current_model_service_tier_commands();
+        let Some(command) =
+            find_slash_command(name, self.builtin_command_flags(), &service_tier_commands)
         else {
             self.add_info_message(
                 format!(
@@ -854,11 +892,19 @@ impl ChatWidget {
         };
 
         if rest.is_empty() {
-            self.dispatch_command(cmd);
-            return self.queued_command_drain_result(cmd);
+            return match command {
+                SlashCommandItem::Builtin(cmd) => {
+                    self.dispatch_command(cmd);
+                    self.queued_command_drain_result(cmd)
+                }
+                SlashCommandItem::ServiceTier(command) => {
+                    self.handle_service_tier_command_dispatch(command);
+                    QueueDrain::Continue
+                }
+            };
         }
 
-        if !cmd.supports_inline_args() {
+        if !command.supports_inline_args() {
             self.submit_user_message(UserMessage {
                 text,
                 local_images,
@@ -868,6 +914,16 @@ impl ChatWidget {
             });
             return QueueDrain::Stop;
         }
+        let SlashCommandItem::Builtin(cmd) = command else {
+            self.submit_user_message(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            return QueueDrain::Stop;
+        };
 
         let trimmed_start = rest.trim_start();
         let leading_trimmed = rest.len().saturating_sub(trimmed_start.len());
@@ -896,7 +952,7 @@ impl ChatWidget {
         self.queued_command_drain_result(cmd)
     }
 
-    fn builtin_command_flags(&self) -> slash_commands::BuiltinCommandFlags {
+    fn builtin_command_flags(&self) -> BuiltinCommandFlags {
         #[cfg(target_os = "windows")]
         let allow_elevate_sandbox = {
             let windows_sandbox_level = WindowsSandboxLevel::from_config(&self.config);
@@ -905,12 +961,12 @@ impl ChatWidget {
         #[cfg(not(target_os = "windows"))]
         let allow_elevate_sandbox = false;
 
-        slash_commands::BuiltinCommandFlags {
+        BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
             connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
-            fast_command_enabled: self.fast_mode_enabled(),
+            service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
             audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
@@ -924,8 +980,7 @@ impl ChatWidget {
             return QueueDrain::Stop;
         }
         match cmd {
-            SlashCommand::Fast
-            | SlashCommand::Ide
+            SlashCommand::Ide
             | SlashCommand::Status
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
@@ -935,9 +990,6 @@ impl ChatWidget {
             | SlashCommand::Mcp
             | SlashCommand::Apps
             | SlashCommand::Plugins
-            | SlashCommand::Workspace
-            | SlashCommand::Jobs
-            | SlashCommand::Research
             | SlashCommand::Rollout
             | SlashCommand::Copy
             | SlashCommand::Raw
@@ -959,8 +1011,8 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
-            | SlashCommand::Collab
             | SlashCommand::Side
+            | SlashCommand::Btw
             | SlashCommand::Keymap
             | SlashCommand::Agent
             | SlashCommand::MultiAgents
@@ -968,24 +1020,27 @@ impl ChatWidget {
             | SlashCommand::ElevateSandbox
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
-            | SlashCommand::Scheduling
             | SlashCommand::AutoReview
-            | SlashCommand::Account
-            | SlashCommand::ReadingView
             | SlashCommand::Memories
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Logout
+            | SlashCommand::SupabaseLogin
+            | SlashCommand::SupabaseLogout
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
-            | SlashCommand::Theme => QueueDrain::Stop,
+            | SlashCommand::Theme
+            | SlashCommand::Research
+            | SlashCommand::ReadingView
+            | SlashCommand::Scheduling
+            | SlashCommand::Workspace
+            | SlashCommand::Fast
+            | SlashCommand::Pets => QueueDrain::Stop,
             #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice => QueueDrain::Stop,
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::VoiceSetup => QueueDrain::Stop,
+            SlashCommand::Voice | SlashCommand::VoiceSetup => QueueDrain::Stop,
         }
     }
 
@@ -1027,11 +1082,14 @@ impl ChatWidget {
     }
 
     fn ensure_side_command_allowed_outside_review(&mut self, cmd: SlashCommand) -> bool {
-        if cmd != SlashCommand::Side || !self.is_review_mode {
+        if !matches!(cmd, SlashCommand::Side | SlashCommand::Btw) || !self.review.is_review_mode {
             return true;
         }
 
-        self.add_error_message(SIDE_REVIEW_UNAVAILABLE_MESSAGE.to_string());
+        let command = cmd.command();
+        self.add_error_message(format!(
+            "'/{command}' is unavailable while code review is running."
+        ));
         self.bottom_pane.drain_pending_submission_state();
         false
     }
