@@ -46,13 +46,15 @@ jobs:
             tui-tests-tier-b1-${{ runner.os }}-
             tui-tests-tier-a-${{ runner.os }}-
 
-      - name: Install tmux + xclip + Xvfb
+      - name: Install tmux + xclip + Xvfb + espeak-ng
         # xclip + Xvfb give us a working clipboard for TR-038 (/copy).
         # Headless CI has no real X display, so we run xclip against a
         # virtual one started before the tests run.
+        # espeak-ng provides the Linux local TTS backend used by the
+        # reading view's `r`/`+`/`-` keys (see codex-rs/tui/src/tts_linux.rs).
         run: |
           sudo apt-get update
-          sudo apt-get install -y tmux xclip xvfb
+          sudo apt-get install -y tmux xclip xvfb espeak-ng
 
       - name: Build ata
         run: cargo build -p codex-cli --bin ata

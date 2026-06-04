@@ -188,6 +188,9 @@ mod transcript_reflow;
 #[cfg(not(target_os = "linux"))]
 #[allow(dead_code)]
 mod tts;
+#[cfg(target_os = "linux")]
+mod tts_linux;
+mod tts_speed;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
