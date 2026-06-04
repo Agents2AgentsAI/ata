@@ -3814,8 +3814,8 @@ impl super::ChatWidget {
         }
         self.cached_elevenlabs_speed = Some(new_speed);
         if !self.is_reading_view_browser_mode() {
-            let msg = format!("\u{25B6}\u{FE0F}  Speaking ({})", format_speed(new_speed));
-            self.bottom_pane.set_document_reader_voice_status(Some(msg));
+            self.bottom_pane
+                .set_document_reader_voice_status(Some(speaking_status_text(new_speed)));
         }
         self.request_redraw();
     }
