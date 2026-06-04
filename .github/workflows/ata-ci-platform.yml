@@ -230,7 +230,7 @@ jobs:
       # Install and restore sccache cache
       - name: Install sccache
         if: ${{ env.USE_SCCACHE == 'true' }}
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        uses: taiki-e/install-action@6ed6112eb9893c58dd600eebccdf6e77ab7bfa9c # v2
         with:
           tool: sccache
           version: 0.7.5
@@ -432,7 +432,7 @@ jobs:
 
       - name: Install cargo-chef
         if: ${{ matrix.profile == 'release' }}
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        uses: taiki-e/install-action@6ed6112eb9893c58dd600eebccdf6e77ab7bfa9c # v2
         with:
           tool: cargo-chef
           version: 0.1.71
@@ -651,7 +651,7 @@ jobs:
 
       - name: Install sccache
         if: ${{ env.USE_SCCACHE == 'true' }}
-        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+        uses: taiki-e/install-action@6ed6112eb9893c58dd600eebccdf6e77ab7bfa9c # v2
         with:
           tool: sccache
           version: 0.7.5
@@ -686,7 +686,7 @@ jobs:
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-
             sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
 
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
+      - uses: taiki-e/install-action@6ed6112eb9893c58dd600eebccdf6e77ab7bfa9c # v2
         with:
           tool: nextest
           version: 0.9.103
