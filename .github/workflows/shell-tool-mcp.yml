@@ -441,7 +441,7 @@ jobs:
         run: pnpm --filter @a2a-ai/ata-shell-tool-mcp run build
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -529,7 +529,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download npm tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ata-shell-tool-mcp-npm
           path: dist/npm
