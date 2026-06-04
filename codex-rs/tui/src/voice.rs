@@ -544,12 +544,6 @@ impl RealtimeAudioPlayer {
     pub(crate) fn seek_to_ms(&self, _position_ms: u64) {
         self.clear();
     }
-
-    pub(crate) fn playback_speed(&self) -> f64 {
-        1.0
-    }
-
-    pub(crate) fn set_playback_speed(&self, _speed: f64) {}
 }
 
 /// Encode a captured PCM buffer into a WAV blob suitable for upload to
