@@ -3848,8 +3848,8 @@ impl super::ChatWidget {
             // would leave the user with silence — there is no SetSpeed
             // handler on the post-narration path.
             let cached_replay = if state.tts_worker_tx.is_none() {
-                let chunks_from_narrating = (!state.narrating_chunks.is_empty())
-                    .then(|| state.narrating_chunks.clone());
+                let chunks_from_narrating =
+                    (!state.narrating_chunks.is_empty()).then(|| state.narrating_chunks.clone());
                 let chunks_from_cache = state.narrating_section.as_ref().and_then(|ns| {
                     let key = (ns.0.clone(), ns.1);
                     state
@@ -5274,9 +5274,7 @@ async fn tts_worker_loop(
                     break;
                 }
             }
-            if !replay_err
-                && let Err(e) = stream.flush().await
-            {
+            if !replay_err && let Err(e) = stream.flush().await {
                 tracing::error!("TTS worker replay flush: {e}");
                 replay_err = true;
             }
@@ -5480,9 +5478,7 @@ async fn tts_worker_loop(
             return;
         }
     }
-    if gen_ref.load(Ordering::SeqCst) == my_gen
-        && in_flight.fetch_sub(1, Ordering::SeqCst) == 1
-    {
+    if gen_ref.load(Ordering::SeqCst) == my_gen && in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
         event_tx.send(AppEvent::VoiceModeTtsFinished);
     }
 }
