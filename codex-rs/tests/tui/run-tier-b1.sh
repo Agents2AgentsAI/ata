@@ -1032,24 +1032,31 @@ tr017_b() {
   end_test
 }
 
-# TR-017 C: downgrading from Full Access to Default is immediate — no
-# confirmation dialog, just "Permissions updated to Default" line.
+# TR-017 C: downgrading from Full Access is immediate, no confirmation
+# dialog. Per Nima's TR-018 C feedback, this test no longer pins the
+# specific success wording or assumes a fixed permission menu order;
+# it asserts only the user visible invariants that the composer footer
+# stops showing YOLO mode and no elevation prompt appears.
 tr017_c() {
   start_test "TR-017 C"
   local sess=$SESSION-017c
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Dismiss any post boot popup (e.g. a reasoning level prompt that
+  # appears for a freshly switched model) that would otherwise eat the
+  # /permissions keystrokes and land us inside the wrong popup.
+  send_key "$sess" Escape; sleep 0.3
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
-  # Currently on Full Access (--yolo). Up twice to reach Default (top).
-  send_key "$sess" Up; sleep 0.3
-  send_key "$sess" Up; sleep 0.3
+  # Walk to the top of the menu (more presses than the longest plausible
+  # menu length so we don't pin position) and confirm. Some plus presses
+  # are a no op at the top; that's fine.
+  for _ in 1 2 3 4 5; do send_key "$sess" Up; sleep 0.2; done
   send_key "$sess" Enter; sleep 1
   local out=$WORK/017c.txt
   capture "$sess" "$out"
-  assert_contains     "$out" "Permissions updated to Default" "immediate downgrade confirmation"
-  # Be specific: ata's CI tip line includes "Enable in /experimental!"
-  # which would false-positive a naive "Enable" check. The actual
-  # confirmation dialog header is "Enable full access?".
-  assert_not_contains "$out" "Enable full access?"             "no elevation dialog on downgrade"
+  # Behavioral invariants only, no pinning of specific permission names
+  # or success wording (those change between upstream updates).
+  assert_not_contains "$out" "Enable full access?"  "no elevation dialog on downgrade"
+  assert_not_contains "$out" "permissions: YOLO mode" "YOLO mode no longer current"
   kill_ata "$sess"
   end_test
 }
