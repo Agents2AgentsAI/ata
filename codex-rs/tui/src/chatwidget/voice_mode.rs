@@ -236,6 +236,22 @@ pub(crate) fn elevenlabs_effective_sample_rate(user_speed: f64) -> u32 {
     ((NATIVE_RATE * user_speed / clamped).round() as u32).max(1)
 }
 
+/// Sample rate to use when replaying cached PCM at a target speed that
+/// may differ from the speed the cache was captured at. The cached PCM
+/// already encodes the SOURCE speed's server-side clamp, so the resampler
+/// must divide by that source clamp, not the current target's clamp, to
+/// land at the true requested wall clock speedup. Example: cache filled
+/// at 1.0x (server clamp 1.0), replay at target 2.0x, helper returns
+/// 24000 * 2.0 / 1.0 = 48000 → 2.0x speedup. Using the live formula
+/// here would give 24000 * 2.0 / 1.2 = 40000 → only 1.67x because the
+/// 1.2 divisor assumes server-pre-stretched audio that doesn't exist in
+/// this cache.
+pub(crate) fn elevenlabs_cache_replay_sample_rate(target_speed: f64, source_speed: f64) -> u32 {
+    const NATIVE_RATE: f64 = 24_000.0;
+    let source_clamp = source_speed.clamp(0.7, 1.2);
+    ((NATIVE_RATE * target_speed / source_clamp).round() as u32).max(1)
+}
+
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
 /// Phases of the voice mode state machine.
@@ -863,6 +879,11 @@ pub(crate) struct TtsCacheEntry {
     pub(crate) chunks: Vec<Vec<i16>>,
     /// Cached alignment timeline so karaoke works on replay.
     pub(crate) alignment_timeline: Vec<AlignmentEntry>,
+    /// User-side speed setting at the moment the PCM was generated.
+    /// On replay, this is the denominator the resampler must use so
+    /// that a later target speed produces the correct total speedup,
+    /// regardless of the current ladder position.
+    pub(crate) source_speed: f64,
 }
 
 /// A word-level entry in the alignment timeline.
@@ -965,6 +986,13 @@ pub(crate) struct VoiceModeState {
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
+    /// When `Some`, the next batch of PCM enqueued via the cache hit path
+    /// should treat this as the SOURCE speed (the speed the cache was
+    /// captured at), not the current ladder position. Lets a target speed
+    /// that differs from the source produce the correct total speedup
+    /// instead of double clamping. Cleared by `interrupt_tts` and after
+    /// the cache hit enqueue loop ends.
+    pub(crate) cache_replay_source_speed: Option<f64>,
     /// Number of heading words in the narration text. The TTS audio includes
     /// the heading but the reading view renders it separately, so karaoke
     /// must skip this many words to stay in sync.
@@ -1082,6 +1110,7 @@ impl VoiceModeState {
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
+            cache_replay_source_speed: None,
             narrating_heading_words: 0,
             selection_word_offset: None,
             narrating_cleaned_text: None,
@@ -1170,6 +1199,7 @@ impl VoiceModeState {
         self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
         // Clear narration collection state.
         self.narrating_section = None;
+        self.cache_replay_source_speed = None;
         self.narrating_heading_words = 0;
         self.selection_word_offset = None;
         self.narrating_cleaned_text = None;
@@ -1298,6 +1328,7 @@ impl VoiceModeState {
 
         let chunks = std::mem::take(&mut self.narrating_chunks);
         let alignment_timeline = self.tts_alignment_timeline.clone();
+        let source_speed = self.playback_speed;
         if let Ok(mut cache) = self.tts_section_cache.lock() {
             cache.insert(
                 (doc_id, sec_idx),
@@ -1305,6 +1336,7 @@ impl VoiceModeState {
                     content_hash,
                     chunks,
                     alignment_timeline,
+                    source_speed,
                 },
             );
         } else {
@@ -2866,7 +2898,12 @@ impl super::ChatWidget {
         if !state.tts_playback_started {
             state.tts_playback_started = true;
             let mut enqueued_audio = false;
-            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
+            let effective_rate = match state.cache_replay_source_speed {
+                Some(source) => {
+                    elevenlabs_cache_replay_sample_rate(state.playback_speed, source)
+                }
+                None => elevenlabs_effective_sample_rate(state.playback_speed),
+            };
             if let Some(ref player) = state.audio_player {
                 player.reset_playback_position();
                 let mut chunks = std::mem::take(&mut state.tts_startup_buffered_chunks);
@@ -2907,7 +2944,12 @@ impl super::ChatWidget {
                     Some((section_index, total_words, state.selection_word_offset));
             }
         } else if let Some(ref player) = state.audio_player {
-            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
+            let effective_rate = match state.cache_replay_source_speed {
+                Some(source) => {
+                    elevenlabs_cache_replay_sample_rate(state.playback_speed, source)
+                }
+                None => elevenlabs_effective_sample_rate(state.playback_speed),
+            };
             for chunk in &extra_chunks {
                 player.enqueue_pcm(chunk, effective_rate, 1);
             }
@@ -3843,30 +3885,39 @@ impl super::ChatWidget {
             // If the live worker is gone (either because narration has
             // already finished generating server-side and got persisted to
             // the cache, or because we are playing a true cache hit), grab
-            // the chunks from the cache so we can re-enqueue them at the
-            // new speed after the borrow ends. Otherwise audio_player.clear
-            // would leave the user with silence — there is no SetSpeed
-            // handler on the post-narration path.
-            let cached_replay = if state.tts_worker_tx.is_none() {
-                let chunks_from_narrating =
-                    (!state.narrating_chunks.is_empty()).then(|| state.narrating_chunks.clone());
-                let chunks_from_cache = state.narrating_section.as_ref().and_then(|ns| {
+            // the chunks AND the speed they were generated at so we can
+            // re-enqueue at a correct effective rate. Without the source
+            // speed the resampler would divide by the wrong clamp and
+            // under-stretch the audio (e.g. 1.67x instead of 2.0x when
+            // target=2.0 and the cache was filled at 1.0).
+            let cached_replay: Option<(Vec<Vec<i16>>, f64)> = if state.tts_worker_tx.is_none() {
+                let from_cache = state.narrating_section.as_ref().and_then(|ns| {
                     let key = (ns.0.clone(), ns.1);
-                    state
-                        .tts_section_cache
-                        .lock()
-                        .ok()
-                        .and_then(|cache| cache.get(&key).map(|entry| entry.chunks.clone()))
+                    state.tts_section_cache.lock().ok().and_then(|cache| {
+                        cache
+                            .get(&key)
+                            .map(|entry| (entry.chunks.clone(), entry.source_speed))
+                    })
                 });
-                chunks_from_narrating.or(chunks_from_cache)
+                if from_cache.is_some() {
+                    from_cache
+                } else if !state.narrating_chunks.is_empty() {
+                    // Mid narration before persist_narration_cache fires.
+                    // The chunks already collected were captured at the
+                    // speed we are changing FROM, i.e. `current`.
+                    Some((state.narrating_chunks.clone(), current))
+                } else {
+                    None
+                }
             } else {
                 None
             };
             tracing::info!(
-                "[TTS-TIMING] speed change: current={current} new={new_speed} has_worker={} narrating_chunks={} cached_replay_chunks={}",
+                "[TTS-TIMING] speed change: current={current} new={new_speed} has_worker={} narrating_chunks={} cached_replay_chunks={} source_speed={:?}",
                 state.tts_worker_tx.is_some(),
                 state.narrating_chunks.len(),
-                cached_replay.as_ref().map(std::vec::Vec::len).unwrap_or(0),
+                cached_replay.as_ref().map(|(c, _)| c.len()).unwrap_or(0),
+                cached_replay.as_ref().map(|(_, s)| *s),
             );
             (new_speed, cached_replay)
         };
@@ -3877,7 +3928,7 @@ impl super::ChatWidget {
                 .set_document_reader_voice_status(Some(speaking_status_text(new_speed)));
         }
 
-        if let Some(chunks) = cached_replay
+        if let Some((chunks, source_speed)) = cached_replay
             && let Some(ref state) = self.voice_mode_state
             && let Some(ref player) = state.audio_player
         {
@@ -3887,8 +3938,12 @@ impl super::ChatWidget {
             // press, so back to back + taps would queue exponentially more
             // audio (4 presses → 16x the section). Direct enqueue keeps
             // the queue at exactly one section worth no matter how many
-            // times the user steps the ladder.
-            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
+            // times the user steps the ladder. Pass the source speed (the
+            // speed the cache was captured at) so the resampler divides
+            // by the correct clamp and the listener hears the requested
+            // target speed, not target/source_clamp/target_clamp.
+            let effective_rate =
+                elevenlabs_cache_replay_sample_rate(state.playback_speed, source_speed);
             for chunk in &chunks {
                 player.enqueue_pcm(chunk, effective_rate, 1);
             }
@@ -4295,20 +4350,26 @@ impl super::ChatWidget {
         // Phase 2: check cache (works for both full sections and selections —
         // the content_hash distinguishes different text under the same key).
         let cache_check_start = std::time::Instant::now();
-        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> =
+        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>, f64)> =
             self.voice_mode_state.as_ref().and_then(|state| {
                 state.tts_section_cache.lock().ok().and_then(|cache| {
                     cache
                         .get(&(document_id.clone(), section_index))
                         .filter(|entry| entry.content_hash == content_hash)
-                        .map(|entry| (entry.chunks.clone(), entry.alignment_timeline.clone()))
+                        .map(|entry| {
+                            (
+                                entry.chunks.clone(),
+                                entry.alignment_timeline.clone(),
+                                entry.source_speed,
+                            )
+                        })
                 })
             });
         let cache_hit = cached.is_some();
-        let cache_chunks = cached.as_ref().map(|(c, _)| c.len()).unwrap_or(0);
+        let cache_chunks = cached.as_ref().map(|(c, _, _)| c.len()).unwrap_or(0);
         let cache_samples: usize = cached
             .as_ref()
-            .map(|(c, _)| c.iter().map(std::vec::Vec::len).sum())
+            .map(|(c, _, _)| c.iter().map(std::vec::Vec::len).sum())
             .unwrap_or(0);
         tracing::info!(
             "[TTS-TIMING] cache check: hit={cache_hit}, chunks={cache_chunks}, \
@@ -4322,7 +4383,7 @@ impl super::ChatWidget {
         // naturally aligned and no skip is needed.
         let heading_words = 0;
 
-        if let Some((chunks, cached_timeline)) = cached {
+        if let Some((chunks, cached_timeline, cache_source_speed)) = cached {
             if self.is_reading_view_browser_mode() {
                 append_browser_reading_view_debug_log(&format!(
                     "narrate_section cache_hit section={section_index} chunks={} timeline_entries={}",
@@ -4343,9 +4404,19 @@ impl super::ChatWidget {
                 state.equation_word_spans = eq_spans;
                 state.tts_alignment_timeline = cached_timeline;
                 repair_timeline_monotonicity(&mut state.tts_alignment_timeline);
+                // Tell ensure_tts_playback_started that the chunks it's
+                // about to enqueue were captured at `cache_source_speed`,
+                // not at the current ladder position. Without this the
+                // resampler would divide by the WRONG clamp and the user
+                // would hear under-stretched audio (e.g. 1.67x instead of
+                // 2.0x when target=2.0 and cache=1.0).
+                state.cache_replay_source_speed = Some(cache_source_speed);
             }
             for chunk in chunks {
                 self.on_voice_tts_audio_chunk(chunk, None);
+            }
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.cache_replay_source_speed = None;
             }
             tracing::info!(
                 "[TTS-TIMING] cache hit: enqueued {num_chunks} chunks ({total_samples} samples, \
@@ -4530,6 +4601,13 @@ impl super::ChatWidget {
         let cache = state.tts_section_cache.clone();
         let pending = state.prefetch_pending.clone();
         let proxy = build_elevenlabs_proxy(&self.auth_manager);
+        // Speed the prefetch was generated at. The cache needs this so a
+        // later speed change replays at the correct effective rate.
+        let prefetch_source_speed = vc
+            .elevenlabs
+            .as_ref()
+            .and_then(|e| e.speed)
+            .unwrap_or(1.0);
 
         tokio::spawn(async move {
             let mut all_chunks = Vec::new();
@@ -4558,6 +4636,7 @@ impl super::ChatWidget {
                         content_hash,
                         chunks: all_chunks,
                         alignment_timeline: all_timeline,
+                        source_speed: prefetch_source_speed,
                     },
                 );
             }
@@ -7474,6 +7553,36 @@ mod tests {
     fn elevenlabs_effective_sample_rate_compensates_below_0_7x() {
         // 0.5/0.7 = 0.714…; effective rate is < native to slow playback further.
         assert_eq!(elevenlabs_effective_sample_rate(0.5), 17_143);
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_matches_live_when_source_eq_target() {
+        // When the cache was captured at the same speed it's replayed at,
+        // the helper must return the same effective rate as the live
+        // formula. This keeps behavior identical for the trivial case.
+        for &s in &[0.5f64, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0, 2.5, 3.0] {
+            assert_eq!(
+                elevenlabs_cache_replay_sample_rate(s, s),
+                elevenlabs_effective_sample_rate(s),
+                "live vs cache mismatch at speed {s}",
+            );
+        }
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_targets_true_2x_from_1x_cache() {
+        // The bug fix: cache filled at 1.0x, replay at 2.0x, must give
+        // 2.0x total speedup not 1.667x. Formula: 24000 * 2.0 / 1.0 = 48000.
+        // Live formula would give 24000 * 2.0 / 1.2 = 40000 (1.667x).
+        assert_eq!(elevenlabs_cache_replay_sample_rate(2.0, 1.0), 48_000);
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_handles_1_1x_config_default() {
+        // The Tim config case: cache at 1.1x (in-range, server clamp 1.1),
+        // replay at target 2.0x. Math: 24000 * 2.0 / 1.1 = 43636. Combined
+        // with the cache's 1.1x server stretch, total speedup is 2.0x.
+        assert_eq!(elevenlabs_cache_replay_sample_rate(2.0, 1.1), 43_636);
     }
 
     /// Wall-clock duration of the narration as a function of user-requested speed.
