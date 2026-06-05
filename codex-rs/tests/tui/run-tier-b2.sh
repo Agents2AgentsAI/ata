@@ -355,6 +355,45 @@ tr001_a() {
   end_test
 }
 
+# TR-001 B: reading view survives a 132 → 70 → 132 resize cycle without
+# welcome-banner or chat-composer cells leaking into the reader frame.
+# This guards the v0.129.0 merge resize-corruption bug. Uses
+# `tmux resize-window` because boot_ata creates a detached session (no
+# attached client → `resize-pane -x` is a no-op).
+tr001_b() {
+  start_test "TR-001 B"
+  local sess=$SESSION-001b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+
+  local baseline=$WORK/001b-baseline.txt
+  local narrow=$WORK/001b-narrow.txt
+  local restored=$WORK/001b-restored.txt
+
+  capture "$sess" "$baseline"
+  assert_contains "$baseline" "Sections (n/p"            "baseline: reader marker present"
+  assert_not_contains "$baseline" "Tip: New For a limited time" "baseline: no welcome-banner leak"
+
+  # Shrink. Multi-frame repaint takes ~200ms; 4s is plenty of margin.
+  tmux resize-window -t "$sess" -x 70 -y 50 2>/dev/null || true
+  sleep 4
+  capture "$sess" "$narrow"
+  assert_contains     "$narrow" "Sections (n/p"            "narrow: reader still drawing"
+  assert_not_contains "$narrow" "Tip: New For a limited time" "narrow: welcome-banner did not leak in on resize"
+  assert_not_contains "$narrow" "/model to change"         "narrow: composer model row did not leak in"
+  assert_not_contains "$narrow" "directory:   ~/"          "narrow: composer directory row did not leak in"
+
+  # Restore.
+  tmux resize-window -t "$sess" -x 132 -y 40 2>/dev/null || true
+  sleep 4
+  capture "$sess" "$restored"
+  assert_contains     "$restored" "Sections (n/p"           "restored: reader still drawing"
+  assert_not_contains "$restored" "Tip: New For a limited time" "restored: welcome-banner did not leak in on resize back"
+  assert_not_contains "$restored" "/model to change"        "restored: composer model row did not leak in"
+
+  kill_ata "$sess"
+  end_test
+}
+
 tr008_a() {
   start_test "TR-008 A"
   local sess=$SESSION-008a
@@ -2165,7 +2204,7 @@ main() {
   log ""
 
   log "Numbered TRs (in order)"
-  run_tests tr001_a
+  run_tests tr001_a tr001_b
   run_tests tr002_a
   run_tests tr005_a
   run_tests tr008_a tr008_b tr008_c tr008_d tr008_e
