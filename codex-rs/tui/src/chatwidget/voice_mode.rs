@@ -2899,9 +2899,7 @@ impl super::ChatWidget {
             state.tts_playback_started = true;
             let mut enqueued_audio = false;
             let effective_rate = match state.cache_replay_source_speed {
-                Some(source) => {
-                    elevenlabs_cache_replay_sample_rate(state.playback_speed, source)
-                }
+                Some(source) => elevenlabs_cache_replay_sample_rate(state.playback_speed, source),
                 None => elevenlabs_effective_sample_rate(state.playback_speed),
             };
             if let Some(ref player) = state.audio_player {
@@ -2945,9 +2943,7 @@ impl super::ChatWidget {
             }
         } else if let Some(ref player) = state.audio_player {
             let effective_rate = match state.cache_replay_source_speed {
-                Some(source) => {
-                    elevenlabs_cache_replay_sample_rate(state.playback_speed, source)
-                }
+                Some(source) => elevenlabs_cache_replay_sample_rate(state.playback_speed, source),
                 None => elevenlabs_effective_sample_rate(state.playback_speed),
             };
             for chunk in &extra_chunks {
@@ -4603,11 +4599,7 @@ impl super::ChatWidget {
         let proxy = build_elevenlabs_proxy(&self.auth_manager);
         // Speed the prefetch was generated at. The cache needs this so a
         // later speed change replays at the correct effective rate.
-        let prefetch_source_speed = vc
-            .elevenlabs
-            .as_ref()
-            .and_then(|e| e.speed)
-            .unwrap_or(1.0);
+        let prefetch_source_speed = vc.elevenlabs.as_ref().and_then(|e| e.speed).unwrap_or(1.0);
 
         tokio::spawn(async move {
             let mut all_chunks = Vec::new();
