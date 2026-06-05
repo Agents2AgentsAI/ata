@@ -709,22 +709,52 @@ tr052_a() {
 }
 
 # TR-052 D: pressing + bumps TTS playback speed and the audio actually
-# plays faster. Narrate the same section at default 1x and again at 2x,
-# then assert that 2x wall-clock duration is roughly half of 1x. This
-# is Nima's request: the end-to-end speed change must be measurable on
-# the wire, not just reported in the UI. Works with both local backends
-# (say/espeak-ng scale wpm with speed) and ElevenLabs (PCM rate stretch
-# fix in voice_mode.rs); fails only if the speed change is reverted to
-# a UI-only stub.
+# plays faster. Narrate the same section at a normalized 1x and again
+# at a normalized 2x, then assert that 2x wall-clock duration is roughly
+# half of 1x. This is Nima's request: the end-to-end speed change must
+# be measurable on the wire, not just reported in the UI.
+#
+# Methodology: the user's config might have a non default speed (e.g.
+# 1.1x), and the +/- bindings only fire while the audio footer is
+# visible. So each phase brings the footer up with one r press, walks
+# the ladder down to 0.5x and back up to the target rung, then presses
+# r again to restart narration from cache at exactly that target. Only
+# the second r is timed, so the wall clock measured is one full pass at
+# the requested speed regardless of what the config defaults to.
+#
+# Works with both local backends (say/espeak-ng scale wpm with speed)
+# and ElevenLabs (PCM rate stretch via elevenlabs_effective_sample_rate
+# in voice_mode.rs); fails only if the speed change is reverted to a UI
+# only stub.
 tr052_d() {
   start_test "TR-052 D"
   local sess=$SESSION-052d
   if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
 
-  # Phase 1: narrate at default 1x.
+  # Helper: walk to 0.5x (11 minus presses cover the whole ladder from
+  # any starting rung), then up by $1 plus presses. Ladder is
+  # [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]:
+  # 3 ups reach 1.0x, 8 ups reach 2.0x.
+  _normalize_speed() {
+    local up_steps=$1
+    for _ in 1 2 3 4 5 6 7 8 9 10 11; do send_text "$sess" "-"; sleep 0.1; done
+    local i=0
+    while [ $i -lt "$up_steps" ]; do send_text "$sess" "+"; sleep 0.1; i=$((i + 1)); done
+  }
+
+  # Phase 1: normalize to 1.0x, then restart narration so the stopwatch
+  # measures one clean pass.
   send_text "$sess" "r"
   if ! _wait_for_speaking "$sess" 15; then
-    fail_assert "narration never started for 1x phase" \
+    fail_assert "footer never appeared for 1x setup" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  _normalize_speed 3
+  sleep 1
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "1x narration never restarted" \
                 "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
     kill_ata "$sess"; end_test; return
   fi
@@ -736,24 +766,29 @@ tr052_d() {
   local t1_end; t1_end=$(date +%s.%N)
   local dur_1x; dur_1x=$(awk "BEGIN { printf \"%.2f\", $t1_end - $t1_start }")
 
-  # Phase 2: bump speed to 2x then narrate. The +/- bindings only fire
-  # while the audio footer (voice_status) is visible, so start narration
-  # first to bring the footer up, then press + five times. The ladder is
-  # [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]; five steps
-  # from 1.0 lands on 2.0. Each press restarts narration at the new
-  # speed (see on_voice_playback_speed_change in voice_mode.rs).
+  # Phase 2: same dance, target 2.0x.
   send_text "$sess" "r"
   if ! _wait_for_speaking "$sess" 15; then
-    fail_assert "narration never started for 2x phase" \
+    fail_assert "footer never appeared for 2x setup" \
                 "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
     kill_ata "$sess"; end_test; return
   fi
-  for _ in 1 2 3 4 5; do send_text "$sess" "+"; sleep 0.2; done
-  # Wait for the final restart to settle at 2x. The status text format is
-  # "Speaking (2x)" for non-default speeds.
-  sleep 2
-  if ! tmux capture-pane -t "$sess" -p 2>/dev/null | grep -qF "(2"; then
-    fail_assert "expected '(2' speed indicator after 5 + presses" \
+  _normalize_speed 8
+  sleep 1
+  # Footer renders as "Speaking (2×)" when the ladder is at exactly 2.0x
+  # (format_speed drops the trailing .0 on whole numbers). The 11 down
+  # plus 8 up climb is deterministic so any other "(2..." string here
+  # signals a normalize bug. Bytes 0xc3 0x97 are the UTF 8 encoding of
+  # the multiplication sign U+00D7.
+  if ! tmux capture-pane -t "$sess" -p 2>/dev/null \
+       | grep -qF "$(printf 'Speaking (2\xc3\x97)')"; then
+    fail_assert "expected exactly 2x speed indicator after ladder climb" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "2x narration never restarted" \
                 "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
     kill_ata "$sess"; end_test; return
   fi
@@ -767,13 +802,14 @@ tr052_d() {
 
   local ratio
   ratio=$(awk "BEGIN { printf \"%.2f\", $dur_1x / $dur_2x }")
-  echo "    [TR-052 B] dur_1x=${dur_1x}s dur_2x=${dur_2x}s ratio=${ratio}"
-  # Allow [1.5, 2.6] for startup overhead and text-rendering variance.
-  # The math (PCM stretch / wpm scaling) targets exactly 2.0; a 25%
-  # tolerance window catches a true UI-only stub regression while
-  # absorbing reasonable CI noise.
-  if ! awk "BEGIN { exit !($ratio >= 1.5 && $ratio <= 2.6) }"; then
-    fail_assert "expected 1x/2x duration ratio ~2.0; got $ratio (1x=${dur_1x}s 2x=${dur_2x}s)"
+  echo "    [TR-052 D] dur_1x=${dur_1x}s dur_2x=${dur_2x}s ratio=${ratio}"
+  # Local backends (say/espeak-ng) scale wpm directly so ratio ~ 2.0.
+  # ElevenLabs cache replay stretches PCM via user_speed/clamp(0.7,1.2)
+  # so the ratio targets 2.0/1.2 = 1.667. Window [1.4, 2.6] covers both
+  # plus ~10% wall clock noise; a UI only stub regression would land
+  # near 1.0 and fail loudly either way.
+  if ! awk "BEGIN { exit !($ratio >= 1.4 && $ratio <= 2.6) }"; then
+    fail_assert "expected 1x/2x duration ratio in [1.4, 2.6]; got $ratio (1x=${dur_1x}s 2x=${dur_2x}s)"
   fi
 
   kill_ata "$sess"
