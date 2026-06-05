@@ -221,6 +221,37 @@ pub(crate) fn speaking_status_text(speed: f64) -> String {
     }
 }
 
+/// ElevenLabs WS only honors `voice_settings.speed` in 0.7..=1.2. Any ladder
+/// position outside that range is clamped server-side, so a user pick of 2× or
+/// 0.5× would silently come back at 1.2× or 0.7×. We make up the gap by
+/// "lying" to the resampler about the source sample rate when enqueueing PCM:
+///   effective_rate = NATIVE_24K * (user_speed / clamped_el_speed)
+/// `convert_pcm16` then resamples that source rate to the cpal output rate,
+/// changing wall-clock playback duration by the desired factor. (Side effect:
+/// pitch shifts proportionally — chipmunk on speedup, deeper on slowdown.
+/// Tolerable for narration; a pitch-preserving stretch is a follow-up.)
+pub(crate) fn elevenlabs_effective_sample_rate(user_speed: f64) -> u32 {
+    const NATIVE_RATE: f64 = 24_000.0;
+    let clamped = user_speed.clamp(0.7, 1.2);
+    ((NATIVE_RATE * user_speed / clamped).round() as u32).max(1)
+}
+
+/// Sample rate to use when replaying cached PCM at a target speed that
+/// may differ from the speed the cache was captured at. The cached PCM
+/// already encodes the SOURCE speed's server-side clamp, so the resampler
+/// must divide by that source clamp, not the current target's clamp, to
+/// land at the true requested wall clock speedup. Example: cache filled
+/// at 1.0x (server clamp 1.0), replay at target 2.0x, helper returns
+/// 24000 * 2.0 / 1.0 = 48000 → 2.0x speedup. Using the live formula
+/// here would give 24000 * 2.0 / 1.2 = 40000 → only 1.67x because the
+/// 1.2 divisor assumes server-pre-stretched audio that doesn't exist in
+/// this cache.
+pub(crate) fn elevenlabs_cache_replay_sample_rate(target_speed: f64, source_speed: f64) -> u32 {
+    const NATIVE_RATE: f64 = 24_000.0;
+    let source_clamp = source_speed.clamp(0.7, 1.2);
+    ((NATIVE_RATE * target_speed / source_clamp).round() as u32).max(1)
+}
+
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
 /// Phases of the voice mode state machine.
@@ -848,6 +879,11 @@ pub(crate) struct TtsCacheEntry {
     pub(crate) chunks: Vec<Vec<i16>>,
     /// Cached alignment timeline so karaoke works on replay.
     pub(crate) alignment_timeline: Vec<AlignmentEntry>,
+    /// User-side speed setting at the moment the PCM was generated.
+    /// On replay, this is the denominator the resampler must use so
+    /// that a later target speed produces the correct total speedup,
+    /// regardless of the current ladder position.
+    pub(crate) source_speed: f64,
 }
 
 /// A word-level entry in the alignment timeline.
@@ -950,6 +986,13 @@ pub(crate) struct VoiceModeState {
     /// When narrating a section, tracks the (document_id, section_index)
     /// and content hash so chunks can be collected for caching.
     pub(crate) narrating_section: Option<(String, usize, u64)>,
+    /// When `Some`, the next batch of PCM enqueued via the cache hit path
+    /// should treat this as the SOURCE speed (the speed the cache was
+    /// captured at), not the current ladder position. Lets a target speed
+    /// that differs from the source produce the correct total speedup
+    /// instead of double clamping. Cleared by `interrupt_tts` and after
+    /// the cache hit enqueue loop ends.
+    pub(crate) cache_replay_source_speed: Option<f64>,
     /// Number of heading words in the narration text. The TTS audio includes
     /// the heading but the reading view renders it separately, so karaoke
     /// must skip this many words to stay in sync.
@@ -1067,6 +1110,7 @@ impl VoiceModeState {
             tts_section_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             prefetch_pending: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
             narrating_section: None,
+            cache_replay_source_speed: None,
             narrating_heading_words: 0,
             selection_word_offset: None,
             narrating_cleaned_text: None,
@@ -1155,6 +1199,7 @@ impl VoiceModeState {
         self.tts_ordering_lock = Arc::new(tokio::sync::Mutex::new(()));
         // Clear narration collection state.
         self.narrating_section = None;
+        self.cache_replay_source_speed = None;
         self.narrating_heading_words = 0;
         self.selection_word_offset = None;
         self.narrating_cleaned_text = None;
@@ -1283,6 +1328,7 @@ impl VoiceModeState {
 
         let chunks = std::mem::take(&mut self.narrating_chunks);
         let alignment_timeline = self.tts_alignment_timeline.clone();
+        let source_speed = self.playback_speed;
         if let Ok(mut cache) = self.tts_section_cache.lock() {
             cache.insert(
                 (doc_id, sec_idx),
@@ -1290,6 +1336,7 @@ impl VoiceModeState {
                     content_hash,
                     chunks,
                     alignment_timeline,
+                    source_speed,
                 },
             );
         } else {
@@ -2851,12 +2898,16 @@ impl super::ChatWidget {
         if !state.tts_playback_started {
             state.tts_playback_started = true;
             let mut enqueued_audio = false;
+            let effective_rate = match state.cache_replay_source_speed {
+                Some(source) => elevenlabs_cache_replay_sample_rate(state.playback_speed, source),
+                None => elevenlabs_effective_sample_rate(state.playback_speed),
+            };
             if let Some(ref player) = state.audio_player {
                 player.reset_playback_position();
                 let mut chunks = std::mem::take(&mut state.tts_startup_buffered_chunks);
                 chunks.extend(extra_chunks);
                 for chunk in &chunks {
-                    player.enqueue_pcm(chunk, 24_000, 1);
+                    player.enqueue_pcm(chunk, effective_rate, 1);
                 }
                 enqueued_audio = !chunks.is_empty();
             } else {
@@ -2891,8 +2942,12 @@ impl super::ChatWidget {
                     Some((section_index, total_words, state.selection_word_offset));
             }
         } else if let Some(ref player) = state.audio_player {
+            let effective_rate = match state.cache_replay_source_speed {
+                Some(source) => elevenlabs_cache_replay_sample_rate(state.playback_speed, source),
+                None => elevenlabs_effective_sample_rate(state.playback_speed),
+            };
             for chunk in &extra_chunks {
-                player.enqueue_pcm(chunk, 24_000, 1);
+                player.enqueue_pcm(chunk, effective_rate, 1);
             }
         }
 
@@ -3794,29 +3849,102 @@ impl super::ChatWidget {
     /// running TTS worker (which respawns its child / future sentences at the
     /// new rate).
     pub(crate) fn on_voice_playback_speed_change(&mut self, delta: f64) {
-        let Some(ref mut state) = self.voice_mode_state else {
-            return;
+        tracing::info!(
+            "[TTS-TIMING] on_voice_playback_speed_change: delta={delta} state.is_some={}",
+            self.voice_mode_state.is_some(),
+        );
+        // Phase 1: mutate state and decide what to do next.
+        let (new_speed, cached_replay) = {
+            let Some(ref mut state) = self.voice_mode_state else {
+                return;
+            };
+            let current = state.playback_speed;
+            let new_speed = if delta > 0.0 {
+                step_speed_up(current)
+            } else if delta < 0.0 {
+                step_speed_down(current)
+            } else {
+                current
+            };
+            if (new_speed - current).abs() < 1e-6 {
+                return;
+            }
+            state.playback_speed = new_speed;
+            // Drop buffered PCM so the user hears the new speed within ~50ms
+            // instead of waiting for the old-speed queue to drain.
+            if let Some(ref player) = state.audio_player {
+                player.clear();
+            }
+            if let Some(tx) = state.tts_worker_tx.as_ref() {
+                let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
+            }
+            // If the live worker is gone (either because narration has
+            // already finished generating server-side and got persisted to
+            // the cache, or because we are playing a true cache hit), grab
+            // the chunks AND the speed they were generated at so we can
+            // re-enqueue at a correct effective rate. Without the source
+            // speed the resampler would divide by the wrong clamp and
+            // under-stretch the audio (e.g. 1.67x instead of 2.0x when
+            // target=2.0 and the cache was filled at 1.0).
+            let cached_replay: Option<(Vec<Vec<i16>>, f64)> = if state.tts_worker_tx.is_none() {
+                let from_cache = state.narrating_section.as_ref().and_then(|ns| {
+                    let key = (ns.0.clone(), ns.1);
+                    state.tts_section_cache.lock().ok().and_then(|cache| {
+                        cache
+                            .get(&key)
+                            .map(|entry| (entry.chunks.clone(), entry.source_speed))
+                    })
+                });
+                if from_cache.is_some() {
+                    from_cache
+                } else if !state.narrating_chunks.is_empty() {
+                    // Mid narration before persist_narration_cache fires.
+                    // The chunks already collected were captured at the
+                    // speed we are changing FROM, i.e. `current`.
+                    Some((state.narrating_chunks.clone(), current))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            tracing::info!(
+                "[TTS-TIMING] speed change: current={current} new={new_speed} has_worker={} narrating_chunks={} cached_replay_chunks={} source_speed={:?}",
+                state.tts_worker_tx.is_some(),
+                state.narrating_chunks.len(),
+                cached_replay.as_ref().map(|(c, _)| c.len()).unwrap_or(0),
+                cached_replay.as_ref().map(|(_, s)| *s),
+            );
+            (new_speed, cached_replay)
         };
-        let current = state.playback_speed;
-        let new_speed = if delta > 0.0 {
-            step_speed_up(current)
-        } else if delta < 0.0 {
-            step_speed_down(current)
-        } else {
-            current
-        };
-        if (new_speed - current).abs() < 1e-6 {
-            return;
-        }
-        state.playback_speed = new_speed;
-        if let Some(tx) = state.tts_worker_tx.as_ref() {
-            let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
-        }
+
         self.cached_elevenlabs_speed = Some(new_speed);
         if !self.is_reading_view_browser_mode() {
             self.bottom_pane
                 .set_document_reader_voice_status(Some(speaking_status_text(new_speed)));
         }
+
+        if let Some((chunks, source_speed)) = cached_replay
+            && let Some(ref state) = self.voice_mode_state
+            && let Some(ref player) = state.audio_player
+        {
+            // Re-enqueue cached PCM directly at the new effective sample
+            // rate. Going through on_voice_tts_audio_chunk would double
+            // count narrating_chunks and the alignment timeline on every
+            // press, so back to back + taps would queue exponentially more
+            // audio (4 presses → 16x the section). Direct enqueue keeps
+            // the queue at exactly one section worth no matter how many
+            // times the user steps the ladder. Pass the source speed (the
+            // speed the cache was captured at) so the resampler divides
+            // by the correct clamp and the listener hears the requested
+            // target speed, not target/source_clamp/target_clamp.
+            let effective_rate =
+                elevenlabs_cache_replay_sample_rate(state.playback_speed, source_speed);
+            for chunk in &chunks {
+                player.enqueue_pcm(chunk, effective_rate, 1);
+            }
+        }
+
         self.request_redraw();
     }
 
@@ -4218,20 +4346,26 @@ impl super::ChatWidget {
         // Phase 2: check cache (works for both full sections and selections —
         // the content_hash distinguishes different text under the same key).
         let cache_check_start = std::time::Instant::now();
-        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>)> =
+        let cached: Option<(Vec<Vec<i16>>, Vec<AlignmentEntry>, f64)> =
             self.voice_mode_state.as_ref().and_then(|state| {
                 state.tts_section_cache.lock().ok().and_then(|cache| {
                     cache
                         .get(&(document_id.clone(), section_index))
                         .filter(|entry| entry.content_hash == content_hash)
-                        .map(|entry| (entry.chunks.clone(), entry.alignment_timeline.clone()))
+                        .map(|entry| {
+                            (
+                                entry.chunks.clone(),
+                                entry.alignment_timeline.clone(),
+                                entry.source_speed,
+                            )
+                        })
                 })
             });
         let cache_hit = cached.is_some();
-        let cache_chunks = cached.as_ref().map(|(c, _)| c.len()).unwrap_or(0);
+        let cache_chunks = cached.as_ref().map(|(c, _, _)| c.len()).unwrap_or(0);
         let cache_samples: usize = cached
             .as_ref()
-            .map(|(c, _)| c.iter().map(std::vec::Vec::len).sum())
+            .map(|(c, _, _)| c.iter().map(std::vec::Vec::len).sum())
             .unwrap_or(0);
         tracing::info!(
             "[TTS-TIMING] cache check: hit={cache_hit}, chunks={cache_chunks}, \
@@ -4245,7 +4379,7 @@ impl super::ChatWidget {
         // naturally aligned and no skip is needed.
         let heading_words = 0;
 
-        if let Some((chunks, cached_timeline)) = cached {
+        if let Some((chunks, cached_timeline, cache_source_speed)) = cached {
             if self.is_reading_view_browser_mode() {
                 append_browser_reading_view_debug_log(&format!(
                     "narrate_section cache_hit section={section_index} chunks={} timeline_entries={}",
@@ -4266,9 +4400,19 @@ impl super::ChatWidget {
                 state.equation_word_spans = eq_spans;
                 state.tts_alignment_timeline = cached_timeline;
                 repair_timeline_monotonicity(&mut state.tts_alignment_timeline);
+                // Tell ensure_tts_playback_started that the chunks it's
+                // about to enqueue were captured at `cache_source_speed`,
+                // not at the current ladder position. Without this the
+                // resampler would divide by the WRONG clamp and the user
+                // would hear under-stretched audio (e.g. 1.67x instead of
+                // 2.0x when target=2.0 and cache=1.0).
+                state.cache_replay_source_speed = Some(cache_source_speed);
             }
             for chunk in chunks {
                 self.on_voice_tts_audio_chunk(chunk, None);
+            }
+            if let Some(ref mut state) = self.voice_mode_state {
+                state.cache_replay_source_speed = None;
             }
             tracing::info!(
                 "[TTS-TIMING] cache hit: enqueued {num_chunks} chunks ({total_samples} samples, \
@@ -4453,6 +4597,9 @@ impl super::ChatWidget {
         let cache = state.tts_section_cache.clone();
         let pending = state.prefetch_pending.clone();
         let proxy = build_elevenlabs_proxy(&self.auth_manager);
+        // Speed the prefetch was generated at. The cache needs this so a
+        // later speed change replays at the correct effective rate.
+        let prefetch_source_speed = vc.elevenlabs.as_ref().and_then(|e| e.speed).unwrap_or(1.0);
 
         tokio::spawn(async move {
             let mut all_chunks = Vec::new();
@@ -4481,6 +4628,7 @@ impl super::ChatWidget {
                         content_hash,
                         chunks: all_chunks,
                         alignment_timeline: all_timeline,
+                        source_speed: prefetch_source_speed,
                     },
                 );
             }
@@ -5123,7 +5271,6 @@ async fn tts_worker_loop(
     }
 
     let worker_start = std::time::Instant::now();
-    tracing::info!("[TTS-TIMING] tts_worker_loop: connecting to ElevenLabs WebSocket...");
     let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key.unwrap_or_default());
     if let Some(proxy) = proxy {
         config.proxy = Some(proxy);
@@ -5139,111 +5286,251 @@ async fn tts_worker_loop(
         config.speed = el.speed;
     }
 
-    let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
-        Ok(s) => {
-            tracing::info!(
-                "[TTS-TIMING] tts_worker_loop: WebSocket connected in {:?}",
-                worker_start.elapsed(),
-            );
-            s
-        }
-        Err(e) => {
-            tracing::error!("TTS worker connect: {e}");
-            event_tx.send(AppEvent::VoiceModeTtsError {
-                error: format!("TTS connection failed: {e}"),
-            });
-            if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-                event_tx.send(AppEvent::VoiceModeTtsFinished);
-            }
-            return;
-        }
-    };
+    // Sentences sent on the current WebSocket connection. Resent on reconnect
+    // so a mid-block speed change (which has to reopen the WS to take effect)
+    // does not silence the rest of the block. Cleared when the stream drains
+    // naturally (server signals `is_final` → `recv_audio()` returns None).
+    let mut current_block_text: Vec<String> = Vec::new();
+    // Whether the caller has issued `Finish` already. Persists across reconnect
+    // so we re-issue EOS to the new stream after replaying the buffered text.
+    let mut finish_requested = false;
+    // The most recent stream — held outside the loops so the post-exit
+    // `recv_error()` check can surface server errors (e.g. invalid voice_id).
+    let mut last_stream: Option<codex_elevenlabs::tts::TtsStream> = None;
 
     tracing::debug!("TTS worker started (gen={my_gen})");
-    let mut finishing = false;
-    let mut first_chunk_sent = false;
-    loop {
-        if finishing {
-            // Drain remaining audio after close request.
-            match stream.recv_audio().await {
-                Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
-                    event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
-                        pcm: chunk.pcm,
-                        alignment: chunk.alignment,
-                    });
-                }
-                Some(_) => {} // stale generation
-                None => break,
+    'connect: loop {
+        if gen_ref.load(Ordering::SeqCst) != my_gen {
+            break 'connect;
+        }
+        let connect_start = std::time::Instant::now();
+        tracing::info!(
+            "[TTS-TIMING] tts_worker_loop: connecting to ElevenLabs WebSocket (speed={:?})...",
+            config.speed,
+        );
+        let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
+            Ok(s) => {
+                tracing::info!(
+                    "[TTS-TIMING] tts_worker_loop: WebSocket connected in {:?}",
+                    connect_start.elapsed(),
+                );
+                s
             }
-        } else {
-            tokio::select! {
-                biased;
+            Err(e) => {
+                tracing::error!("TTS worker connect: {e}");
+                event_tx.send(AppEvent::VoiceModeTtsError {
+                    error: format!("TTS connection failed: {e}"),
+                });
+                if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    event_tx.send(AppEvent::VoiceModeTtsFinished);
+                }
+                return;
+            }
+        };
 
-                cmd = cmd_rx.recv() => {
-                    match cmd {
-                        Some(TtsWorkerCommand::SendText(text)) => {
-                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
-                            if let Err(e) = stream.send_text(&text).await {
-                                tracing::error!("TTS worker send: {e}");
+        // On reconnect (current_block_text non-empty), replay all buffered
+        // sentences so the new WS produces the remaining audio at the new
+        // speed. The block restarts from the beginning — acceptable UX since
+        // ElevenLabs offers no mid-stream speed knob.
+        if !current_block_text.is_empty() {
+            tracing::info!(
+                "[TTS-TIMING] tts_worker_loop: replaying {} buffered sentence(s) on new connection",
+                current_block_text.len(),
+            );
+            let mut replay_err = false;
+            for text in current_block_text.iter() {
+                if let Err(e) = stream.send_text(text).await {
+                    tracing::error!("TTS worker replay send: {e}");
+                    replay_err = true;
+                    break;
+                }
+            }
+            if !replay_err && let Err(e) = stream.flush().await {
+                tracing::error!("TTS worker replay flush: {e}");
+                replay_err = true;
+            }
+            if !replay_err && finish_requested {
+                stream.send_eos().await;
+            }
+            if replay_err {
+                last_stream = Some(stream);
+                break 'connect;
+            }
+        }
 
-                                break;
-                            }
-                            if let Err(e) = stream.flush().await {
-                                tracing::error!("TTS worker flush: {e}");
+        let mut finishing = finish_requested && !current_block_text.is_empty();
+        let mut first_chunk_sent = false;
+        // True once the caller drops its end of `cmd_rx`. After that point
+        // there is no point polling `cmd_rx` again — `recv()` will return
+        // None instantly forever and a biased `tokio::select!` would spin.
+        // Switch to a pure audio drain so the worker keeps reading until
+        // the server closes the stream.
+        let mut cmd_closed = false;
 
-                                break;
-                            }
-                        }
-                        Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
-                            // ElevenLabs voice_settings.speed is sent in the BOS
-                            // message and cannot be changed mid-WebSocket. Record
-                            // the new speed so the next worker connection picks it
-                            // up; audio already streaming continues at the old
-                            // speed. The next ChatWidget worker spawn reads
-                            // `cached_elevenlabs_speed`, which the keypress handler
-                            // already updated, so there is nothing else to do here.
+        'commands: loop {
+            if cmd_closed {
+                match stream.recv_audio().await {
+                    Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                        if !first_chunk_sent {
+                            first_chunk_sent = true;
                             tracing::info!(
-                                "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) — \
-                                 takes effect on next worker connection (ElevenLabs API \
-                                 sets speed at WebSocket BOS only)"
+                                "[TTS-TIMING] tts_worker_loop: first audio chunk received ({} samples) after {:?} total (drain mode)",
+                                chunk.pcm.len(),
+                                worker_start.elapsed(),
                             );
-                            config.speed = Some(new_speed);
                         }
-                        Some(TtsWorkerCommand::Finish) => {
-                            let _ = stream.flush().await;
-                            // Send EOS without closing — the server finishes
-                            // generating audio and sends is_final, which causes
-                            // recv_audio() to return None.
-                            stream.send_eos().await;
-                            finishing = true;
+                        event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                            pcm: chunk.pcm,
+                            alignment: chunk.alignment,
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        current_block_text.clear();
+                        last_stream = Some(stream);
+                        break 'connect;
+                    }
+                }
+                continue 'commands;
+            }
+            if finishing {
+                tokio::select! {
+                    biased;
+
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                                if (config.speed.unwrap_or(1.0) - new_speed).abs() < 1e-6 {
+                                    continue 'commands;
+                                }
+                                tracing::info!(
+                                    "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) during finish drain — reconnecting"
+                                );
+                                config.speed = Some(new_speed);
+                                drop(stream);
+                                continue 'connect;
+                            }
+                            // Ignore any other commands while draining; the
+                            // caller has already said Finish.
+                            Some(_) => continue 'commands,
+                            None => {
+                                // Caller is gone but the server may still be
+                                // streaming audio. Switch to drain mode instead
+                                // of bailing out, otherwise short narrations
+                                // (where SendText + Finish arrive before the
+                                // first chunk does) come back silent.
+                                cmd_closed = true;
+                                continue 'commands;
+                            }
                         }
-                        None => {
-                            // Sender dropped (interrupted) — exit immediately.
-                            break;
+                    }
+
+                    chunk = stream.recv_audio() => {
+                        match chunk {
+                            Some(c) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                                if !first_chunk_sent {
+                                    first_chunk_sent = true;
+                                    tracing::info!(
+                                        "[TTS-TIMING] tts_worker_loop: first audio chunk received ({} samples) after {:?} total",
+                                        c.pcm.len(),
+                                        worker_start.elapsed(),
+                                    );
+                                }
+                                event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                                    pcm: c.pcm,
+                                    alignment: c.alignment,
+                                });
+                            }
+                            Some(_) => {}
+                            None => {
+                                current_block_text.clear();
+                                last_stream = Some(stream);
+                                break 'connect;
+                            }
                         }
                     }
                 }
+            } else {
+                tokio::select! {
+                    biased;
 
-                chunk = stream.recv_audio() => {
-                    match chunk {
-                        Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
-                            if !first_chunk_sent {
-                                first_chunk_sent = true;
-                                tracing::info!(
-                                    "[TTS-TIMING] tts_worker_loop: first audio chunk received \
-                                     ({} samples, ~{}ms) after {:?} total",
-                                    chunk.pcm.len(),
-                                    chunk.pcm.len() as u64 * 1000 / 24000,
-                                    worker_start.elapsed(),
-                                );
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(TtsWorkerCommand::SendText(text)) => {
+                                if gen_ref.load(Ordering::SeqCst) != my_gen {
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
+                                current_block_text.push(text.clone());
+                                if let Err(e) = stream.send_text(&text).await {
+                                    tracing::error!("TTS worker send: {e}");
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
+                                if let Err(e) = stream.flush().await {
+                                    tracing::error!("TTS worker flush: {e}");
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
                             }
-                            event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
-                                pcm: chunk.pcm,
-                                alignment: chunk.alignment,
-                            });
+                            Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                                if (config.speed.unwrap_or(1.0) - new_speed).abs() < 1e-6 {
+                                    continue 'commands;
+                                }
+                                tracing::info!(
+                                    "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) — reconnecting WebSocket"
+                                );
+                                config.speed = Some(new_speed);
+                                drop(stream);
+                                continue 'connect;
+                            }
+                            Some(TtsWorkerCommand::Finish) => {
+                                let _ = stream.flush().await;
+                                stream.send_eos().await;
+                                finishing = true;
+                                finish_requested = true;
+                            }
+                            None => {
+                                // Caller is done. If they never even sent
+                                // Finish (rare race), send EOS now so the
+                                // server stops generating, then drain.
+                                if !finish_requested {
+                                    let _ = stream.flush().await;
+                                    stream.send_eos().await;
+                                    finishing = true;
+                                    finish_requested = true;
+                                }
+                                cmd_closed = true;
+                                continue 'commands;
+                            }
                         }
-                        Some(_) => {}
-                        None => break,
+                    }
+
+                    chunk = stream.recv_audio() => {
+                        match chunk {
+                            Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                                if !first_chunk_sent {
+                                    first_chunk_sent = true;
+                                    tracing::info!(
+                                        "[TTS-TIMING] tts_worker_loop: first audio chunk received \
+                                         ({} samples, ~{}ms) after {:?} total",
+                                        chunk.pcm.len(),
+                                        chunk.pcm.len() as u64 * 1000 / 24000,
+                                        worker_start.elapsed(),
+                                    );
+                                }
+                                event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                                    pcm: chunk.pcm,
+                                    alignment: chunk.alignment,
+                                });
+                            }
+                            Some(_) => {}
+                            None => {
+                                current_block_text.clear();
+                                last_stream = Some(stream);
+                                break 'connect;
+                            }
+                        }
                     }
                 }
             }
@@ -5251,16 +5538,18 @@ async fn tts_worker_loop(
     }
 
     tracing::debug!("TTS worker exiting (gen={my_gen})");
-    // Check if the stream was closed with an error (e.g., invalid voice_id)
-    if let Some(err) = stream.recv_error() {
+    // Check if the final stream was closed with an error (e.g., invalid voice_id).
+    if let Some(mut stream) = last_stream
+        && let Some(err) = stream.recv_error()
+    {
         tracing::warn!("TTS worker detected server error: {err}");
         if gen_ref.load(Ordering::SeqCst) == my_gen {
             in_flight.fetch_sub(1, Ordering::SeqCst);
             event_tx.send(AppEvent::VoiceModeTtsError { error: err });
+            return;
         }
-    } else if gen_ref.load(Ordering::SeqCst) == my_gen
-        && in_flight.fetch_sub(1, Ordering::SeqCst) == 1
-    {
+    }
+    if gen_ref.load(Ordering::SeqCst) == my_gen && in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
         event_tx.send(AppEvent::VoiceModeTtsFinished);
     }
 }
@@ -7228,6 +7517,119 @@ mod tests {
         assert_eq!(format_speed(1.5), "1.5\u{00D7}");
         assert_eq!(format_speed(0.5), "0.5\u{00D7}");
         assert_eq!(format_speed(1.7), "1.7\u{00D7}");
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_passes_through_in_range() {
+        // In-range speeds (0.7..=1.2) — ElevenLabs honors natively, so no
+        // PCM-level stretch. Effective rate equals the native 24kHz.
+        assert_eq!(elevenlabs_effective_sample_rate(0.8), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(0.9), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.0), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.1), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.2), 24_000);
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_compensates_above_1_2x() {
+        // Speeds > 1.2 clamp on the API; PCM-rate "lie" makes up the gap.
+        // 1.5/1.2 = 1.25, 2.0/1.2 = 1.666…, 3.0/1.2 = 2.5
+        assert_eq!(elevenlabs_effective_sample_rate(1.5), 30_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.7), 34_000);
+        assert_eq!(elevenlabs_effective_sample_rate(2.0), 40_000);
+        assert_eq!(elevenlabs_effective_sample_rate(2.5), 50_000);
+        assert_eq!(elevenlabs_effective_sample_rate(3.0), 60_000);
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_compensates_below_0_7x() {
+        // 0.5/0.7 = 0.714…; effective rate is < native to slow playback further.
+        assert_eq!(elevenlabs_effective_sample_rate(0.5), 17_143);
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_matches_live_when_source_eq_target() {
+        // When the cache was captured at the same speed it's replayed at,
+        // the helper must return the same effective rate as the live
+        // formula. This keeps behavior identical for the trivial case.
+        for &s in &[0.5f64, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 2.0, 2.5, 3.0] {
+            assert_eq!(
+                elevenlabs_cache_replay_sample_rate(s, s),
+                elevenlabs_effective_sample_rate(s),
+                "live vs cache mismatch at speed {s}",
+            );
+        }
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_targets_true_2x_from_1x_cache() {
+        // The bug fix: cache filled at 1.0x, replay at 2.0x, must give
+        // 2.0x total speedup not 1.667x. Formula: 24000 * 2.0 / 1.0 = 48000.
+        // Live formula would give 24000 * 2.0 / 1.2 = 40000 (1.667x).
+        assert_eq!(elevenlabs_cache_replay_sample_rate(2.0, 1.0), 48_000);
+    }
+
+    #[test]
+    fn elevenlabs_cache_replay_sample_rate_handles_1_1x_config_default() {
+        // The Tim config case: cache at 1.1x (in-range, server clamp 1.1),
+        // replay at target 2.0x. Math: 24000 * 2.0 / 1.1 = 43636. Combined
+        // with the cache's 1.1x server stretch, total speedup is 2.0x.
+        assert_eq!(elevenlabs_cache_replay_sample_rate(2.0, 1.1), 43_636);
+    }
+
+    /// Wall-clock duration of the narration as a function of user-requested speed.
+    ///
+    /// Models the round-trip for a fixed text:
+    ///   * ElevenLabs runs at `clamp(user_speed, 0.7..=1.2)` server-side, so the
+    ///     returned PCM contains `n_native / clamped` samples (faster server-side
+    ///     speech yields fewer samples).
+    ///   * We hand the player `elevenlabs_effective_sample_rate(user_speed)`, so
+    ///     it consumes those samples at a rate scaled to make the perceived
+    ///     speed equal to `user_speed`.
+    ///   * Wall-clock duration = samples / playback_rate.
+    fn elevenlabs_perceived_duration(n_native: f64, user_speed: f64) -> f64 {
+        let clamped = user_speed.clamp(0.7, 1.2);
+        let samples_after_server_stretch = n_native / clamped;
+        let playback_rate = elevenlabs_effective_sample_rate(user_speed) as f64;
+        samples_after_server_stretch / playback_rate
+    }
+
+    #[test]
+    fn elevenlabs_2x_speed_halves_perceived_duration() {
+        // Directly verifies Nima's request: 2x narration must play in ~½ the
+        // wall-clock time of 1x for the same source text. Below the helper
+        // models the full pipeline (server-side clamp + PCM sample-rate
+        // stretch) so changing either side without keeping the math
+        // consistent would break this test.
+        let n = 100_000.0;
+        let one_x = elevenlabs_perceived_duration(n, 1.0);
+        let two_x = elevenlabs_perceived_duration(n, 2.0);
+        let ratio = one_x / two_x;
+        assert!(
+            (ratio - 2.0).abs() < 1e-3,
+            "expected 2x duration to be half of 1x; got ratio {ratio} (1x={one_x}s 2x={two_x}s)"
+        );
+    }
+
+    #[test]
+    fn elevenlabs_full_speed_ladder_scales_duration_linearly() {
+        // Across the full discrete ladder, doubling the user-requested speed
+        // must roughly halve the perceived duration. Guards against silent
+        // breakage of any individual ladder entry.
+        let ladder = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0];
+        let n = 100_000.0;
+        for &speed in &ladder {
+            let dur = elevenlabs_perceived_duration(n, speed);
+            // duration * user_speed == n / native_rate, invariant: the
+            // perceived "speech rate" expressed in samples-per-second-of-
+            // perceived-time is always the native 24 kHz.
+            let perceived_rate = n / dur;
+            assert!(
+                (perceived_rate - 24_000.0 * speed).abs() < 5.0,
+                "perceived rate at speed {speed}x should be ~{} Hz; got {perceived_rate} Hz (dur={dur}s)",
+                24_000.0 * speed
+            );
+        }
     }
 
     #[test]

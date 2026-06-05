@@ -134,6 +134,31 @@ wait_for_idle() {
   return 1
 }
 
+# Wait for the "Speaking" indicator (audio footer) to appear within
+# timeout seconds. Returns 0 on success, 1 on timeout. Used by TR-052 B
+# to measure narration duration.
+_wait_for_speaking() {
+  local s=$1 timeout=${2:-15}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if tmux capture-pane -t "$s" -p 2>/dev/null | grep -qF "Speaking"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+
+# Wait for the "Speaking" indicator to disappear within timeout seconds.
+# Returns 0 on success, 1 on timeout.
+_wait_for_silence() {
+  local s=$1 timeout=${2:-90}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if ! tmux capture-pane -t "$s" -p 2>/dev/null | grep -qF "Speaking"; then return 0; fi
+    sleep 0.3
+  done
+  return 1
+}
+
 # Find the most recently modified ata session JSONL (the one our test
 # just produced). Returns the path or empty string.
 #
@@ -351,6 +376,45 @@ tr001_a() {
   assert_contains "$out" "Sections (n/p" "reader marker present"
   assert_contains "$out" "Slide 1" "first section heading visible"
   assert_contains "$out" "q: close" "reader footer hint shown"
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-001 B: reading view survives a 132 → 70 → 132 resize cycle without
+# welcome-banner or chat-composer cells leaking into the reader frame.
+# This guards the v0.129.0 merge resize-corruption bug. Uses
+# `tmux resize-window` because boot_ata creates a detached session (no
+# attached client → `resize-pane -x` is a no-op).
+tr001_b() {
+  start_test "TR-001 B"
+  local sess=$SESSION-001b
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+
+  local baseline=$WORK/001b-baseline.txt
+  local narrow=$WORK/001b-narrow.txt
+  local restored=$WORK/001b-restored.txt
+
+  capture "$sess" "$baseline"
+  assert_contains "$baseline" "Sections (n/p"            "baseline: reader marker present"
+  assert_not_contains "$baseline" "Tip: New For a limited time" "baseline: no welcome-banner leak"
+
+  # Shrink. Multi-frame repaint takes ~200ms; 4s is plenty of margin.
+  tmux resize-window -t "$sess" -x 70 -y 50 2>/dev/null || true
+  sleep 4
+  capture "$sess" "$narrow"
+  assert_contains     "$narrow" "Sections (n/p"            "narrow: reader still drawing"
+  assert_not_contains "$narrow" "Tip: New For a limited time" "narrow: welcome-banner did not leak in on resize"
+  assert_not_contains "$narrow" "/model to change"         "narrow: composer model row did not leak in"
+  assert_not_contains "$narrow" "directory:   ~/"          "narrow: composer directory row did not leak in"
+
+  # Restore.
+  tmux resize-window -t "$sess" -x 132 -y 40 2>/dev/null || true
+  sleep 4
+  capture "$sess" "$restored"
+  assert_contains     "$restored" "Sections (n/p"           "restored: reader still drawing"
+  assert_not_contains "$restored" "Tip: New For a limited time" "restored: welcome-banner did not leak in on resize back"
+  assert_not_contains "$restored" "/model to change"        "restored: composer model row did not leak in"
+
   kill_ata "$sess"
   end_test
 }
@@ -640,6 +704,114 @@ tr052_a() {
   if grep -qE 'tts_backend[[:space:]]*=[[:space:]]*"say"' "$HOME/.ata/config.toml" 2>/dev/null; then
     assert_not_contains "$out" "Invalid API key" "local TTS backend should not surface credential error"
   fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 D: pressing + bumps TTS playback speed and the audio actually
+# plays faster. Narrate the same section at a normalized 1x and again
+# at a normalized 2x, then assert that 2x wall-clock duration is roughly
+# half of 1x. This is Nima's request: the end-to-end speed change must
+# be measurable on the wire, not just reported in the UI.
+#
+# Methodology: the user's config might have a non default speed (e.g.
+# 1.1x), and the +/- bindings only fire while the audio footer is
+# visible. So each phase brings the footer up with one r press, walks
+# the ladder down to 0.5x and back up to the target rung, then presses
+# r again to restart narration from cache at exactly that target. Only
+# the second r is timed, so the wall clock measured is one full pass at
+# the requested speed regardless of what the config defaults to.
+#
+# Works with both local backends (say/espeak-ng scale wpm with speed)
+# and ElevenLabs (PCM rate stretch via elevenlabs_effective_sample_rate
+# in voice_mode.rs); fails only if the speed change is reverted to a UI
+# only stub.
+tr052_d() {
+  start_test "TR-052 D"
+  local sess=$SESSION-052d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+
+  # Helper: walk to 0.5x (11 minus presses cover the whole ladder from
+  # any starting rung), then up by $1 plus presses. Ladder is
+  # [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]:
+  # 3 ups reach 1.0x, 8 ups reach 2.0x.
+  _normalize_speed() {
+    local up_steps=$1
+    for _ in 1 2 3 4 5 6 7 8 9 10 11; do send_text "$sess" "-"; sleep 0.1; done
+    local i=0
+    while [ $i -lt "$up_steps" ]; do send_text "$sess" "+"; sleep 0.1; i=$((i + 1)); done
+  }
+
+  # Phase 1: normalize to 1.0x, then restart narration so the stopwatch
+  # measures one clean pass.
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "footer never appeared for 1x setup" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  _normalize_speed 3
+  sleep 1
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "1x narration never restarted" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t1_start; t1_start=$(date +%s.%N)
+  if ! _wait_for_silence "$sess" 90; then
+    fail_assert "1x narration never finished within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t1_end; t1_end=$(date +%s.%N)
+  local dur_1x; dur_1x=$(awk "BEGIN { printf \"%.2f\", $t1_end - $t1_start }")
+
+  # Phase 2: same dance, target 2.0x.
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "footer never appeared for 2x setup" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  _normalize_speed 8
+  sleep 1
+  # Footer renders as "Speaking (2×)" when the ladder is at exactly 2.0x
+  # (format_speed drops the trailing .0 on whole numbers). The 11 down
+  # plus 8 up climb is deterministic so any other "(2..." string here
+  # signals a normalize bug. Bytes 0xc3 0x97 are the UTF 8 encoding of
+  # the multiplication sign U+00D7.
+  if ! tmux capture-pane -t "$sess" -p 2>/dev/null \
+       | grep -qF "$(printf 'Speaking (2\xc3\x97)')"; then
+    fail_assert "expected exactly 2x speed indicator after ladder climb" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "2x narration never restarted" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t2_start; t2_start=$(date +%s.%N)
+  if ! _wait_for_silence "$sess" 90; then
+    fail_assert "2x narration never finished within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t2_end; t2_end=$(date +%s.%N)
+  local dur_2x; dur_2x=$(awk "BEGIN { printf \"%.2f\", $t2_end - $t2_start }")
+
+  local ratio
+  ratio=$(awk "BEGIN { printf \"%.2f\", $dur_1x / $dur_2x }")
+  echo "    [TR-052 D] dur_1x=${dur_1x}s dur_2x=${dur_2x}s ratio=${ratio}"
+  # Local backends (say/espeak-ng) scale wpm directly so ratio ~ 2.0.
+  # ElevenLabs cache replay stretches PCM via user_speed/clamp(0.7,1.2)
+  # so the ratio targets 2.0/1.2 = 1.667. Window [1.4, 2.6] covers both
+  # plus ~10% wall clock noise; a UI only stub regression would land
+  # near 1.0 and fail loudly either way.
+  if ! awk "BEGIN { exit !($ratio >= 1.4 && $ratio <= 2.6) }"; then
+    fail_assert "expected 1x/2x duration ratio in [1.4, 2.6]; got $ratio (1x=${dur_1x}s 2x=${dur_2x}s)"
+  fi
+
   kill_ata "$sess"
   end_test
 }
@@ -2165,7 +2337,7 @@ main() {
   log ""
 
   log "Numbered TRs (in order)"
-  run_tests tr001_a
+  run_tests tr001_a tr001_b
   run_tests tr002_a
   run_tests tr005_a
   run_tests tr008_a tr008_b tr008_c tr008_d tr008_e
@@ -2188,7 +2360,7 @@ main() {
   run_tests tr049_a tr049_b tr049_c tr049_d tr049_e
   run_tests tr050_a tr050_b tr050_c tr050_d tr050_e
   run_tests tr051_a tr051_b tr051_c tr051_d tr051_e
-  run_tests tr052_a tr052_b tr052_c
+  run_tests tr052_a tr052_b tr052_c tr052_d
   run_tests tr053_a tr053_b tr053_c tr053_d tr053_e
   run_tests tr054_a tr054_b tr054_c tr054_d
   run_tests tr062_a tr062_b tr062_d

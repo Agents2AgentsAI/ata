@@ -292,7 +292,9 @@ tr018_a() {
   sleep 1
   local out=$WORK/018a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "gpt-5.5" "current model listed"
+  # Picker should open and mark SOME model as current — don't pin to a
+  # specific model name since the lineup changes across upstream merges.
+  assert_contains "$out" "Select Model" "picker header visible"
   assert_contains "$out" "(current)" "current marker present"
   kill_ata "$sess"
   end_test
@@ -1016,9 +1018,12 @@ tr017_b() {
   send_text "$sess" "/permissions"; send_key "$sess" Enter
   local out_picker=$WORK/017b-picker.txt
   poll_pane_for "$sess" "$out_picker" "Update Model Permissions" || true
-  # Down twice to Full Access (Default → Auto-review → Full Access).
-  send_key "$sess" Down; sleep 0.3
-  send_key "$sess" Down; sleep 0.3
+  # Bottom out the picker so the last entry (Full Access) is selected.
+  # Five Down presses is more than any plausible permission menu length
+  # so this survives upstream additions or reorders without pinning the
+  # exact Default to Auto review to Full Access order Nima flagged on
+  # TR-018 C.
+  for _ in 1 2 3 4 5; do send_key "$sess" Down; sleep 0.2; done
   send_key "$sess" Enter
   local out=$WORK/017b.txt
   poll_pane_for "$sess" "$out" "Enable full access?" || true
@@ -1030,67 +1035,88 @@ tr017_b() {
   end_test
 }
 
-# TR-017 C: downgrading from Full Access to Default is immediate — no
-# confirmation dialog, just "Permissions updated to Default" line.
+# TR-017 C: downgrading from Full Access is immediate, no confirmation
+# dialog. Per Nima's TR-018 C feedback, this test no longer pins the
+# specific success wording or assumes a fixed permission menu order;
+# it asserts only the user visible invariants that the composer footer
+# stops showing YOLO mode and no elevation prompt appears.
 tr017_c() {
   start_test "TR-017 C"
   local sess=$SESSION-017c
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
+  # Dismiss any post boot popup (e.g. a reasoning level prompt that
+  # appears for a freshly switched model) that would otherwise eat the
+  # /permissions keystrokes and land us inside the wrong popup.
+  send_key "$sess" Escape; sleep 0.3
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
-  # Currently on Full Access (--yolo). Up twice to reach Default (top).
-  send_key "$sess" Up; sleep 0.3
-  send_key "$sess" Up; sleep 0.3
+  # Walk to the top of the menu (more presses than the longest plausible
+  # menu length so we don't pin position) and confirm. Some plus presses
+  # are a no op at the top; that's fine.
+  for _ in 1 2 3 4 5; do send_key "$sess" Up; sleep 0.2; done
   send_key "$sess" Enter; sleep 1
   local out=$WORK/017c.txt
   capture "$sess" "$out"
-  assert_contains     "$out" "Permissions updated to Default" "immediate downgrade confirmation"
-  # Be specific: ata's CI tip line includes "Enable in /experimental!"
-  # which would false-positive a naive "Enable" check. The actual
-  # confirmation dialog header is "Enable full access?".
-  assert_not_contains "$out" "Enable full access?"             "no elevation dialog on downgrade"
+  # Behavioral invariants only, no pinning of specific permission names.
+  # Note: "permissions: YOLO mode" in the launch banner is intentionally
+  # frozen (see TR-017 D), so we can't use that as the changed signal.
+  # Anchor instead on the bullet line that ata prints when a permission
+  # change actually succeeds.
+  assert_not_contains "$out" "Enable full access?"   "no elevation dialog on downgrade"
+  assert_contains     "$out" "Permissions updated"   "immediate downgrade confirmation shown"
   kill_ata "$sess"
   end_test
 }
 
 # TR-017 D: welcome banner reflects launch-time permissions, not
-# runtime mutations. Launch with --yolo, switch to Default mid-session,
-# verify banner still says "YOLO mode" while picker reports the change.
+# runtime mutations. Launch with --yolo, switch to a different level
+# mid-session, verify banner still says "YOLO mode" while the picker
+# reports a (current) marker on something OTHER than Full Access.
+# Relaxed per Nima's TR-018 C feedback: no pin on the specific landing
+# permission name, no pin on a fixed menu position.
 tr017_d() {
   start_test "TR-017 D"
   local sess=$SESSION-017d
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  # Switch to Default.
+  # Dismiss any post boot popup that would eat the /permissions keys.
+  send_key "$sess" Escape; sleep 0.3
+  # Switch to whatever is at the top of the picker (five Up presses
+  # bottom out at the top regardless of how many entries the menu has).
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
-  send_key "$sess" Up; sleep 0.3
-  send_key "$sess" Up; sleep 0.3
+  for _ in 1 2 3 4 5; do send_key "$sess" Up; sleep 0.2; done
   send_key "$sess" Enter; sleep 1.5
   # Re-open picker and check the new (current) marker; banner should
   # still say YOLO mode (it's frozen at launch time).
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
   local out=$WORK/017d.txt
   capture "$sess" "$out"
-  assert_contains "$out" "permissions: YOLO mode" "banner still shows launch-time YOLO"
-  assert_contains "$out" "Default (current)"     "picker reports new current = Default"
+  # Banner is launch frozen invariant (the actual point of the test).
+  assert_contains     "$out" "permissions: YOLO mode" "banner still shows launch-time YOLO"
+  # Picker shows a current marker on the newly selected level. Don't
+  # pin which level that is.
+  assert_contains     "$out" "(current)"             "picker reports a current selection"
+  # And that selection is NOT still Full Access (the launch level).
+  assert_not_contains "$out" "Full Access (current)" "current marker moved off Full Access"
   kill_ata "$sess"
   end_test
 }
 
 # TR-018 C: picking a NON-current model shows "Medium (default)" but
 # WITHOUT "(current)" — the (current) marker only annotates the active
-# model's reasoning level.
+# model's reasoning level. Model-order-agnostic: one Down lands on the
+# first non-current row regardless of how many models the picker offers.
 tr018_c() {
   start_test "TR-018 C"
   local sess=$SESSION-018c
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
   send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
-  # Down three times to reach gpt-5.3-codex (row 4 per PLAN.md TR-018 E).
-  send_key "$sess" Down; sleep 0.2
-  send_key "$sess" Down; sleep 0.2
+  # First row is the current model; Down once → first non-current row.
   send_key "$sess" Down; sleep 0.2
   send_key "$sess" Enter; sleep 1.5
   local out=$WORK/018c.txt
   capture "$sess" "$out"
-  assert_contains     "$out" "Select Reasoning Level for gpt-5.3-codex" "header names the chosen non-current model"
+  # Header names SOME non-current model — don't hardcode the name since
+  # the inventory changes across model releases.
+  assert_contains    "$out" "Select Reasoning Level for gpt-" "header names the chosen non-current model"
   assert_contains     "$out" "Medium (default)" "Medium marked default"
   # Critical invariant: "(current)" must NOT appear next to a default
   # of a non-active model.
@@ -1099,7 +1125,11 @@ tr018_c() {
   end_test
 }
 
-# TR-018 E: model picker shows 5 entries on 0.7.0. Order matches PLAN.md.
+# TR-018 E: model picker shows multiple model rows with a current marker.
+# Used to pin the exact lineup (gpt-5.5/5.4/5.4-mini/5.3-codex/5.2 in order)
+# and the specific current model — that breaks on every upstream model
+# refresh even when the picker itself works. Relax to count-based
+# assertions so the test survives normal lineup churn.
 tr018_e() {
   start_test "TR-018 E"
   local sess=$SESSION-018e
@@ -1107,10 +1137,13 @@ tr018_e() {
   send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
   local out=$WORK/018e.txt
   capture "$sess" "$out"
-  for row in "gpt-5.5" "gpt-5.4" "gpt-5.4-mini" "gpt-5.3-codex" "gpt-5.2"; do
-    assert_contains "$out" "$row" "model row: $row"
-  done
-  assert_contains "$out" "gpt-5.5 (current)" "current marker on gpt-5.5"
+  assert_contains "$out" "Select Model" "picker header visible"
+  assert_contains "$out" "(current)" "current marker present on some model"
+  local model_rows
+  model_rows=$(grep -cE 'gpt-[0-9]' "$out" 2>/dev/null || echo 0)
+  if [ "$model_rows" -lt 3 ]; then
+    fail_assert "expected at least 3 model rows; got $model_rows" "$(head -c 800 "$out")"
+  fi
   kill_ata "$sess"
   end_test
 }

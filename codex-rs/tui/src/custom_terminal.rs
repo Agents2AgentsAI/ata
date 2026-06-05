@@ -480,16 +480,27 @@ where
     pub(crate) fn clear_after_position(&mut self, position: Position) -> io::Result<()> {
         self.backend.set_cursor_position(position)?;
         self.backend.clear_region(ClearType::AfterCursor)?;
-        // Reset the back buffer to make sure the next update will redraw everything.
-        self.previous_buffer_mut().reset();
+        self.invalidate_viewport();
         Ok(())
     }
 
-    /// Force the next draw pass to repaint the entire viewport by resetting the
-    /// diff buffer. Call this after raw terminal operations that move screen
-    /// content outside ratatui's knowledge.
+    /// Force the next draw pass to emit a terminal write for EVERY cell in the
+    /// viewport, even ones that look unchanged from the previous frame.
+    ///
+    /// Naive `Buffer::reset` produces cells in the `{symbol: " ", style: Reset}`
+    /// state — the same state any renderable produces for a blank cell. The
+    /// ratatui diff renderer then sees those reset cells as equal to the new
+    /// blank cells and skips emitting them, leaving whatever character was
+    /// last drawn on screen. After a resize that shows up as the previous
+    /// frame's content peeking through the new layout — the bug TR-001 catches.
+    ///
+    /// Stamping prev_buffer with a sentinel symbol no widget produces forces
+    /// the diff to see every cell as changed on the next frame, so every cell
+    /// is re-emitted to the terminal.
     pub fn invalidate_viewport(&mut self) {
-        self.previous_buffer_mut().reset();
+        for cell in self.previous_buffer_mut().content.iter_mut() {
+            cell.set_symbol("\u{0001}");
+        }
     }
 
     /// Clear terminal scrollback (if supported) and force a full redraw.
@@ -504,7 +515,7 @@ where
         queue!(self.backend, Clear(crossterm::terminal::ClearType::Purge))?;
         self.set_cursor_position(home)?;
         std::io::Write::flush(&mut self.backend)?;
-        self.previous_buffer_mut().reset();
+        self.invalidate_viewport();
         Ok(())
     }
 
@@ -538,7 +549,7 @@ where
         std::io::Write::flush(&mut self.backend)?;
         self.last_known_cursor_pos = Position { x: 0, y: 0 };
         self.visible_history_rows = 0;
-        self.previous_buffer_mut().reset();
+        self.invalidate_viewport();
         Ok(())
     }
 
@@ -941,6 +952,39 @@ mod tests {
             actual.contains(&expected),
             "expected terminal output to contain cursor style {expected:?}, got {actual:?}"
         );
+    }
+
+    #[test]
+    fn invalidate_viewport_stamps_sentinel_into_prev_buffer() {
+        // Regression for TR-001 resize bug. After a resize the next
+        // render touches only the cells it wants to draw; cells it
+        // leaves alone stay in the reset state from the previous
+        // swap_buffers call. The old `invalidate_viewport` also called
+        // `Buffer::reset` on the prev buffer — so for any cell the
+        // render did not touch, prev (reset) matched current (still
+        // reset), the diff skipped it, and the terminal kept showing
+        // the previous frame's character at that position. The fix is
+        // to stamp every prev cell with a symbol no widget produces,
+        // so the diff sees a difference even for cells the render
+        // leaves alone, which forces a Put / ClearToEnd that erases
+        // the stale character on screen.
+        let area = Rect::new(0, 0, 4, 2);
+        let mut terminal =
+            Terminal::with_options(CaptureBackend::new(/*width*/ 4, /*height*/ 2))
+                .expect("terminal");
+        terminal.set_viewport_area(area);
+
+        terminal.invalidate_viewport();
+
+        let blank_symbol = Cell::default().symbol().to_owned();
+        for cell in terminal.previous_buffer().content.iter() {
+            assert_ne!(
+                cell.symbol(),
+                blank_symbol,
+                "invalidate_viewport must stamp a non-blank sentinel into every prev cell so \
+                 ratatui's diff cannot treat untouched render cells as unchanged"
+            );
+        }
     }
 
     #[test]

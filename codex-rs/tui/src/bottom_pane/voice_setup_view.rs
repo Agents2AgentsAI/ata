@@ -202,11 +202,11 @@ impl VoiceSetupView {
             },
             VoiceSetupItem {
                 name: "Speed".to_string(),
-                description: "Speech rate (0.7\u{00D7} \u{2013} 1.2\u{00D7})".to_string(),
+                description: "Speech rate (0.5\u{00D7} \u{2013} 3.0\u{00D7})".to_string(),
                 kind: VoiceSetupItemKind::Stepper {
                     value: speed.unwrap_or(1.0),
-                    min: 0.7,
-                    max: 1.2,
+                    min: 0.5,
+                    max: 3.0,
                     step: 0.1,
                 },
             },

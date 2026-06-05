@@ -109,7 +109,11 @@ pub(crate) struct TtsResponse {
     /// Base64-encoded audio chunk (PCM bytes).
     pub audio: Option<String>,
     /// True when the stream is complete.
-    #[serde(default)]
+    /// ElevenLabs sends this as `isFinal` (camelCase) over the WebSocket; the
+    /// rename keeps the Rust-side name snake_case while still matching the
+    /// wire format. Without the rename the field always deserializes to
+    /// `None`, so the reader task can only stop on the WS Close frame.
+    #[serde(default, rename = "isFinal")]
     pub is_final: Option<bool>,
     /// Character-level alignment data for this chunk.
     #[serde(default)]

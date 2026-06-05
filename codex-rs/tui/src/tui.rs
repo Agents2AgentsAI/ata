@@ -500,10 +500,18 @@ fn clear_for_viewport_change<B>(terminal: &mut CustomTerminal<B>, new_area: Rect
 where
     B: Backend + Write,
 {
+    // Take the topmost of {old, new} viewport position. When the viewport
+    // GROWS upward (e.g. the chat widget jumps from a small composer height
+    // to a full-screen reading view), the new viewport covers cells that
+    // were ABOVE the old viewport. Clearing only from the old position
+    // leaves those cells holding stale welcome-banner / chat-composer
+    // content, which then shows through the reader frame as character
+    // interleaving. Mirror the `update_inline_viewport_for_resize_reflow`
+    // path that already picks `previous_area.y.min(area.y)`.
     let clear_position = if terminal.viewport_area.is_empty() {
         new_area.as_position()
     } else {
-        terminal.viewport_area.as_position()
+        Position::new(0, terminal.viewport_area.y.min(new_area.y))
     };
     terminal.clear_after_position(clear_position)
 }
