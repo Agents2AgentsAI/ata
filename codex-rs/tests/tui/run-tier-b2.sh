@@ -134,6 +134,31 @@ wait_for_idle() {
   return 1
 }
 
+# Wait for the "Speaking" indicator (audio footer) to appear within
+# timeout seconds. Returns 0 on success, 1 on timeout. Used by TR-052 B
+# to measure narration duration.
+_wait_for_speaking() {
+  local s=$1 timeout=${2:-15}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if tmux capture-pane -t "$s" -p 2>/dev/null | grep -qF "Speaking"; then return 0; fi
+    sleep 0.2
+  done
+  return 1
+}
+
+# Wait for the "Speaking" indicator to disappear within timeout seconds.
+# Returns 0 on success, 1 on timeout.
+_wait_for_silence() {
+  local s=$1 timeout=${2:-90}
+  local deadline=$(( $(date +%s) + timeout ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if ! tmux capture-pane -t "$s" -p 2>/dev/null | grep -qF "Speaking"; then return 0; fi
+    sleep 0.3
+  done
+  return 1
+}
+
 # Find the most recently modified ata session JSONL (the one our test
 # just produced). Returns the path or empty string.
 #
@@ -679,6 +704,78 @@ tr052_a() {
   if grep -qE 'tts_backend[[:space:]]*=[[:space:]]*"say"' "$HOME/.ata/config.toml" 2>/dev/null; then
     assert_not_contains "$out" "Invalid API key" "local TTS backend should not surface credential error"
   fi
+  kill_ata "$sess"
+  end_test
+}
+
+# TR-052 D: pressing + bumps TTS playback speed and the audio actually
+# plays faster. Narrate the same section at default 1x and again at 2x,
+# then assert that 2x wall-clock duration is roughly half of 1x. This
+# is Nima's request: the end-to-end speed change must be measurable on
+# the wire, not just reported in the UI. Works with both local backends
+# (say/espeak-ng scale wpm with speed) and ElevenLabs (PCM rate stretch
+# fix in voice_mode.rs); fails only if the speed change is reverted to
+# a UI-only stub.
+tr052_d() {
+  start_test "TR-052 D"
+  local sess=$SESSION-052d
+  if ! boot_reader "$sess"; then fail_assert "reader did not open"; end_test; kill_ata "$sess"; return; fi
+
+  # Phase 1: narrate at default 1x.
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "narration never started for 1x phase" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t1_start; t1_start=$(date +%s.%N)
+  if ! _wait_for_silence "$sess" 90; then
+    fail_assert "1x narration never finished within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t1_end; t1_end=$(date +%s.%N)
+  local dur_1x; dur_1x=$(awk "BEGIN { printf \"%.2f\", $t1_end - $t1_start }")
+
+  # Phase 2: bump speed to 2x then narrate. The +/- bindings only fire
+  # while the audio footer (voice_status) is visible, so start narration
+  # first to bring the footer up, then press + five times. The ladder is
+  # [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0]; five steps
+  # from 1.0 lands on 2.0. Each press restarts narration at the new
+  # speed (see on_voice_playback_speed_change in voice_mode.rs).
+  send_text "$sess" "r"
+  if ! _wait_for_speaking "$sess" 15; then
+    fail_assert "narration never started for 2x phase" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  for _ in 1 2 3 4 5; do send_text "$sess" "+"; sleep 0.2; done
+  # Wait for the final restart to settle at 2x. The status text format is
+  # "Speaking (2x)" for non-default speeds.
+  sleep 2
+  if ! tmux capture-pane -t "$sess" -p 2>/dev/null | grep -qF "(2"; then
+    fail_assert "expected '(2' speed indicator after 5 + presses" \
+                "$(tmux capture-pane -t "$sess" -p | tail -c 600)"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t2_start; t2_start=$(date +%s.%N)
+  if ! _wait_for_silence "$sess" 90; then
+    fail_assert "2x narration never finished within 90s"
+    kill_ata "$sess"; end_test; return
+  fi
+  local t2_end; t2_end=$(date +%s.%N)
+  local dur_2x; dur_2x=$(awk "BEGIN { printf \"%.2f\", $t2_end - $t2_start }")
+
+  local ratio
+  ratio=$(awk "BEGIN { printf \"%.2f\", $dur_1x / $dur_2x }")
+  echo "    [TR-052 B] dur_1x=${dur_1x}s dur_2x=${dur_2x}s ratio=${ratio}"
+  # Allow [1.5, 2.6] for startup overhead and text-rendering variance.
+  # The math (PCM stretch / wpm scaling) targets exactly 2.0; a 25%
+  # tolerance window catches a true UI-only stub regression while
+  # absorbing reasonable CI noise.
+  if ! awk "BEGIN { exit !($ratio >= 1.5 && $ratio <= 2.6) }"; then
+    fail_assert "expected 1x/2x duration ratio ~2.0; got $ratio (1x=${dur_1x}s 2x=${dur_2x}s)"
+  fi
+
   kill_ata "$sess"
   end_test
 }
@@ -2227,7 +2324,7 @@ main() {
   run_tests tr049_a tr049_b tr049_c tr049_d tr049_e
   run_tests tr050_a tr050_b tr050_c tr050_d tr050_e
   run_tests tr051_a tr051_b tr051_c tr051_d tr051_e
-  run_tests tr052_a tr052_b tr052_c
+  run_tests tr052_a tr052_b tr052_c tr052_d
   run_tests tr053_a tr053_b tr053_c tr053_d tr053_e
   run_tests tr054_a tr054_b tr054_c tr054_d
   run_tests tr062_a tr062_b tr062_d
