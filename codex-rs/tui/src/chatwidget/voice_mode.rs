@@ -3811,34 +3811,89 @@ impl super::ChatWidget {
     /// running TTS worker (which respawns its child / future sentences at the
     /// new rate).
     pub(crate) fn on_voice_playback_speed_change(&mut self, delta: f64) {
-        let Some(ref mut state) = self.voice_mode_state else {
-            return;
+        tracing::info!(
+            "[TTS-TIMING] on_voice_playback_speed_change: delta={delta} state.is_some={}",
+            self.voice_mode_state.is_some(),
+        );
+        // Phase 1: mutate state and decide what to do next.
+        let (new_speed, cached_replay) = {
+            let Some(ref mut state) = self.voice_mode_state else {
+                return;
+            };
+            let current = state.playback_speed;
+            let new_speed = if delta > 0.0 {
+                step_speed_up(current)
+            } else if delta < 0.0 {
+                step_speed_down(current)
+            } else {
+                current
+            };
+            if (new_speed - current).abs() < 1e-6 {
+                return;
+            }
+            state.playback_speed = new_speed;
+            // Drop buffered PCM so the user hears the new speed within ~50ms
+            // instead of waiting for the old-speed queue to drain.
+            if let Some(ref player) = state.audio_player {
+                player.clear();
+            }
+            if let Some(tx) = state.tts_worker_tx.as_ref() {
+                let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
+            }
+            // If the live worker is gone (either because narration has
+            // already finished generating server-side and got persisted to
+            // the cache, or because we are playing a true cache hit), grab
+            // the chunks from the cache so we can re-enqueue them at the
+            // new speed after the borrow ends. Otherwise audio_player.clear
+            // would leave the user with silence — there is no SetSpeed
+            // handler on the post-narration path.
+            let cached_replay = if state.tts_worker_tx.is_none() {
+                let chunks_from_narrating = (!state.narrating_chunks.is_empty())
+                    .then(|| state.narrating_chunks.clone());
+                let chunks_from_cache = state.narrating_section.as_ref().and_then(|ns| {
+                    let key = (ns.0.clone(), ns.1);
+                    state
+                        .tts_section_cache
+                        .lock()
+                        .ok()
+                        .and_then(|cache| cache.get(&key).map(|entry| entry.chunks.clone()))
+                });
+                chunks_from_narrating.or(chunks_from_cache)
+            } else {
+                None
+            };
+            tracing::info!(
+                "[TTS-TIMING] speed change: current={current} new={new_speed} has_worker={} narrating_chunks={} cached_replay_chunks={}",
+                state.tts_worker_tx.is_some(),
+                state.narrating_chunks.len(),
+                cached_replay.as_ref().map(|c| c.len()).unwrap_or(0),
+            );
+            (new_speed, cached_replay)
         };
-        let current = state.playback_speed;
-        let new_speed = if delta > 0.0 {
-            step_speed_up(current)
-        } else if delta < 0.0 {
-            step_speed_down(current)
-        } else {
-            current
-        };
-        if (new_speed - current).abs() < 1e-6 {
-            return;
-        }
-        state.playback_speed = new_speed;
-        // Drop buffered PCM so the user hears the new speed within ~50ms
-        // instead of waiting for the old-speed queue to drain.
-        if let Some(ref player) = state.audio_player {
-            player.clear();
-        }
-        if let Some(tx) = state.tts_worker_tx.as_ref() {
-            let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
-        }
+
         self.cached_elevenlabs_speed = Some(new_speed);
         if !self.is_reading_view_browser_mode() {
             self.bottom_pane
                 .set_document_reader_voice_status(Some(speaking_status_text(new_speed)));
         }
+
+        if let Some(chunks) = cached_replay
+            && let Some(ref state) = self.voice_mode_state
+            && let Some(ref player) = state.audio_player
+        {
+            // Re-enqueue cached PCM directly at the new effective sample
+            // rate. Going through on_voice_tts_audio_chunk would double
+            // count narrating_chunks and the alignment timeline on every
+            // press, so back to back + taps would queue exponentially more
+            // audio (4 presses → 16x the section). Direct enqueue keeps
+            // the queue at exactly one section worth no matter how many
+            // times the user steps the ladder.
+            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
+            for chunk in &chunks {
+                player.enqueue_pcm(chunk, effective_rate, 1);
+            }
+        }
+
         self.request_redraw();
     }
 
