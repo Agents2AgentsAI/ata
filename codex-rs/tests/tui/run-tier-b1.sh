@@ -1018,9 +1018,12 @@ tr017_b() {
   send_text "$sess" "/permissions"; send_key "$sess" Enter
   local out_picker=$WORK/017b-picker.txt
   poll_pane_for "$sess" "$out_picker" "Update Model Permissions" || true
-  # Down twice to Full Access (Default → Auto-review → Full Access).
-  send_key "$sess" Down; sleep 0.3
-  send_key "$sess" Down; sleep 0.3
+  # Bottom out the picker so the last entry (Full Access) is selected.
+  # Five Down presses is more than any plausible permission menu length
+  # so this survives upstream additions or reorders without pinning the
+  # exact Default to Auto review to Full Access order Nima flagged on
+  # TR-018 C.
+  for _ in 1 2 3 4 5; do send_key "$sess" Down; sleep 0.2; done
   send_key "$sess" Enter
   local out=$WORK/017b.txt
   poll_pane_for "$sess" "$out" "Enable full access?" || true
@@ -1062,24 +1065,34 @@ tr017_c() {
 }
 
 # TR-017 D: welcome banner reflects launch-time permissions, not
-# runtime mutations. Launch with --yolo, switch to Default mid-session,
-# verify banner still says "YOLO mode" while picker reports the change.
+# runtime mutations. Launch with --yolo, switch to a different level
+# mid-session, verify banner still says "YOLO mode" while the picker
+# reports a (current) marker on something OTHER than Full Access.
+# Relaxed per Nima's TR-018 C feedback: no pin on the specific landing
+# permission name, no pin on a fixed menu position.
 tr017_d() {
   start_test "TR-017 D"
   local sess=$SESSION-017d
   if ! boot_ata "$sess"; then fail_assert "ata never reached the composer"; end_test; kill_ata "$sess"; return; fi
-  # Switch to Default.
+  # Dismiss any post boot popup that would eat the /permissions keys.
+  send_key "$sess" Escape; sleep 0.3
+  # Switch to whatever is at the top of the picker (five Up presses
+  # bottom out at the top regardless of how many entries the menu has).
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
-  send_key "$sess" Up; sleep 0.3
-  send_key "$sess" Up; sleep 0.3
+  for _ in 1 2 3 4 5; do send_key "$sess" Up; sleep 0.2; done
   send_key "$sess" Enter; sleep 1.5
   # Re-open picker and check the new (current) marker; banner should
   # still say YOLO mode (it's frozen at launch time).
   send_text "$sess" "/permissions"; send_key "$sess" Enter; sleep 1.5
   local out=$WORK/017d.txt
   capture "$sess" "$out"
-  assert_contains "$out" "permissions: YOLO mode" "banner still shows launch-time YOLO"
-  assert_contains "$out" "Default (current)"     "picker reports new current = Default"
+  # Banner is launch frozen invariant (the actual point of the test).
+  assert_contains     "$out" "permissions: YOLO mode" "banner still shows launch-time YOLO"
+  # Picker shows a current marker on the newly selected level. Don't
+  # pin which level that is.
+  assert_contains     "$out" "(current)"             "picker reports a current selection"
+  # And that selection is NOT still Full Access (the launch level).
+  assert_not_contains "$out" "Full Access (current)" "current marker moved off Full Access"
   kill_ata "$sess"
   end_test
 }
