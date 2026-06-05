@@ -221,6 +221,21 @@ pub(crate) fn speaking_status_text(speed: f64) -> String {
     }
 }
 
+/// ElevenLabs WS only honors `voice_settings.speed` in 0.7..=1.2. Any ladder
+/// position outside that range is clamped server-side, so a user pick of 2× or
+/// 0.5× would silently come back at 1.2× or 0.7×. We make up the gap by
+/// "lying" to the resampler about the source sample rate when enqueueing PCM:
+///   effective_rate = NATIVE_24K * (user_speed / clamped_el_speed)
+/// `convert_pcm16` then resamples that source rate to the cpal output rate,
+/// changing wall-clock playback duration by the desired factor. (Side effect:
+/// pitch shifts proportionally — chipmunk on speedup, deeper on slowdown.
+/// Tolerable for narration; a pitch-preserving stretch is a follow-up.)
+pub(crate) fn elevenlabs_effective_sample_rate(user_speed: f64) -> u32 {
+    const NATIVE_RATE: f64 = 24_000.0;
+    let clamped = user_speed.clamp(0.7, 1.2);
+    ((NATIVE_RATE * user_speed / clamped).round() as u32).max(1)
+}
+
 // ─── Voice mode phase ────────────────────────────────────────────────────────
 
 /// Phases of the voice mode state machine.
@@ -2851,12 +2866,13 @@ impl super::ChatWidget {
         if !state.tts_playback_started {
             state.tts_playback_started = true;
             let mut enqueued_audio = false;
+            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
             if let Some(ref player) = state.audio_player {
                 player.reset_playback_position();
                 let mut chunks = std::mem::take(&mut state.tts_startup_buffered_chunks);
                 chunks.extend(extra_chunks);
                 for chunk in &chunks {
-                    player.enqueue_pcm(chunk, 24_000, 1);
+                    player.enqueue_pcm(chunk, effective_rate, 1);
                 }
                 enqueued_audio = !chunks.is_empty();
             } else {
@@ -2891,8 +2907,9 @@ impl super::ChatWidget {
                     Some((section_index, total_words, state.selection_word_offset));
             }
         } else if let Some(ref player) = state.audio_player {
+            let effective_rate = elevenlabs_effective_sample_rate(state.playback_speed);
             for chunk in &extra_chunks {
-                player.enqueue_pcm(chunk, 24_000, 1);
+                player.enqueue_pcm(chunk, effective_rate, 1);
             }
         }
 
@@ -3809,6 +3826,11 @@ impl super::ChatWidget {
             return;
         }
         state.playback_speed = new_speed;
+        // Drop buffered PCM so the user hears the new speed within ~50ms
+        // instead of waiting for the old-speed queue to drain.
+        if let Some(ref player) = state.audio_player {
+            player.clear();
+        }
         if let Some(tx) = state.tts_worker_tx.as_ref() {
             let _ = tx.send(TtsWorkerCommand::SetSpeed(new_speed));
         }
@@ -5123,7 +5145,6 @@ async fn tts_worker_loop(
     }
 
     let worker_start = std::time::Instant::now();
-    tracing::info!("[TTS-TIMING] tts_worker_loop: connecting to ElevenLabs WebSocket...");
     let mut config = codex_elevenlabs::ElevenLabsConfig::new(api_key.unwrap_or_default());
     if let Some(proxy) = proxy {
         config.proxy = Some(proxy);
@@ -5139,111 +5160,200 @@ async fn tts_worker_loop(
         config.speed = el.speed;
     }
 
-    let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
-        Ok(s) => {
-            tracing::info!(
-                "[TTS-TIMING] tts_worker_loop: WebSocket connected in {:?}",
-                worker_start.elapsed(),
-            );
-            s
-        }
-        Err(e) => {
-            tracing::error!("TTS worker connect: {e}");
-            event_tx.send(AppEvent::VoiceModeTtsError {
-                error: format!("TTS connection failed: {e}"),
-            });
-            if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
-                event_tx.send(AppEvent::VoiceModeTtsFinished);
-            }
-            return;
-        }
-    };
+    // Sentences sent on the current WebSocket connection. Resent on reconnect
+    // so a mid-block speed change (which has to reopen the WS to take effect)
+    // does not silence the rest of the block. Cleared when the stream drains
+    // naturally (server signals `is_final` → `recv_audio()` returns None).
+    let mut current_block_text: Vec<String> = Vec::new();
+    // Whether the caller has issued `Finish` already. Persists across reconnect
+    // so we re-issue EOS to the new stream after replaying the buffered text.
+    let mut finish_requested = false;
+    // The most recent stream — held outside the loops so the post-exit
+    // `recv_error()` check can surface server errors (e.g. invalid voice_id).
+    let mut last_stream: Option<codex_elevenlabs::tts::TtsStream> = None;
 
     tracing::debug!("TTS worker started (gen={my_gen})");
-    let mut finishing = false;
-    let mut first_chunk_sent = false;
-    loop {
-        if finishing {
-            // Drain remaining audio after close request.
-            match stream.recv_audio().await {
-                Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
-                    event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
-                        pcm: chunk.pcm,
-                        alignment: chunk.alignment,
-                    });
-                }
-                Some(_) => {} // stale generation
-                None => break,
+    'connect: loop {
+        if gen_ref.load(Ordering::SeqCst) != my_gen {
+            break 'connect;
+        }
+        let connect_start = std::time::Instant::now();
+        tracing::info!(
+            "[TTS-TIMING] tts_worker_loop: connecting to ElevenLabs WebSocket (speed={:?})...",
+            config.speed,
+        );
+        let mut stream = match codex_elevenlabs::tts::TtsStream::connect(&config).await {
+            Ok(s) => {
+                tracing::info!(
+                    "[TTS-TIMING] tts_worker_loop: WebSocket connected in {:?}",
+                    connect_start.elapsed(),
+                );
+                s
             }
-        } else {
-            tokio::select! {
-                biased;
+            Err(e) => {
+                tracing::error!("TTS worker connect: {e}");
+                event_tx.send(AppEvent::VoiceModeTtsError {
+                    error: format!("TTS connection failed: {e}"),
+                });
+                if in_flight.fetch_sub(1, Ordering::SeqCst) == 1 {
+                    event_tx.send(AppEvent::VoiceModeTtsFinished);
+                }
+                return;
+            }
+        };
 
-                cmd = cmd_rx.recv() => {
-                    match cmd {
-                        Some(TtsWorkerCommand::SendText(text)) => {
-                            if gen_ref.load(Ordering::SeqCst) != my_gen { break; }
-                            if let Err(e) = stream.send_text(&text).await {
-                                tracing::error!("TTS worker send: {e}");
+        // On reconnect (current_block_text non-empty), replay all buffered
+        // sentences so the new WS produces the remaining audio at the new
+        // speed. The block restarts from the beginning — acceptable UX since
+        // ElevenLabs offers no mid-stream speed knob.
+        if !current_block_text.is_empty() {
+            tracing::info!(
+                "[TTS-TIMING] tts_worker_loop: replaying {} buffered sentence(s) on new connection",
+                current_block_text.len(),
+            );
+            let mut replay_err = false;
+            for text in current_block_text.iter() {
+                if let Err(e) = stream.send_text(text).await {
+                    tracing::error!("TTS worker replay send: {e}");
+                    replay_err = true;
+                    break;
+                }
+            }
+            if !replay_err
+                && let Err(e) = stream.flush().await
+            {
+                tracing::error!("TTS worker replay flush: {e}");
+                replay_err = true;
+            }
+            if !replay_err && finish_requested {
+                stream.send_eos().await;
+            }
+            if replay_err {
+                last_stream = Some(stream);
+                break 'connect;
+            }
+        }
 
-                                break;
+        let mut finishing = finish_requested && !current_block_text.is_empty();
+        let mut first_chunk_sent = false;
+
+        'commands: loop {
+            if finishing {
+                tokio::select! {
+                    biased;
+
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                                if (config.speed.unwrap_or(1.0) - new_speed).abs() < 1e-6 {
+                                    continue 'commands;
+                                }
+                                tracing::info!(
+                                    "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) during finish drain — reconnecting"
+                                );
+                                config.speed = Some(new_speed);
+                                drop(stream);
+                                continue 'connect;
                             }
-                            if let Err(e) = stream.flush().await {
-                                tracing::error!("TTS worker flush: {e}");
-
-                                break;
+                            // Ignore any other commands while draining; the
+                            // caller has already said Finish.
+                            Some(_) => continue 'commands,
+                            None => {
+                                last_stream = Some(stream);
+                                break 'connect;
                             }
                         }
-                        Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
-                            // ElevenLabs voice_settings.speed is sent in the BOS
-                            // message and cannot be changed mid-WebSocket. Record
-                            // the new speed so the next worker connection picks it
-                            // up; audio already streaming continues at the old
-                            // speed. The next ChatWidget worker spawn reads
-                            // `cached_elevenlabs_speed`, which the keypress handler
-                            // already updated, so there is nothing else to do here.
-                            tracing::info!(
-                                "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) — \
-                                 takes effect on next worker connection (ElevenLabs API \
-                                 sets speed at WebSocket BOS only)"
-                            );
-                            config.speed = Some(new_speed);
-                        }
-                        Some(TtsWorkerCommand::Finish) => {
-                            let _ = stream.flush().await;
-                            // Send EOS without closing — the server finishes
-                            // generating audio and sends is_final, which causes
-                            // recv_audio() to return None.
-                            stream.send_eos().await;
-                            finishing = true;
-                        }
-                        None => {
-                            // Sender dropped (interrupted) — exit immediately.
-                            break;
+                    }
+
+                    chunk = stream.recv_audio() => {
+                        match chunk {
+                            Some(c) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                                event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                                    pcm: c.pcm,
+                                    alignment: c.alignment,
+                                });
+                            }
+                            Some(_) => {}
+                            None => {
+                                current_block_text.clear();
+                                last_stream = Some(stream);
+                                break 'connect;
+                            }
                         }
                     }
                 }
+            } else {
+                tokio::select! {
+                    biased;
 
-                chunk = stream.recv_audio() => {
-                    match chunk {
-                        Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
-                            if !first_chunk_sent {
-                                first_chunk_sent = true;
-                                tracing::info!(
-                                    "[TTS-TIMING] tts_worker_loop: first audio chunk received \
-                                     ({} samples, ~{}ms) after {:?} total",
-                                    chunk.pcm.len(),
-                                    chunk.pcm.len() as u64 * 1000 / 24000,
-                                    worker_start.elapsed(),
-                                );
+                    cmd = cmd_rx.recv() => {
+                        match cmd {
+                            Some(TtsWorkerCommand::SendText(text)) => {
+                                if gen_ref.load(Ordering::SeqCst) != my_gen {
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
+                                current_block_text.push(text.clone());
+                                if let Err(e) = stream.send_text(&text).await {
+                                    tracing::error!("TTS worker send: {e}");
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
+                                if let Err(e) = stream.flush().await {
+                                    tracing::error!("TTS worker flush: {e}");
+                                    last_stream = Some(stream);
+                                    break 'connect;
+                                }
                             }
-                            event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
-                                pcm: chunk.pcm,
-                                alignment: chunk.alignment,
-                            });
+                            Some(TtsWorkerCommand::SetSpeed(new_speed)) => {
+                                if (config.speed.unwrap_or(1.0) - new_speed).abs() < 1e-6 {
+                                    continue 'commands;
+                                }
+                                tracing::info!(
+                                    "[TTS-TIMING] tts_worker_loop: SetSpeed({new_speed}) — reconnecting WebSocket"
+                                );
+                                config.speed = Some(new_speed);
+                                drop(stream);
+                                continue 'connect;
+                            }
+                            Some(TtsWorkerCommand::Finish) => {
+                                let _ = stream.flush().await;
+                                stream.send_eos().await;
+                                finishing = true;
+                                finish_requested = true;
+                            }
+                            None => {
+                                last_stream = Some(stream);
+                                break 'connect;
+                            }
                         }
-                        Some(_) => {}
-                        None => break,
+                    }
+
+                    chunk = stream.recv_audio() => {
+                        match chunk {
+                            Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                                if !first_chunk_sent {
+                                    first_chunk_sent = true;
+                                    tracing::info!(
+                                        "[TTS-TIMING] tts_worker_loop: first audio chunk received \
+                                         ({} samples, ~{}ms) after {:?} total",
+                                        chunk.pcm.len(),
+                                        chunk.pcm.len() as u64 * 1000 / 24000,
+                                        worker_start.elapsed(),
+                                    );
+                                }
+                                event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                                    pcm: chunk.pcm,
+                                    alignment: chunk.alignment,
+                                });
+                            }
+                            Some(_) => {}
+                            None => {
+                                current_block_text.clear();
+                                last_stream = Some(stream);
+                                break 'connect;
+                            }
+                        }
                     }
                 }
             }
@@ -5251,14 +5361,18 @@ async fn tts_worker_loop(
     }
 
     tracing::debug!("TTS worker exiting (gen={my_gen})");
-    // Check if the stream was closed with an error (e.g., invalid voice_id)
-    if let Some(err) = stream.recv_error() {
+    // Check if the final stream was closed with an error (e.g., invalid voice_id).
+    if let Some(mut stream) = last_stream
+        && let Some(err) = stream.recv_error()
+    {
         tracing::warn!("TTS worker detected server error: {err}");
         if gen_ref.load(Ordering::SeqCst) == my_gen {
             in_flight.fetch_sub(1, Ordering::SeqCst);
             event_tx.send(AppEvent::VoiceModeTtsError { error: err });
+            return;
         }
-    } else if gen_ref.load(Ordering::SeqCst) == my_gen
+    }
+    if gen_ref.load(Ordering::SeqCst) == my_gen
         && in_flight.fetch_sub(1, Ordering::SeqCst) == 1
     {
         event_tx.send(AppEvent::VoiceModeTtsFinished);
@@ -7228,6 +7342,89 @@ mod tests {
         assert_eq!(format_speed(1.5), "1.5\u{00D7}");
         assert_eq!(format_speed(0.5), "0.5\u{00D7}");
         assert_eq!(format_speed(1.7), "1.7\u{00D7}");
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_passes_through_in_range() {
+        // In-range speeds (0.7..=1.2) — ElevenLabs honors natively, so no
+        // PCM-level stretch. Effective rate equals the native 24kHz.
+        assert_eq!(elevenlabs_effective_sample_rate(0.8), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(0.9), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.0), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.1), 24_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.2), 24_000);
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_compensates_above_1_2x() {
+        // Speeds > 1.2 clamp on the API; PCM-rate "lie" makes up the gap.
+        // 1.5/1.2 = 1.25, 2.0/1.2 = 1.666…, 3.0/1.2 = 2.5
+        assert_eq!(elevenlabs_effective_sample_rate(1.5), 30_000);
+        assert_eq!(elevenlabs_effective_sample_rate(1.7), 34_000);
+        assert_eq!(elevenlabs_effective_sample_rate(2.0), 40_000);
+        assert_eq!(elevenlabs_effective_sample_rate(2.5), 50_000);
+        assert_eq!(elevenlabs_effective_sample_rate(3.0), 60_000);
+    }
+
+    #[test]
+    fn elevenlabs_effective_sample_rate_compensates_below_0_7x() {
+        // 0.5/0.7 = 0.714…; effective rate is < native to slow playback further.
+        assert_eq!(elevenlabs_effective_sample_rate(0.5), 17_143);
+    }
+
+    /// Wall-clock duration of the narration as a function of user-requested speed.
+    ///
+    /// Models the round-trip for a fixed text:
+    ///   * ElevenLabs runs at `clamp(user_speed, 0.7..=1.2)` server-side, so the
+    ///     returned PCM contains `n_native / clamped` samples (faster server-side
+    ///     speech yields fewer samples).
+    ///   * We hand the player `elevenlabs_effective_sample_rate(user_speed)`, so
+    ///     it consumes those samples at a rate scaled to make the perceived
+    ///     speed equal to `user_speed`.
+    ///   * Wall-clock duration = samples / playback_rate.
+    fn elevenlabs_perceived_duration(n_native: f64, user_speed: f64) -> f64 {
+        let clamped = user_speed.clamp(0.7, 1.2);
+        let samples_after_server_stretch = n_native / clamped;
+        let playback_rate = elevenlabs_effective_sample_rate(user_speed) as f64;
+        samples_after_server_stretch / playback_rate
+    }
+
+    #[test]
+    fn elevenlabs_2x_speed_halves_perceived_duration() {
+        // Directly verifies Nima's request: 2x narration must play in ~½ the
+        // wall-clock time of 1x for the same source text. Below the helper
+        // models the full pipeline (server-side clamp + PCM sample-rate
+        // stretch) so changing either side without keeping the math
+        // consistent would break this test.
+        let n = 100_000.0;
+        let one_x = elevenlabs_perceived_duration(n, 1.0);
+        let two_x = elevenlabs_perceived_duration(n, 2.0);
+        let ratio = one_x / two_x;
+        assert!(
+            (ratio - 2.0).abs() < 1e-3,
+            "expected 2x duration to be half of 1x; got ratio {ratio} (1x={one_x}s 2x={two_x}s)"
+        );
+    }
+
+    #[test]
+    fn elevenlabs_full_speed_ladder_scales_duration_linearly() {
+        // Across the full discrete ladder, doubling the user-requested speed
+        // must roughly halve the perceived duration. Guards against silent
+        // breakage of any individual ladder entry.
+        let ladder = [0.5, 0.8, 0.9, 1.0, 1.1, 1.2, 1.5, 1.7, 2.0, 2.5, 3.0];
+        let n = 100_000.0;
+        for &speed in &ladder {
+            let dur = elevenlabs_perceived_duration(n, speed);
+            // duration * user_speed == n / native_rate, invariant: the
+            // perceived "speech rate" expressed in samples-per-second-of-
+            // perceived-time is always the native 24 kHz.
+            let perceived_rate = n / dur;
+            assert!(
+                (perceived_rate - 24_000.0 * speed).abs() < 5.0,
+                "perceived rate at speed {speed}x should be ~{} Hz; got {perceived_rate} Hz (dur={dur}s)",
+                24_000.0 * speed
+            );
+        }
     }
 
     #[test]
