@@ -1056,10 +1056,13 @@ tr017_c() {
   send_key "$sess" Enter; sleep 1
   local out=$WORK/017c.txt
   capture "$sess" "$out"
-  # Behavioral invariants only, no pinning of specific permission names
-  # or success wording (those change between upstream updates).
-  assert_not_contains "$out" "Enable full access?"  "no elevation dialog on downgrade"
-  assert_not_contains "$out" "permissions: YOLO mode" "YOLO mode no longer current"
+  # Behavioral invariants only, no pinning of specific permission names.
+  # Note: "permissions: YOLO mode" in the launch banner is intentionally
+  # frozen (see TR-017 D), so we can't use that as the changed signal.
+  # Anchor instead on the bullet line that ata prints when a permission
+  # change actually succeeds.
+  assert_not_contains "$out" "Enable full access?"   "no elevation dialog on downgrade"
+  assert_contains     "$out" "Permissions updated"   "immediate downgrade confirmation shown"
   kill_ata "$sess"
   end_test
 }
