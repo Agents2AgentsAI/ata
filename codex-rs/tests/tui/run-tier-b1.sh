@@ -292,7 +292,9 @@ tr018_a() {
   sleep 1
   local out=$WORK/018a.txt
   capture "$sess" "$out"
-  assert_contains "$out" "gpt-5.5" "current model listed"
+  # Picker should open and mark SOME model as current — don't pin to a
+  # specific model name since the lineup changes across upstream merges.
+  assert_contains "$out" "Select Model" "picker header visible"
   assert_contains "$out" "(current)" "current marker present"
   kill_ata "$sess"
   end_test
@@ -1100,7 +1102,11 @@ tr018_c() {
   end_test
 }
 
-# TR-018 E: model picker shows 5 entries on 0.7.0. Order matches PLAN.md.
+# TR-018 E: model picker shows multiple model rows with a current marker.
+# Used to pin the exact lineup (gpt-5.5/5.4/5.4-mini/5.3-codex/5.2 in order)
+# and the specific current model — that breaks on every upstream model
+# refresh even when the picker itself works. Relax to count-based
+# assertions so the test survives normal lineup churn.
 tr018_e() {
   start_test "TR-018 E"
   local sess=$SESSION-018e
@@ -1108,10 +1114,13 @@ tr018_e() {
   send_text "$sess" "/model"; send_key "$sess" Enter; sleep 1.5
   local out=$WORK/018e.txt
   capture "$sess" "$out"
-  for row in "gpt-5.5" "gpt-5.4" "gpt-5.4-mini" "gpt-5.3-codex" "gpt-5.2"; do
-    assert_contains "$out" "$row" "model row: $row"
-  done
-  assert_contains "$out" "gpt-5.5 (current)" "current marker on gpt-5.5"
+  assert_contains "$out" "Select Model" "picker header visible"
+  assert_contains "$out" "(current)" "current marker present on some model"
+  local model_rows
+  model_rows=$(grep -cE 'gpt-[0-9]' "$out" 2>/dev/null || echo 0)
+  if [ "$model_rows" -lt 3 ]; then
+    fail_assert "expected at least 3 model rows; got $model_rows" "$(head -c 800 "$out")"
+  fi
   kill_ata "$sess"
   end_test
 }
