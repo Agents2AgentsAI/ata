@@ -3866,7 +3866,7 @@ impl super::ChatWidget {
                 "[TTS-TIMING] speed change: current={current} new={new_speed} has_worker={} narrating_chunks={} cached_replay_chunks={}",
                 state.tts_worker_tx.is_some(),
                 state.narrating_chunks.len(),
-                cached_replay.as_ref().map(|c| c.len()).unwrap_or(0),
+                cached_replay.as_ref().map(std::vec::Vec::len).unwrap_or(0),
             );
             (new_speed, cached_replay)
         };
