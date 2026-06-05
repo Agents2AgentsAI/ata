@@ -5236,8 +5236,39 @@ async fn tts_worker_loop(
 
         let mut finishing = finish_requested && !current_block_text.is_empty();
         let mut first_chunk_sent = false;
+        // True once the caller drops its end of `cmd_rx`. After that point
+        // there is no point polling `cmd_rx` again — `recv()` will return
+        // None instantly forever and a biased `tokio::select!` would spin.
+        // Switch to a pure audio drain so the worker keeps reading until
+        // the server closes the stream.
+        let mut cmd_closed = false;
 
         'commands: loop {
+            if cmd_closed {
+                match stream.recv_audio().await {
+                    Some(chunk) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                        if !first_chunk_sent {
+                            first_chunk_sent = true;
+                            tracing::info!(
+                                "[TTS-TIMING] tts_worker_loop: first audio chunk received ({} samples) after {:?} total (drain mode)",
+                                chunk.pcm.len(),
+                                worker_start.elapsed(),
+                            );
+                        }
+                        event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
+                            pcm: chunk.pcm,
+                            alignment: chunk.alignment,
+                        });
+                    }
+                    Some(_) => {}
+                    None => {
+                        current_block_text.clear();
+                        last_stream = Some(stream);
+                        break 'connect;
+                    }
+                }
+                continue 'commands;
+            }
             if finishing {
                 tokio::select! {
                     biased;
@@ -5259,8 +5290,13 @@ async fn tts_worker_loop(
                             // caller has already said Finish.
                             Some(_) => continue 'commands,
                             None => {
-                                last_stream = Some(stream);
-                                break 'connect;
+                                // Caller is gone but the server may still be
+                                // streaming audio. Switch to drain mode instead
+                                // of bailing out, otherwise short narrations
+                                // (where SendText + Finish arrive before the
+                                // first chunk does) come back silent.
+                                cmd_closed = true;
+                                continue 'commands;
                             }
                         }
                     }
@@ -5268,6 +5304,14 @@ async fn tts_worker_loop(
                     chunk = stream.recv_audio() => {
                         match chunk {
                             Some(c) if gen_ref.load(Ordering::SeqCst) == my_gen => {
+                                if !first_chunk_sent {
+                                    first_chunk_sent = true;
+                                    tracing::info!(
+                                        "[TTS-TIMING] tts_worker_loop: first audio chunk received ({} samples) after {:?} total",
+                                        c.pcm.len(),
+                                        worker_start.elapsed(),
+                                    );
+                                }
                                 event_tx.send(AppEvent::VoiceModeTtsAudioChunk {
                                     pcm: c.pcm,
                                     alignment: c.alignment,
@@ -5323,8 +5367,17 @@ async fn tts_worker_loop(
                                 finish_requested = true;
                             }
                             None => {
-                                last_stream = Some(stream);
-                                break 'connect;
+                                // Caller is done. If they never even sent
+                                // Finish (rare race), send EOS now so the
+                                // server stops generating, then drain.
+                                if !finish_requested {
+                                    let _ = stream.flush().await;
+                                    stream.send_eos().await;
+                                    finishing = true;
+                                    finish_requested = true;
+                                }
+                                cmd_closed = true;
+                                continue 'commands;
                             }
                         }
                     }
