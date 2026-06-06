@@ -73,11 +73,11 @@ pub(super) fn rendered_body_line_count(content: &str, width: u16) -> usize {
 
 /// Render a placeholder for a section whose content is still being generated.
 ///
-/// Shows the heading in cyan bold (same as normal) followed by a shimmer
-/// animation (when enabled) or a static "Generating..." indicator.
+/// Shows the heading in cyan bold (same as normal) followed by a static
+/// "Generating" indicator with a diamond glyph (no shimmer animation).
 pub(super) fn render_section_loading(
     heading: &str,
-    animations_enabled: bool,
+    _animations_enabled: bool,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -86,13 +86,10 @@ pub(super) fn render_section_loading(
         lines.push(Line::from(""));
     }
 
-    let label = "  \u{25CB} Generating\u{2026}";
-    let motion_mode = if animations_enabled {
-        crate::motion::MotionMode::Animated
-    } else {
-        crate::motion::MotionMode::Reduced
-    };
-    lines.push(Line::from(crate::motion::shimmer_text(label, motion_mode)));
+    lines.push(Line::from(vec![
+        "  \u{25C6} ".cyan(),
+        "Generating".dim().italic(),
+    ]));
 
     lines
 }
@@ -729,7 +726,8 @@ pub(super) fn apply_search_highlights(line: Line<'static>, query: &str) -> Line<
 
 /// Render a pending-question indicator to append below section content.
 ///
-/// Shows a dashed separator, the user's question, and a "thinking..." line.
+/// Shows a dashed separator, the user's question wrapped across as many
+/// lines as needed, and a static thinking indicator (no shimmer).
 pub(super) fn pending_indicator_lines(question: &str, width: u16) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -744,17 +742,19 @@ pub(super) fn pending_indicator_lines(question: &str, width: u16) -> Vec<Line<'s
         .to_string();
     lines.push(Line::from(dashes.dim()));
 
-    // User's question, word-wrapped via textwrap.
+    // User's question, word-wrapped via textwrap. Always emit every wrapped
+    // line so long questions render in full instead of clipping to one line.
     let full_text = format!("You asked: \"{question}\"");
     let wrap_width = width.max(1) as usize;
     for wrapped_line in textwrap::wrap(&full_text, wrap_width) {
         lines.push(Line::from(wrapped_line.into_owned().dim().italic()));
     }
 
-    // Thinking indicator.
+    // Static thinking indicator. Uses a diamond glyph instead of the older
+    // shimmer animation so the indicator reads cleanly without motion.
     lines.push(Line::from(vec![
-        "\u{2022} ".dim(),
-        "thinking...".dim().italic(),
+        "\u{25C6} ".cyan(),
+        "thinking".dim().italic(),
     ]));
 
     lines
