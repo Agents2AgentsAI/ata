@@ -1106,17 +1106,14 @@ pub(crate) enum AppEvent {
     /// Voice-mode TTS controls emitted by the document reader. The Wave 9D
     /// `voice_mode` module owns the consumer side; defining the variants
     /// here unblocks the producer (Wave 9B reader views).
-    #[cfg(not(target_os = "linux"))]
     VoiceModeInterruptTts,
     #[cfg(not(target_os = "linux"))]
     VoiceModePauseTts,
     #[cfg(not(target_os = "linux"))]
     VoiceModeResumeTts,
-    #[cfg(not(target_os = "linux"))]
     VoiceModePlaybackSpeedChange {
         delta: f64,
     },
-    #[cfg(not(target_os = "linux"))]
     VoiceModeNarrateSection {
         document_id: String,
         section_index: usize,
@@ -1124,7 +1121,6 @@ pub(crate) enum AppEvent {
         selection_word_offset: Option<usize>,
         manual: bool,
     },
-    #[cfg(not(target_os = "linux"))]
     VoiceModePrefetchSection {
         document_id: String,
         section_index: usize,

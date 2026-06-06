@@ -956,6 +956,11 @@ impl App {
                 self.chat_widget
                     .on_voice_prefetch_section(document_id, section_index, text);
             }
+            #[cfg(target_os = "linux")]
+            AppEvent::VoiceModePrefetchSection { .. } => {
+                // espeak-ng does not need a separate prefetch step; the
+                // worker spawns on demand from the Narrate arm.
+            }
             // ── Voice-mode internal events (state machine ticks/results) ─
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeMeterTick { text } => {
