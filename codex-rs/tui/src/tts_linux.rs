@@ -41,9 +41,10 @@ enum WorkerCommand {
     /// Speak the contained text. Kills any in-flight child first so a new
     /// narrate request cleanly preempts the previous one.
     Speak(String),
-    /// Update the words-per-minute used by future spawns. The currently
-    /// playing child (if any) is killed so the change takes effect mid-flight.
-    SetSpeed(f64),
+    /// Signal that the speed setting in `SPEED_STATE` has changed. The worker
+    /// reads the new speed on the next spawn. The currently playing child
+    /// (if any) is killed so the change takes effect mid-flight.
+    SetSpeed,
     /// Stop the current narration immediately. Subsequent `Speak` requests
     /// will start fresh.
     Interrupt,
@@ -75,7 +76,7 @@ pub(crate) fn step_speed(delta: f64) -> Result<f64, String> {
         state.step(delta)
     };
     let tx = ensure_worker()?;
-    let _ = tx.send(WorkerCommand::SetSpeed(new_speed));
+    let _ = tx.send(WorkerCommand::SetSpeed);
     Ok(new_speed)
 }
 
@@ -170,7 +171,7 @@ async fn worker_loop(mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>
                         Some(WorkerCommand::Speak(text)) => {
                             queue.lock().map(|mut q| q.push_back(text)).ok();
                         }
-                        Some(WorkerCommand::SetSpeed(_)) => {
+                        Some(WorkerCommand::SetSpeed) => {
                             // Nothing else to do — speed was already updated in
                             // SPEED_STATE; the next spawn reads it fresh.
                         }
@@ -189,7 +190,7 @@ async fn worker_loop(mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>
                 Some(WorkerCommand::Speak(text)) => {
                     queue.lock().map(|mut q| q.push_back(text)).ok();
                 }
-                Some(WorkerCommand::SetSpeed(_)) => {
+                Some(WorkerCommand::SetSpeed) => {
                     continue;
                 }
                 Some(WorkerCommand::Interrupt) => {

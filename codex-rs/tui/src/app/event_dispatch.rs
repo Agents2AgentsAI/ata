@@ -932,12 +932,17 @@ impl App {
             }
             #[cfg(target_os = "linux")]
             AppEvent::VoiceModeNarrateSection {
-                document_id: _,
-                section_index: _,
+                document_id,
+                section_index,
                 text,
-                selection_word_offset: _,
-                manual: _,
+                selection_word_offset,
+                manual,
             } => {
+                tracing::info!(
+                    "tts_linux: narrate doc={document_id} section={section_index} \
+                     word_offset={selection_word_offset:?} manual={manual} chars={}",
+                    text.len(),
+                );
                 if let Err(err) = crate::tts_linux::narrate(text) {
                     tracing::warn!("tts_linux: narrate failed: {err}");
                 } else {
@@ -957,9 +962,16 @@ impl App {
                     .on_voice_prefetch_section(document_id, section_index, text);
             }
             #[cfg(target_os = "linux")]
-            AppEvent::VoiceModePrefetchSection { .. } => {
-                // espeak-ng does not need a separate prefetch step; the
-                // worker spawns on demand from the Narrate arm.
+            AppEvent::VoiceModePrefetchSection {
+                document_id,
+                section_index,
+                text,
+            } => {
+                tracing::debug!(
+                    "tts_linux: prefetch ignored (no separate prefetch step) \
+                     doc={document_id} section={section_index} chars={}",
+                    text.len(),
+                );
             }
             // ── Voice-mode internal events (state machine ticks/results) ─
             #[cfg(not(target_os = "linux"))]
