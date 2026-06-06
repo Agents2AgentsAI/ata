@@ -233,7 +233,7 @@ pub(crate) fn spawn_runner_transport(
     let runner_cmdline = runner_exe
         .to_str()
         .map(str::to_owned)
-        .unwrap_or_else(|| "codex-command-runner.exe".to_string());
+        .unwrap_or_else(|| "ata-command-runner.exe".to_string());
     let runner_full_cmd = format!(
         "{} {} {}",
         quote_windows_arg(&runner_cmdline),
@@ -300,7 +300,7 @@ pub(crate) fn spawn_runner_transport(
         unsafe {
             // Keep the process handle alive until the pipe handshake finishes. If the handshake
             // fails after the runner process has already launched, we still need a way to stop
-            // that child instead of leaking a stray `codex-command-runner.exe`.
+            // that child instead of leaking a stray `ata-command-runner.exe`.
             if pi.hProcess != 0 {
                 let _ = TerminateProcess(pi.hProcess, 1);
                 CloseHandle(pi.hProcess);
@@ -320,7 +320,7 @@ pub(crate) fn spawn_runner_transport(
     let startup_result = (|| -> Result<()> {
         // Keep the runner process HANDLE alive until the *entire* startup handshake finishes.
         // That way, a later `send_spawn_request` or `spawn_ready` failure can still terminate the
-        // runner instead of leaving a stray `codex-command-runner.exe` behind.
+        // runner instead of leaving a stray `ata-command-runner.exe` behind.
         transport.send_spawn_request(spawn_request)?;
         transport.read_spawn_ready()?;
         Ok(())

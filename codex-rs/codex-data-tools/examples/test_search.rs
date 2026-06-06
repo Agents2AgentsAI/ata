@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !result.warnings.is_empty() {
         println!("\nWarnings:");
         for warning in &result.warnings {
-            println!("  ! {}", warning);
+            println!("  ! {warning}");
         }
     }
 
@@ -119,10 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Output path: {}", result.output_path);
         }
         Err(e) => {
-            println!(
-                "Download failed (this may be expected for some datasets): {}",
-                e
-            );
+            println!("Download failed (this may be expected for some datasets): {e}");
         }
     }
 
@@ -141,12 +138,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for comp in competitions.competitions.iter().take(5) {
                     println!("  - {} ({})", comp.title, comp.id);
                     if let Some(reward) = &comp.reward {
-                        println!("    Reward: {}", reward);
+                        println!("    Reward: {reward}");
                     }
                 }
             }
             Err(e) => {
-                println!("Failed to list competitions: {}", e);
+                println!("Failed to list competitions: {e}");
                 println!("(This may require additional Kaggle permissions)");
             }
         }

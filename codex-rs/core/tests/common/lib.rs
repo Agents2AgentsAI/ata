@@ -292,11 +292,14 @@ where
     use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        // Floor of 30s per event accommodates slower runners (ARM64 Linux,
-        // Windows MSVC) under heavy nextest concurrency. Production code paths
+        // Floor of 60s per event accommodates slower runners (ARM64 Linux,
+        // Windows MSVC) under heavy nextest concurrency. The previous 30s
+        // floor flaked intermittently on ubuntu-arm64 with `Elapsed(())` on
+        // tests like model_switching::thread_rollback_after_generated_image*
+        // and compact_resume_fork::snapshot_rollback*. Production code paths
         // are unaffected — this only changes how long the test harness waits
         // before deciding an event won't arrive. Real hangs are still caught.
-        let ev = timeout(wait_time.max(Duration::from_secs(30)), codex.next_event())
+        let ev = timeout(wait_time.max(Duration::from_secs(60)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");

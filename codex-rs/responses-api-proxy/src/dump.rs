@@ -357,7 +357,7 @@ mod tests {
     fn test_dump_dir() -> std::path::PathBuf {
         let test_id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
         let dump_dir = std::env::temp_dir().join(format!(
-            "codex-responses-api-proxy-dump-test-{}-{test_id}",
+            "ata-responses-api-proxy-dump-test-{}-{test_id}",
             std::process::id()
         ));
         fs::create_dir_all(&dump_dir).expect("create test dump dir");

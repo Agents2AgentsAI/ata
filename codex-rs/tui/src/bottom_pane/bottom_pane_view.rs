@@ -256,7 +256,6 @@ pub(crate) trait BottomPaneView: Renderable {
         None
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn set_voice_status(&mut self, _status: Option<String>) {}
 
     #[cfg(not(target_os = "linux"))]

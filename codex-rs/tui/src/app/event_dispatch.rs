@@ -884,6 +884,11 @@ impl App {
             AppEvent::VoiceModeInterruptTts => {
                 self.chat_widget.on_voice_interrupt_tts();
             }
+            #[cfg(target_os = "linux")]
+            AppEvent::VoiceModeInterruptTts => {
+                crate::tts_linux::interrupt();
+                self.chat_widget.set_document_reader_voice_status(None);
+            }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePauseTts => {
                 self.chat_widget.on_voice_pause_tts();
@@ -895,6 +900,19 @@ impl App {
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePlaybackSpeedChange { delta } => {
                 self.chat_widget.on_voice_playback_speed_change(delta);
+            }
+            #[cfg(target_os = "linux")]
+            AppEvent::VoiceModePlaybackSpeedChange { delta } => {
+                match crate::tts_linux::step_speed(delta) {
+                    Ok(new_speed) => {
+                        self.chat_widget.set_document_reader_voice_status(Some(
+                            crate::tts_speed::speaking_status_text(new_speed),
+                        ));
+                    }
+                    Err(err) => {
+                        tracing::warn!("tts_linux: speed step failed: {err}");
+                    }
+                }
             }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModeNarrateSection {
@@ -912,6 +930,28 @@ impl App {
                     manual,
                 );
             }
+            #[cfg(target_os = "linux")]
+            AppEvent::VoiceModeNarrateSection {
+                document_id,
+                section_index,
+                text,
+                selection_word_offset,
+                manual,
+            } => {
+                tracing::info!(
+                    "tts_linux: narrate doc={document_id} section={section_index} \
+                     word_offset={selection_word_offset:?} manual={manual} chars={}",
+                    text.len(),
+                );
+                if let Err(err) = crate::tts_linux::narrate(text) {
+                    tracing::warn!("tts_linux: narrate failed: {err}");
+                } else {
+                    let speed = crate::tts_linux::current_speed();
+                    self.chat_widget.set_document_reader_voice_status(Some(
+                        crate::tts_speed::speaking_status_text(speed),
+                    ));
+                }
+            }
             #[cfg(not(target_os = "linux"))]
             AppEvent::VoiceModePrefetchSection {
                 document_id,
@@ -920,6 +960,18 @@ impl App {
             } => {
                 self.chat_widget
                     .on_voice_prefetch_section(document_id, section_index, text);
+            }
+            #[cfg(target_os = "linux")]
+            AppEvent::VoiceModePrefetchSection {
+                document_id,
+                section_index,
+                text,
+            } => {
+                tracing::debug!(
+                    "tts_linux: prefetch ignored (no separate prefetch step) \
+                     doc={document_id} section={section_index} chars={}",
+                    text.len(),
+                );
             }
             // ── Voice-mode internal events (state machine ticks/results) ─
             #[cfg(not(target_os = "linux"))]

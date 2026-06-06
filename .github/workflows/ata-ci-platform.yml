@@ -769,7 +769,7 @@ jobs:
 
       # `cargo nextest run` only builds tests + lib targets. The Windows
       # sandbox integration tests in `codex-core` stage the
-      # `codex-windows-sandbox-setup` and `codex-command-runner` binaries
+      # `ata-windows-sandbox-setup` and `ata-command-runner` binaries
       # next to the test exe; those are `[[bin]]` targets in another crate
       # and nextest does not build them automatically. Pre-build them here
       # so `cargo_bin()` can locate them.

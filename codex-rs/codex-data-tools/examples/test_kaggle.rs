@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pick the first dataset and list its files
     if let Some(first) = result.datasets.first() {
         let dataset_id = format!("kaggle:{}", first.id);
-        println!("\n=== Listing files in {} ===", dataset_id);
+        println!("\n=== Listing files in {dataset_id} ===");
 
         let files = toolkit
             .dataset_list_files(DatasetFilesParams {
@@ -53,10 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Download to /tmp
-        println!(
-            "\n=== Downloading {} to /tmp/kaggle_titanic ===",
-            dataset_id
-        );
+        println!("\n=== Downloading {dataset_id} to /tmp/kaggle_titanic ===");
         let download = toolkit
             .dataset_download(DatasetDownloadParams {
                 dataset_id: dataset_id.clone(),

@@ -10,11 +10,11 @@ path = "src/lib.rs"
 doctest = false
 
 [[bin]]
-name = "codex-windows-sandbox-setup"
+name = "ata-windows-sandbox-setup"
 path = "src/bin/setup_main/main.rs"
 
 [[bin]]
-name = "codex-command-runner"
+name = "ata-command-runner"
 path = "src/bin/command_runner/main.rs"
 
 [lints]
