@@ -192,7 +192,6 @@ impl BottomPane {
     }
 
     /// Update the voice mode status text in the active document reader.
-    #[cfg(not(target_os = "linux"))]
     pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
         if let Some(view) = self.view_stack.last_mut() {
             view.set_voice_status(status);
