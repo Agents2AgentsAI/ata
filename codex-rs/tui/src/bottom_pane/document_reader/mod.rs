@@ -3578,23 +3578,18 @@ impl Renderable for DocumentReaderView {
                 };
 
                 if let Some((question, _start_time)) = pending_data {
-                    // Render the question with shimmer animation.
+                    // Render the full question wrapped across multiple lines
+                    // with a static diamond icon prefix. The old animated
+                    // path produced a single shimmer line that clipped long
+                    // questions and added visual motion the reader does not
+                    // need.
                     let inner_w = w.saturating_sub(4);
-                    let display = format!("\u{25B8} {question}");
-                    let composer_lines: Vec<Line<'static>> = if self.animations_enabled {
-                        let shimmer = crate::motion::shimmer_text(
-                            &display,
-                            crate::motion::MotionMode::Animated,
-                        );
-                        vec![Line::from(shimmer)]
-                    } else {
+                    let display = format!("\u{25C6} {question}");
+                    let composer_lines: Vec<Line<'static>> =
                         textwrap::wrap(&display, inner_w.max(1) as usize)
                             .iter()
-                            .map(|cow| Line::from(cow.to_string().dim().italic()))
-                            .collect()
-                    };
-                    self.frame_requester
-                        .schedule_frame_in(Duration::from_millis(32));
+                            .map(|cow| Line::from(cow.to_string().cyan().italic()))
+                            .collect();
 
                     let input_h = (composer_lines.len() as u16).clamp(1, 4);
                     by = by.saturating_sub(input_h);
