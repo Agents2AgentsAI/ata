@@ -161,9 +161,10 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
             timeout_minutes: 30
-          - name: macOS
-            runner: macos-15-xlarge
-            timeout_minutes: 30
+          # macOS intentionally omitted: this Bazel argument-comment-lint is
+          # gated off on the ATA fork (no BUILDBUDDY_API_KEY), so the macOS
+          # XLarge runner only booted to no-op. macOS coverage lives in
+          # ata-ci-platform.yml; see ata-ci-macos-comment.yml for on-demand runs.
           - name: Windows
             runner: windows-2022
             timeout_minutes: 30
