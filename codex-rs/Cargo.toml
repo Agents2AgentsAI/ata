@@ -134,7 +134,7 @@ resolver = "2"
 # ATA pins workspace at 0.0.0 so UI snapshots stay stable across upstream merges.
 # The real upstream tag that we last merged in is tracked in commit messages,
 # not in this field. (Last merged: rust-v0.134.0.)
-version = "0.0.0"
+version = "0.7.5"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
