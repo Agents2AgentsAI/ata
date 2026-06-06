@@ -1,0 +1,62 @@
+name: ata-ci-macos-comment
+
+# On-demand macOS CI trigger. Comment `/ci-macos` on a PR to run the macOS
+# XLarge matrix (clippy + tests) against that PR's branch. macOS is excluded
+# from the normal per-push PR matrix in ata-ci-platform.yml because the
+# GitHub-hosted macOS XLarge runners are the dominant Actions cost; this lets
+# you opt in only when you actually need Apple-silicon signal.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  pull-requests: read
+  issues: write
+
+jobs:
+  dispatch:
+    name: Dispatch macOS CI
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/ci-macos') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Acknowledge and dispatch
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+
+            await github.rest.reactions.createForIssueComment({
+              owner, repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: issue_number });
+            const headRepo = pr.data.head.repo?.full_name;
+            const baseRepo = `${owner}/${repo}`;
+            const ref = pr.data.head.ref;
+
+            if (headRepo !== baseRepo) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number,
+                body: `\`/ci-macos\` only works for branches in \`${baseRepo}\`; this PR's head is \`${headRepo}\`.`,
+              });
+              core.setFailed(`Cannot dispatch macOS CI for a fork branch (${headRepo}).`);
+              return;
+            }
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner, repo,
+              workflow_id: 'ata-ci-platform.yml',
+              ref,
+              inputs: { macos_only: 'true' },
+            });
+
+            const runsUrl = `https://github.com/${owner}/${repo}/actions/workflows/ata-ci-platform.yml`;
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: `🍎 Dispatched the macOS XLarge matrix on \`${ref}\`. Watch it in the [Actions tab](${runsUrl}).`,
+            });

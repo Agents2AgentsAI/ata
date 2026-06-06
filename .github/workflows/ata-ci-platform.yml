@@ -21,6 +21,11 @@ on:
       - ".github/scripts/**"
       - ".github/runs-on.yml"
   workflow_dispatch:
+    inputs:
+      macos_only:
+        description: "Run only the macOS XLarge matrix (used by the /ci-macos comment trigger)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -29,13 +34,17 @@ concurrency:
 # CI builds in debug (dev) for faster signal.
 
 jobs:
-  # --- Detect what changed ---------------------------------------------------
-  changed:
-    name: Detect changed areas
+  # --- Detect what changed and plan the platform matrix ----------------------
+  setup:
+    name: Detect changes & plan matrix
     runs-on: ubuntu-24.04
     outputs:
       codex: ${{ steps.detect.outputs.codex }}
       workflows: ${{ steps.detect.outputs.workflows }}
+      run_macos: ${{ steps.plan.outputs.run_macos }}
+      run_other: ${{ steps.plan.outputs.run_other }}
+      lint_matrix: ${{ steps.plan.outputs.lint_matrix }}
+      tests_matrix: ${{ steps.plan.outputs.tests_matrix }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,14 +76,86 @@ jobs:
           echo "codex=$codex" >> "$GITHUB_OUTPUT"
           echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
 
+      # macOS XLarge runners are GitHub-billed and ~17x the cost of the RunsOn
+      # Linux fleet, so they are NOT included in the per-push PR matrix. They
+      # run only after merge to main (push) or on explicit demand: a manual
+      # workflow_dispatch, or a `/ci-macos` PR comment (see
+      # ata-ci-macos-comment.yml) which dispatches this workflow with
+      # macos_only=true against the PR branch.
+      - name: Plan platform matrix
+        id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          MACOS_ONLY: ${{ github.event.inputs.macos_only }}
+          RID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          run_macos=false
+          run_other=true
+          case "$EVENT" in
+            push)
+              run_macos=true ;;
+            workflow_dispatch)
+              run_macos=true
+              [[ "${MACOS_ONLY:-false}" == "true" ]] && run_other=false ;;
+            *)
+              # pull_request and everything else: never provision macOS.
+              run_macos=false ;;
+          esac
+
+          linux_x64="runs-on=${RID}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
+          linux_arm64="runs-on=${RID}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
+          windows_x64="runs-on=${RID}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
+
+          lint_other=$(jq -cn --arg lx "$linux_x64" --arg la "$linux_arm64" --arg wx "$windows_x64" '[
+            {runner:"ubuntu-x64",  target:"x86_64-unknown-linux-musl", profile:"dev",     runs_on:$lx},
+            {runner:"ubuntu-x64",  target:"x86_64-unknown-linux-gnu",  profile:"dev",     runs_on:$lx},
+            {runner:"ubuntu-arm64",target:"aarch64-unknown-linux-musl",profile:"dev",     runs_on:$la},
+            {runner:"ubuntu-arm64",target:"aarch64-unknown-linux-gnu", profile:"dev",     runs_on:$la},
+            {runner:"windows-x64", target:"x86_64-pc-windows-msvc",    profile:"dev",     runs_on:$wx},
+            {runner:"ubuntu-x64",  target:"x86_64-unknown-linux-musl", profile:"release", runs_on:$lx},
+            {runner:"ubuntu-arm64",target:"aarch64-unknown-linux-musl",profile:"release", runs_on:$la},
+            {runner:"windows-x64", target:"x86_64-pc-windows-msvc",    profile:"release", runs_on:$wx}
+          ]')
+          lint_macos=$(jq -cn '[
+            {runner:"macos-15-xlarge",target:"aarch64-apple-darwin",profile:"dev"},
+            {runner:"macos-15-xlarge",target:"x86_64-apple-darwin", profile:"dev"},
+            {runner:"macos-15-xlarge",target:"aarch64-apple-darwin",profile:"release"}
+          ]')
+          tests_other=$(jq -cn --arg lx "$linux_x64" --arg la "$linux_arm64" --arg wx "$windows_x64" '[
+            {runner:"ubuntu-x64",  target:"x86_64-unknown-linux-gnu", profile:"dev",runs_on:$lx},
+            {runner:"ubuntu-arm64",target:"aarch64-unknown-linux-gnu",profile:"dev",runs_on:$la},
+            {runner:"windows-x64", target:"x86_64-pc-windows-msvc",   profile:"dev",runs_on:$wx}
+          ]')
+          tests_macos=$(jq -cn '[
+            {runner:"macos-15-xlarge",target:"aarch64-apple-darwin",profile:"dev"}
+          ]')
+
+          build() {
+            local other="$1" macos="$2" acc='[]'
+            [[ "$run_other" == "true" ]] && acc=$(jq -c ". + $other" <<<"$acc")
+            [[ "$run_macos" == "true" ]] && acc=$(jq -c ". + $macos" <<<"$acc")
+            jq -c '{include: .}' <<<"$acc"
+          }
+
+          {
+            echo "run_macos=$run_macos"
+            echo "run_other=$run_other"
+            echo "lint_matrix=$(build "$lint_other" "$lint_macos")"
+            echo "tests_matrix=$(build "$tests_other" "$tests_macos")"
+          } >> "$GITHUB_OUTPUT"
+
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
     name: Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 45
-    needs: changed
+    needs: setup
     # Skip expensive matrix jobs on draft PRs and when no relevant files changed.
-    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
+    # The platform set (incl. whether macOS runs) is decided in `setup`.
+    if: ${{ !github.event.pull_request.draft && (needs.setup.outputs.run_macos == 'true' || needs.setup.outputs.run_other == 'true') && (needs.setup.outputs.codex == 'true' || needs.setup.outputs.workflows == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -88,57 +169,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # macOS — GitHub-hosted (no RunsOn macOS support).
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: dev
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            profile: dev
-          # Linux — RunsOn w/ S3 magic cache.
-          - runner: ubuntu-x64
-            target: x86_64-unknown-linux-musl
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
-          - runner: ubuntu-x64
-            target: x86_64-unknown-linux-gnu
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
-          - runner: ubuntu-arm64
-            target: aarch64-unknown-linux-musl
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
-          - runner: ubuntu-arm64
-            target: aarch64-unknown-linux-gnu
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
-          # Windows — RunsOn (no magic cache on Windows).
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
-
-          # Also run representative release builds on Mac and Linux because
-          # there could be release-only build errors we want to catch.
-          # Hopefully this also pre-populates the build cache to speed up
-          # releases.
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: release
-          - runner: ubuntu-x64
-            target: x86_64-unknown-linux-musl
-            profile: release
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
-          - runner: ubuntu-arm64
-            target: aarch64-unknown-linux-musl
-            profile: release
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            profile: release
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
+      matrix: ${{ fromJSON(needs.setup.outputs.lint_matrix) }}
 
     steps:
       - uses: actions/checkout@v6
@@ -539,8 +570,8 @@ jobs:
     # to cancellation before all retries could complete. Widen to give
     # Windows headroom without changing per-test assertions.
     timeout-minutes: 75
-    needs: changed
-    if: ${{ !github.event.pull_request.draft && (needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push') }}
+    needs: setup
+    if: ${{ !github.event.pull_request.draft && (needs.setup.outputs.run_macos == 'true' || needs.setup.outputs.run_other == 'true') && (needs.setup.outputs.codex == 'true' || needs.setup.outputs.workflows == 'true' || github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
     defaults:
       run:
         working-directory: codex-rs
@@ -554,23 +585,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            profile: dev
-          - runner: ubuntu-x64
-            target: x86_64-unknown-linux-gnu
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-x64/extras=s3-cache/volume=160gb/spot=false"
-          - runner: ubuntu-arm64
-            target: aarch64-unknown-linux-gnu
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/extras=s3-cache/volume=160gb/spot=false/cpu=16/ram=64"
-          - runner: windows-x64
-            target: x86_64-pc-windows-msvc
-            profile: dev
-            runs_on: "runs-on=${{ github.run_id }}/runner=ci-windows-x64/volume=160gb/cpu=16/ram=64/spot=false"
+      matrix: ${{ fromJSON(needs.setup.outputs.tests_matrix) }}
 
     steps:
       - uses: actions/checkout@v6
@@ -855,7 +870,7 @@ jobs:
   # --- Gatherer job ----------------------------------------------------------
   results:
     name: Platform CI results
-    needs: [changed, lint_build, tests]
+    needs: [setup, lint_build, tests]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -872,7 +887,7 @@ jobs:
           fi
 
           # If nothing relevant changed, declare success.
-          if [[ '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' ]]; then
+          if [[ '${{ needs.setup.outputs.codex }}' != 'true' && '${{ needs.setup.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' && '${{ github.event_name }}' != 'workflow_dispatch' ]]; then
             echo 'No relevant changes -> CI not required.'
             exit 0
           fi
