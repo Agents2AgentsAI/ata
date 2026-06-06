@@ -1,3 +1,12 @@
+# Use the system `git` CLI for fetches instead of cargo's built-in libgit2
+# client. libgit2 on macOS routes through SecureTransport, which has been
+# consistently dropping connections to https://chromium.googlesource.com
+# (the libwebrtc -> libyuv submodule pull) on GitHub-hosted x86_64 runners,
+# stalling release builds for ~45 minutes per attempt before the retry
+# script gives up. Cargo's own error message recommends this exact flag.
+[net]
+git-fetch-with-cli = true
+
 # macOS aarch64 defaults Rust test threads to 2 MB which overflows several
 # codex-app-server in_process and tracing tests. Linux defaults to 8 MB so
 # upstream CI passes; bump to 16 MB for all platforms to keep parity.
