@@ -4,6 +4,7 @@ use crate::common::ResponseProcessedWsRequest;
 use crate::common::ResponseStream;
 use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
+use crate::file_support::rewrite_openai_url_file_blocks_in_payload;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
 use crate::sse::ResponsesStreamEvent;
@@ -259,9 +260,10 @@ impl ResponsesWebsocketConnection {
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
         let telemetry = self.telemetry.clone();
-        let request_body = serde_json::to_value(&request).map_err(|err| {
+        let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
+        rewrite_openai_url_file_blocks_in_payload(&mut request_body);
 
         let current_span = Span::current();
         tokio::spawn(
@@ -991,6 +993,61 @@ mod tests {
         assert_eq!(
             merged.get("x-default-only"),
             Some(&HeaderValue::from_static("default-only"))
+        );
+    }
+
+    #[test]
+    fn websocket_payload_rewrites_url_file_blocks_to_input_file() {
+        use codex_protocol::models::ContentItem;
+        use codex_protocol::models::ResponseItem;
+
+        use crate::common::ResponseCreateWsRequest;
+        use crate::common::ResponsesWsRequest;
+
+        let input = vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::UrlFile {
+                url: "https://arxiv.org/pdf/2305.10601v2.pdf".to_string(),
+                mime_type: Some("application/pdf".to_string()),
+                filename: Some("paper.pdf".to_string()),
+            }],
+            phase: None,
+        }];
+        let payload = ResponseCreateWsRequest {
+            model: "gpt-test".to_string(),
+            instructions: String::new(),
+            previous_response_id: None,
+            input,
+            tools: vec![],
+            tool_choice: "auto".to_string(),
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            service_tier: None,
+            prompt_cache_key: None,
+            text: None,
+            generate: None,
+            client_metadata: None,
+        };
+        let request = ResponsesWsRequest::ResponseCreate(payload);
+        let mut request_body = serde_json::to_value(&request).expect("serialize ws request");
+        rewrite_openai_url_file_blocks_in_payload(&mut request_body);
+
+        let wire = serde_json::to_string(&request_body).expect("re-serialize");
+        assert!(
+            !wire.contains("\"url_file\""),
+            "ws payload still contains url_file: {wire}"
+        );
+        assert!(
+            wire.contains("\"input_file\""),
+            "ws payload missing input_file: {wire}"
+        );
+        assert!(
+            wire.contains("\"file_url\":\"https://arxiv.org/pdf/2305.10601v2.pdf\""),
+            "ws payload missing file_url: {wire}"
         );
     }
 }
