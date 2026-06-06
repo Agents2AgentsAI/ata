@@ -559,7 +559,7 @@ fn find_setup_exe() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        let candidate = dir.join("codex-windows-sandbox-setup.exe");
+        let candidate = dir.join("ata-windows-sandbox-setup.exe");
         if candidate.exists() {
             return candidate;
         }
@@ -569,7 +569,7 @@ fn find_setup_exe() -> PathBuf {
         // that sibling folder before falling back to PATH.
         let resource_candidate = dir
             .join("codex-resources")
-            .join("codex-windows-sandbox-setup.exe");
+            .join("ata-windows-sandbox-setup.exe");
         if resource_candidate.exists() {
             return resource_candidate;
         }

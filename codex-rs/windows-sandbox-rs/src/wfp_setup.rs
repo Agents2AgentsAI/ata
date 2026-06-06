@@ -8,7 +8,7 @@ use codex_otel::StatsigMetricsSettings;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const WFP_SETUP_SERVICE_NAME: &str = "codex-windows-sandbox-setup";
+const WFP_SETUP_SERVICE_NAME: &str = "ata-windows-sandbox-setup";
 const WFP_SETUP_SUCCESS_METRIC: &str = "codex.windows_sandbox.wfp_setup_success";
 const WFP_SETUP_FAILURE_METRIC: &str = "codex.windows_sandbox.wfp_setup_failure";
 

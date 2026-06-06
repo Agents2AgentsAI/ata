@@ -90,7 +90,7 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
                 .with_context(|| format!("create resources dir {}", resources_dir.display()));
         }
     }
-    for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
+    for helper_name in ["ata-windows-sandbox-setup", "ata-command-runner"] {
         let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
         let file_name = Path::new(helper_name).with_extension("exe");
         let destination = resources_dir.join(file_name);
