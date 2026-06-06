@@ -976,6 +976,14 @@ impl ChatWidget {
         );
     }
 
+    /// Replace the reading view's voice status line (or clear it with `None`).
+    /// Used by the Linux `tts_linux` dispatch path; the macOS voice mode pipes
+    /// the same updates through its internal helpers in `voice_mode.rs`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn set_document_reader_voice_status(&mut self, status: Option<String>) {
+        self.bottom_pane.set_document_reader_voice_status(status);
+    }
+
     /// Returns the cached metadata for a thread, defaulting to empty if none has been registered.
     fn collab_agent_metadata(&self, thread_id: ThreadId) -> AgentMetadata {
         self.collab_agent_metadata

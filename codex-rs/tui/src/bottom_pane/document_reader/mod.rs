@@ -37,20 +37,17 @@ pub(crate) const DOCUMENT_READER_VIEW_ID: &str = "doc_reader";
 /// Iterator that yields `(byte_offset, word)` for each whitespace-delimited
 /// word in a string.  Used to map TTS word indices to character positions
 /// within rendered lines.
-#[cfg(not(target_os = "linux"))]
 struct WordOffsets<'a> {
     text: &'a str,
     pos: usize,
 }
 
-#[cfg(not(target_os = "linux"))]
 impl<'a> WordOffsets<'a> {
     fn new(text: &'a str) -> Self {
         Self { text, pos: 0 }
     }
 }
 
-#[cfg(not(target_os = "linux"))]
 impl<'a> Iterator for WordOffsets<'a> {
     type Item = (usize, &'a str);
     fn next(&mut self) -> Option<Self::Item> {
@@ -70,7 +67,6 @@ impl<'a> Iterator for WordOffsets<'a> {
 /// Returns `true` when `word` is a rendering-only decorator that does not
 /// correspond to any word in the TTS stream and should be skipped during
 /// karaoke word counting.
-#[cfg(not(target_os = "linux"))]
 fn is_karaoke_skip_word(word: &str) -> bool {
     // Speaker emoji, fold border, check mark, horizontal rule.
     if word == "\u{1F50A}"
@@ -959,13 +955,9 @@ impl DocumentReaderView {
     }
 
     /// Interrupt TTS if voice mode is speaking (user navigated away).
-    #[cfg(not(target_os = "linux"))]
     fn interrupt_tts_if_needed(&self) {
         self.app_event_tx.send(AppEvent::VoiceModeInterruptTts);
     }
-
-    #[cfg(target_os = "linux")]
-    fn interrupt_tts_if_needed(&self) {}
 
     /// Emit a narrate event for the current section so voice mode can TTS it.
     /// The document reader doesn't know whether voice mode is active — ChatWidget
@@ -973,7 +965,6 @@ impl DocumentReaderView {
     ///
     /// Any collapsed folds in the current section are auto-expanded so the
     /// karaoke reading cursor can track through all visible content.
-    #[cfg(not(target_os = "linux"))]
     fn narrate_current_section_if_voice(&mut self, manual: bool) {
         // Auto-expand collapsed folds so karaoke can highlight fold content.
         if let Some(section) = self.sections.get_mut(self.current_section) {
@@ -1019,9 +1010,6 @@ impl DocumentReaderView {
             }
         }
     }
-
-    #[cfg(target_os = "linux")]
-    fn narrate_current_section_if_voice(&mut self, _manual: bool) {}
 
     fn clear_updated_flag(&mut self) {
         if let Some(section) = self.sections.get_mut(self.current_section)
@@ -1706,7 +1694,6 @@ impl DocumentReaderView {
                     self.exit_reading_mode();
                 }
                 // Read selection aloud via TTS.
-                #[cfg(not(target_os = "linux"))]
                 KeyCode::Char('r') => {
                     // Interrupt any ongoing TTS before starting a new read
                     // and clear stale karaoke visual state immediately.
@@ -1802,12 +1789,10 @@ impl DocumentReaderView {
                 }
             }
             // Increase/decrease TTS playback speed (client-side, pitch-preserving).
-            #[cfg(not(target_os = "linux"))]
             KeyCode::Char('+' | '=') if self.voice_status.is_some() => {
                 self.app_event_tx
                     .send(AppEvent::VoiceModePlaybackSpeedChange { delta: 0.1 });
             }
-            #[cfg(not(target_os = "linux"))]
             KeyCode::Char('-') if self.voice_status.is_some() => {
                 self.app_event_tx
                     .send(AppEvent::VoiceModePlaybackSpeedChange { delta: -0.1 });
@@ -2683,7 +2668,6 @@ impl DocumentReaderView {
     /// Uses the same decorator-skipping logic as `set_voice_reading_progress`
     /// so the returned offset can be added to a TTS word index to highlight
     /// the correct word in the full rendered content.
-    #[cfg(not(target_os = "linux"))]
     fn count_words_before_selection(&self, inner_width: u16) -> usize {
         let vs = match self.visual_select.as_ref() {
             Some(v) => v,
@@ -2751,7 +2735,6 @@ impl BottomPaneView for DocumentReaderView {
         })
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn set_voice_status(&mut self, status: Option<String>) {
         self.voice_status = status;
     }
