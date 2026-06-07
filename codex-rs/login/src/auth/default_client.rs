@@ -130,8 +130,15 @@ pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
 }
 
+/// Version reported in the User-Agent for OpenAI / ChatGPT-auth API calls. OpenAI
+/// gates new models (e.g. gpt-5.5) by Codex CLI version, so we report the upstream
+/// codex version this build was merged from instead of the local crate version.
+/// Bump this when merging a newer upstream codex tag (see codex-rs/Cargo.toml
+/// comment for the last-merged version).
+const REPORTED_CODEX_VERSION: &str = "0.134.0";
+
 pub fn get_codex_user_agent() -> String {
-    let build_version = env!("CARGO_PKG_VERSION");
+    let build_version = REPORTED_CODEX_VERSION;
     let os_info = os_info::get();
     let originator = originator();
     let prefix = format!(
