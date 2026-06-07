@@ -576,12 +576,27 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
-        // Reader Tab-to-ask appends hidden tool-routing guidance after the
-        // `<!-- READER_TOOL_INSTRUCTIONS -->` sentinel. The agent needs the
-        // full text; the chat history must show only the user-visible portion
-        // (the question itself, plus the "[The user is reading ...]" preamble).
-        // Strip BEFORE the existing IDE-context extraction so the rest of this
-        // function sees the trimmed message.
+        // Reader Tab-to-ask wraps the user's typed question with a
+        // `[The user is reading "…" and asked about the section titled "…"]`
+        // preamble and an agent-only `<!-- READER_TOOL_INSTRUCTIONS -->`
+        // routing-guidance block. The reader-close path injects a
+        // `[The user closed the document reader …]` synthetic message the
+        // user never typed. Both reach the agent via a separate UserInput
+        // path, so suppress them from the main chat scroll entirely — the
+        // in-section Q&A pin already shows the user's question alongside the
+        // answer. Empty `message` flows through `on_user_message_display`'s
+        // trim-empty guard and the entry is skipped without rendering.
+        if message.contains("<!-- READER_TOOL_INSTRUCTIONS -->")
+            || message.starts_with("[The user is reading ")
+            || message.starts_with("[The user closed the document reader")
+        {
+            return UserMessageDisplay {
+                message: String::new(),
+                remote_image_urls: Vec::new(),
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            };
+        }
         let message = strip_system_instruction_suffix(&message);
         let (message, prompt_request_offset) =
             crate::ide_context::extract_prompt_request_with_offset(&message);
