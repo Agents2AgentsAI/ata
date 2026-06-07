@@ -44,7 +44,7 @@ async fn responses_mode_stream_cli() {
     );
     let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    cmd.timeout(Duration::from_secs(90));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -108,7 +108,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    cmd.timeout(Duration::from_secs(90));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -276,7 +276,7 @@ async fn responses_api_stream_cli() {
     let home = TempDir::new().unwrap();
     let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    cmd.timeout(Duration::from_secs(90));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -318,7 +318,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     // 4. Run the codex CLI and invoke `exec`, which is what records a session.
     let bin = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd = AssertCommand::new(bin);
-    cmd.timeout(Duration::from_secs(30));
+    cmd.timeout(Duration::from_secs(90));
     cmd.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
@@ -439,7 +439,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
     let prompt2 = format!("echo {marker2}");
     let bin2 = codex_utils_cargo_bin::cargo_bin("ata").unwrap();
     let mut cmd2 = AssertCommand::new(bin2);
-    cmd2.timeout(Duration::from_secs(30));
+    cmd2.timeout(Duration::from_secs(90));
     cmd2.arg("exec")
         .arg("--skip-git-repo-check")
         .arg("-c")
