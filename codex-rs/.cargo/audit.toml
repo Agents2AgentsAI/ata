@@ -9,4 +9,5 @@ ignore = [
     "RUSTSEC-2026-0118", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0119", # hickory-proto via rama-dns/rama-tcp; remove when rama updates to hickory 0.26.1 or hickory-net
     "RUSTSEC-2026-0097", # rand 0.8.5 via age/codex-secrets; unsoundness only with custom logger in TryRng path; remove when age upgrades to rand >=0.8.6
+    "RUSTSEC-2026-0173", # proc-macro-error2 via i18n-embed-fl/age/codex-secrets; proc-macro only; remove when age/i18n-embed-fl migrate off proc-macro-error2
 ]
