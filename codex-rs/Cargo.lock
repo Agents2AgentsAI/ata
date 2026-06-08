@@ -8956,6 +8956,7 @@ dependencies = [
  "anyhow",
  "codex-login",
  "codex-mcp-server",
+ "codex-model-provider-info",
  "codex-terminal-detection",
  "codex-utils-cargo-bin",
  "core_test_support",

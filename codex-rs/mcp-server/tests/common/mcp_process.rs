@@ -152,8 +152,9 @@ impl McpProcess {
         let os_info = os_info::get();
         let build_version = env!("CARGO_PKG_VERSION");
         let originator = codex_login::default_client::originator().value;
+        let reported_version = codex_model_provider_info::OPENAI_CLIENT_VERSION_OVERRIDE;
         let user_agent = format!(
-            "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
+            "{originator}/{reported_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),
             os_info.version(),
             os_info.architecture().unwrap_or("unknown"),
