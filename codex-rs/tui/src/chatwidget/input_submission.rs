@@ -150,7 +150,7 @@ impl ChatWidget {
         // says "do not announce this action to the user — just do it silently
         // or skip." Render them silently so the chat history doesn't display
         // the reader-close preamble.
-        let is_silent_synthetic = text.starts_with("[The user closed the document reader");
+        let is_silent_synthetic = text.starts_with(super::user_messages::READER_CLOSE_PREFIX);
         let agent_turn_running = self.turn_lifecycle.agent_turn_running;
         let render_in_history = !agent_turn_running && !is_silent_synthetic;
         let mut items: Vec<UserInput> = Vec::new();

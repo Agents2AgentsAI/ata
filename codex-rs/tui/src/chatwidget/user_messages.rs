@@ -23,6 +23,36 @@ use codex_protocol::user_input::TextElement;
 
 use super::ChatWidget;
 
+/// Marker prefix at the start of a Tab-to-ask wrapper, e.g.
+/// `[The user is reading "Title" and asked about the section titled "Heading"]`.
+/// Constructed in `chatwidget_document_reader.rs` and
+/// `bottom_pane/document_reader/mod.rs`.
+pub(super) const READER_PREAMBLE_PREFIX: &str = "[The user is reading ";
+
+/// Marker prefix for the synthetic reader-close follow-up, e.g.
+/// `[The user closed the document reader for "Title". They viewed N of M ...]`.
+/// Constructed in `bottom_pane/document_reader/mod.rs`.
+pub(super) const READER_CLOSE_PREFIX: &str = "[The user closed the document reader";
+
+/// HTML-comment sentinel that separates the user-visible portion of a Tab-to-ask
+/// wrapper from agent-only tool-routing guidance. Anything after the sentinel
+/// is for the agent only and must be stripped from chat display.
+pub(super) const READER_TOOL_INSTRUCTIONS_SENTINEL: &str = "<!-- READER_TOOL_INSTRUCTIONS -->";
+
+/// True when `text` is a reader-synthesised wrapper (Tab-to-ask preamble or
+/// reader-close follow-up) that the agent must see but the chat scroll must
+/// suppress. The in-section Q&A pin already shows the user's question alongside
+/// the answer, and the reader-close turn is explicitly silent, so neither
+/// belongs in the main chat history.
+///
+/// Single source of truth for the wrapper-detection rule. Update here when
+/// adding a new synthetic producer or renaming an existing preamble.
+pub(super) fn is_synthetic_reader_wrapper(text: &str) -> bool {
+    text.starts_with(READER_PREAMBLE_PREFIX)
+        || text.starts_with(READER_CLOSE_PREFIX)
+        || text.contains(READER_TOOL_INSTRUCTIONS_SENTINEL)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
     pub(super) text: String,
@@ -454,8 +484,7 @@ pub(super) fn user_message_display_for_history(
 /// guidance — without it the rollout-driven re-render of a steered turn
 /// shows the unstripped text even when the live render was clean.
 fn strip_system_instruction_suffix(text: &str) -> String {
-    const SENTINEL: &str = "<!-- READER_TOOL_INSTRUCTIONS -->";
-    match text.find(SENTINEL) {
+    match text.find(READER_TOOL_INSTRUCTIONS_SENTINEL) {
         Some(idx) => text[..idx].trim_end().to_string(),
         None => text.to_string(),
     }
@@ -479,17 +508,13 @@ fn strip_system_instruction_suffix(text: &str) -> String {
 /// `~/.ata/history.jsonl`, and Up-arrow recall in a later session would
 /// surface the system-injected sentinels as if the user had typed them.
 pub(super) fn extract_user_question_for_history(text: &str) -> Option<String> {
-    const READER_PREAMBLE_PREFIX: &str = "[The user is reading ";
-    const READER_CLOSE_PREFIX: &str = "[The user closed the document reader";
     // Reader-close is a fully-synthetic feedback message — the user typed
     // nothing — so suppress it from history entirely. Return Some("") which
     // the caller's `Override` branch routes to "not persisted".
     if text.starts_with(READER_CLOSE_PREFIX) {
         return Some(String::new());
     }
-    let has_reader_wrapper = text.contains("<!-- READER_TOOL_INSTRUCTIONS -->")
-        || text.starts_with(READER_PREAMBLE_PREFIX);
-    if !has_reader_wrapper {
+    if !is_synthetic_reader_wrapper(text) {
         return None;
     }
     let after_suffix_strip = strip_system_instruction_suffix(text);
@@ -576,20 +601,14 @@ impl ChatWidget {
         local_images: Vec<PathBuf>,
         remote_image_urls: Vec<String>,
     ) -> UserMessageDisplay {
-        // Reader Tab-to-ask wraps the user's typed question with a
-        // `[The user is reading "…" and asked about the section titled "…"]`
-        // preamble and an agent-only `<!-- READER_TOOL_INSTRUCTIONS -->`
-        // routing-guidance block. The reader-close path injects a
-        // `[The user closed the document reader …]` synthetic message the
-        // user never typed. Both reach the agent via a separate UserInput
-        // path, so suppress them from the main chat scroll entirely — the
-        // in-section Q&A pin already shows the user's question alongside the
-        // answer. Empty `message` flows through `on_user_message_display`'s
-        // trim-empty guard and the entry is skipped without rendering.
-        if message.contains("<!-- READER_TOOL_INSTRUCTIONS -->")
-            || message.starts_with("[The user is reading ")
-            || message.starts_with("[The user closed the document reader")
-        {
+        // Both reader Tab-to-ask wrappers and the synthetic reader-close
+        // follow-up reach the agent via a separate UserInput path, so suppress
+        // them from the main chat scroll entirely. The in-section Q&A pin
+        // already shows the user's question alongside the answer, and the
+        // reader-close turn is explicitly silent by design. Empty `message`
+        // flows through `on_user_message_display`'s trim-empty guard and the
+        // entry is skipped without rendering.
+        if is_synthetic_reader_wrapper(&message) {
             return UserMessageDisplay {
                 message: String::new(),
                 remote_image_urls: Vec::new(),
