@@ -370,7 +370,7 @@ quick-xml = "0.38.4"
 rand = "0.9"
 ratatui = "0.29.0"
 ratatui-macros = "0.6.0"
-rcgen = { version = "0.14.7", default-features = false, features = [
+rcgen = { version = "0.14.8", default-features = false, features = [
     "aws_lc_rs",
     "pem",
 ] }
