@@ -434,7 +434,7 @@ tokio-tungstenite = { version = "0.28.0", features = [
 tokio-util = "0.7.18"
 toml = "0.9.5"
 tower-http = "0.6"
-pdfium-render = "0.8"
+pdfium-render = "0.9"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
