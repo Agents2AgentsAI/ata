@@ -1707,3 +1707,68 @@ async fn apply_patch_request_omits_diff_summary_from_modal() -> anyhow::Result<(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn intermediate_cells_suppressed_while_reading_view_reader_open() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_task_started();
+
+    // Open the TUI document reader so a follow-up turn runs "inside" the reader.
+    chat.bottom_pane.show_document_reader(
+        codex_protocol::document_reader::PresentDocumentEvent {
+            call_id: "present-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            document_id: "doc-1".to_string(),
+            title: "Recurrent Neural Networks".to_string(),
+            content: "## Intro\n\nBody text.".to_string(),
+            is_reopen: false,
+        },
+        /*from_replay*/ false,
+    );
+    assert!(chat.bottom_pane.is_document_reader_active());
+    let _ = drain_insert_history(&mut rx);
+
+    // (1) Exec: a follow-up that shells out (e.g. the learning-log update) must
+    // not leak a `Ran …` cell into the transcript behind the reader.
+    let item = begin_exec(&mut chat, "call-reader", "rg -q marker log.md");
+    assert!(
+        chat.transcript.active_cell.is_none(),
+        "exec must not create a visible active cell while the reader is open"
+    );
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "exec start cell leaked into the transcript behind the reader"
+    );
+    end_exec(&mut chat, item, "done", "", 0);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "completed exec cell leaked into the transcript behind the reader"
+    );
+
+    // (2) File edit: a follow-up that edits a file (e.g. the learning-log) must
+    // not leak an "Edited …" patch cell into the transcript either. This is the
+    // case the exec-only gate originally missed.
+    let mut changes = HashMap::new();
+    changes.insert(
+        PathBuf::from("learning-log.md"),
+        FileChange::Add {
+            content: "a new line\n".into(),
+        },
+    );
+    chat.on_patch_apply_begin(changes);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "patch/edit cell leaked into the transcript behind the reader"
+    );
+
+    // (3) A generic history cell (info/tool output) is likewise held back while
+    // the reader owns the screen.
+    chat.add_to_history(history_cell::new_info_event(
+        "background note".to_string(),
+        None,
+    ));
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "generic history cell leaked into the transcript behind the reader"
+    );
+}

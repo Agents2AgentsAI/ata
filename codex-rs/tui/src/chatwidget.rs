@@ -1243,6 +1243,11 @@ impl ChatWidget {
 
     fn flush_active_cell(&mut self) {
         if let Some(active) = self.transcript.active_cell.take() {
+            // Drop instead of committing while the reading-view reader owns the
+            // screen — see `add_boxed_history` for the rationale.
+            if self.is_suppressing_streaming_for_reader() {
+                return;
+            }
             self.transcript.needs_final_message_separator = true;
             self.app_event_tx.send(AppEvent::InsertHistoryCell(active));
         }
@@ -1253,6 +1258,17 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        // While the reading-view reader owns the screen, a follow-up turn's
+        // intermediate cells — file edits ("Edited …"), tool/MCP calls, command
+        // output, patch status — must not leak into the transcript behind the
+        // reader. The answer reaches the reader through the document tools;
+        // everything else this turn is dropped, exactly like streamed agent
+        // messages in `handle_streaming_delta`. The reader's own close cell
+        // bypasses this path (the reader view emits it directly), so it is
+        // unaffected.
+        if self.is_suppressing_streaming_for_reader() {
+            return;
+        }
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
