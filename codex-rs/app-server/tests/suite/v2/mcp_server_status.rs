@@ -244,7 +244,10 @@ url = "{mcp_server_url}/mcp"
         })
         .await?;
     let response = timeout(
-        Duration::from_millis(500),
+        // Keep the budget below the mocked 2s resource inventory delay so the
+        // test still proves `ToolsAndAuthOnly` skips slow inventory calls,
+        // while allowing a little more headroom for heavier feature builds.
+        Duration::from_millis(1_900),
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;

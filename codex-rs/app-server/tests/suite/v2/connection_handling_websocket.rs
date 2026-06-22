@@ -48,13 +48,14 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 
-// macOS and Windows CI can spend tens of seconds starting the app-server test
-// binary under Bazel before it accepts JSON-RPC or reports its websocket bind
-// address.
-#[cfg(any(target_os = "macos", windows))]
-pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
-#[cfg(not(any(target_os = "macos", windows)))]
-pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+// Under full-workspace parallel CI load (every platform, not just macOS/Windows)
+// the app-server test binary can spend tens of seconds starting under Bazel
+// before it accepts JSON-RPC or reports its websocket bind address, and the
+// signal-handling tests intrinsically wait on a running turn plus graceful
+// shutdown. The slowest of these (graceful Ctrl-C waits for the running turn)
+// runs ~10s locally and has tipped over a 60s budget under peak Linux CI load,
+// so keep this generous; the matching nextest override allows for it.
+pub(super) const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(super) type WsClient = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 type HmacSha256 = Hmac<Sha256>;
