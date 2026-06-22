@@ -1,32 +1,8 @@
-use regex::Regex;
-use std::sync::LazyLock;
-
-static OPENAI_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| compile_regex(r"sk-[A-Za-z0-9]{20,}"));
-static AWS_ACCESS_KEY_ID_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| compile_regex(r"\bAKIA[0-9A-Z]{16}\b"));
-static BEARER_TOKEN_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| compile_regex(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{16,}\b"));
-static SECRET_ASSIGNMENT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    compile_regex(r#"(?i)\b(api[_-]?key|token|secret|password)\b(\s*[:=]\s*)(["']?)[^\s"']{8,}"#)
-});
-
-/// Remove secret and keys from a String. This is done on best effort basis following some
-/// well-known REGEX.
+/// Remove secrets and keys from a String, best effort, using the shared secret
+/// patterns in [`codex_secret_patterns`]. The pattern definitions live there so
+/// every redaction boundary (logs, errors, snapshots, memories) stays in sync.
 pub fn redact_secrets(input: String) -> String {
-    let redacted = OPENAI_KEY_REGEX.replace_all(&input, "[REDACTED_SECRET]");
-    let redacted = AWS_ACCESS_KEY_ID_REGEX.replace_all(&redacted, "[REDACTED_SECRET]");
-    let redacted = BEARER_TOKEN_REGEX.replace_all(&redacted, "Bearer [REDACTED_SECRET]");
-    let redacted = SECRET_ASSIGNMENT_REGEX.replace_all(&redacted, "$1$2$3[REDACTED_SECRET]");
-
-    redacted.to_string()
-}
-
-fn compile_regex(pattern: &str) -> Regex {
-    match Regex::new(pattern) {
-        Ok(regex) => regex,
-        // Panic is ok thanks to `load_regex` test.
-        Err(err) => panic!("invalid regex pattern `{pattern}`: {err}"),
-    }
+    codex_secret_patterns::redact_secret_values(&input, "[REDACTED_SECRET]")
 }
 
 #[cfg(test)]
@@ -37,5 +13,13 @@ mod tests {
     fn load_regex() {
         // The goal of this test is just to compile all the regex to prevent the panic
         let _ = redact_secrets("secret".to_string());
+    }
+
+    #[test]
+    fn redacts_known_shapes() {
+        let out =
+            redact_secrets("authorization: Bearer sk-proj-ABCDEF0123456789ghijkl".to_string());
+        assert!(!out.contains("ABCDEF"), "{out}");
+        assert!(out.contains("[REDACTED_SECRET]"), "{out}");
     }
 }

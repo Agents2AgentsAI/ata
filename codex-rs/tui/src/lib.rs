@@ -160,6 +160,7 @@ mod oss_selection;
 mod pager_overlay;
 mod permission_compat;
 pub(crate) mod public_widgets;
+mod redacting_log_writer;
 mod render;
 mod resize_reflow_cap;
 mod resume_picker;
@@ -1201,11 +1202,16 @@ pub async fn run_main(
 
         let log_file = log_file_opts.open(log_dir.join(TUI_LOG_FILE_NAME))?;
         let (non_blocking, guard) = non_blocking(log_file);
+        // Redact credential material (auth headers, ChatGPT account id, inline
+        // secrets) out of every formatted event before it reaches disk. This is
+        // the same seam the log database layer rides, so third-party TRACE spans
+        // (tungstenite/reqwest) cannot leak the bearer token to codex-tui.log.
+        let redacting_writer = redacting_log_writer::RedactingMakeWriter::new(non_blocking);
         let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
         });
         let file_layer = tracing_subscriber::fmt::layer()
-            .with_writer(non_blocking)
+            .with_writer(redacting_writer)
             .with_target(true)
             .with_ansi(false)
             .with_span_events(
