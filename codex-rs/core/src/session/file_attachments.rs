@@ -699,12 +699,15 @@ mod tests {
     use super::*;
 
     use crate::auth::AuthCredentialsStoreMode;
+    use crate::auth::OPENAI_API_KEY_ENV_VAR;
     use crate::auth::PROVIDER_OPENAI;
     use crate::auth::login_with_provider_api_key;
+    use crate::auth::test_utils::EnvVarGuard;
     use crate::config::ConfigBuilder;
     use codex_protocol::protocol::SandboxPolicy;
 
     use pretty_assertions::assert_eq;
+    use serial_test::serial;
     use wiremock::Mock;
     use wiremock::MockServer;
     use wiremock::ResponseTemplate;
@@ -941,7 +944,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_rewrites_to_uploaded_file() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1014,7 +1019,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_routes_multiple_files() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1113,7 +1120,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_cleans_up_orphaned_uploads_on_error() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1197,7 +1206,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn resolve_file_inputs_for_uploads_dedupes_orphan_cleanup_across_three_files() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let codex_home = tempfile::tempdir().expect("codex home");
         login_with_provider_api_key(
             codex_home.path(),
@@ -1284,7 +1295,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(codex_api_key)]
     async fn refresh_uploaded_file_references_reuploads_near_expiry_and_rewrites_history() {
+        let _openai_guard = EnvVarGuard::set(OPENAI_API_KEY_ENV_VAR, "");
         let (sess, mut turn_context) = crate::session::tests::make_session_and_context().await;
         login_with_provider_api_key(
             turn_context.config.codex_home.as_path(),
