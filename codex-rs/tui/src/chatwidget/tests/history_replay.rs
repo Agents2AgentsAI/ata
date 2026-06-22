@@ -75,6 +75,89 @@ async fn resumed_initial_messages_render_history() {
 }
 
 #[tokio::test]
+async fn replayed_silent_synthetic_user_message_is_not_rendered() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    // The reader-close follow-up is injected by the TUI, never typed by the
+    // user, and is suppressed from live history. Replay (resume) must agree.
+    replay_user_message_text(
+        &mut chat,
+        "user-1",
+        "[The user closed the document reader for \"notes.md\". Check whether follow-up Q&A added new insights.]",
+        ReplayKind::ResumeInitialMessages,
+    );
+    replay_user_message_text(
+        &mut chat,
+        "user-2",
+        "a real user message",
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let text_blob = cells
+        .iter()
+        .flatten()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.clone())
+        .collect::<String>();
+    assert!(
+        !text_blob.contains("closed the document reader"),
+        "reader-close injection must not render on replay: {text_blob}",
+    );
+    assert!(
+        text_blob.contains("a real user message"),
+        "expected the real replayed user message: {text_blob}",
+    );
+}
+
+#[tokio::test]
+async fn replayed_reader_question_wrapper_is_not_rendered() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    // Reader Tab-to-ask / explain-selection wraps the typed question in a
+    // "[The user is reading …]" preamble plus hidden tool instructions. The
+    // wrapper never renders live (the question shows inside the reader pane),
+    // so replay (resume) must suppress it too.
+    replay_user_message_text(
+        &mut chat,
+        "user-1",
+        "[The user is reading \"How DNS Resolution Works\" and asked about the section titled \"Slide 2\"]\n\n\
+         How does caching interact with TTL values?\n\n\
+         The user selected specific text from the section (shown below) and is asking about it.\n\
+         [Selected text:]\nresolver cache\n\n\
+         <!-- READER_TOOL_INSTRUCTIONS -->\n\
+         Tool target for this turn: document_id=\"dns\", section_index=1.",
+        ReplayKind::ResumeInitialMessages,
+    );
+    replay_user_message_text(
+        &mut chat,
+        "user-2",
+        "a real user message",
+        ReplayKind::ResumeInitialMessages,
+    );
+
+    let cells = drain_insert_history(&mut rx);
+    let text_blob = cells
+        .iter()
+        .flatten()
+        .flat_map(|line| line.spans.iter())
+        .map(|span| span.content.clone())
+        .collect::<String>();
+    assert!(
+        !text_blob.contains("The user is reading"),
+        "reader question wrapper must not render on replay: {text_blob}",
+    );
+    assert!(
+        !text_blob.contains("Selected text"),
+        "reader selection wrapper body must not render on replay: {text_blob}",
+    );
+    assert!(
+        text_blob.contains("a real user message"),
+        "expected the real replayed user message: {text_blob}",
+    );
+}
+
+#[tokio::test]
 async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
