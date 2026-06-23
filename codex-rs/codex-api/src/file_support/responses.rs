@@ -82,7 +82,54 @@ fn rewrite_openai_url_file_blocks_in_content(content: &mut [Value]) {
             }
             _ => {}
         }
+
+        // `rewrite_url_file_block` may leave a `url_file` block untouched when its
+        // URL is empty, so re-check the (possibly rewritten) block here. The
+        // Responses API requires every file block to carry exactly one of
+        // `file_data` / `file_id` / `file_url`; a block missing all three (for
+        // example a PDF whose inline `file_data` was stripped during compaction)
+        // is rejected with `missing_mutually_exclusive_parameters`. Replace such
+        // degenerate blocks with a text placeholder so the enclosing message
+        // still serializes to a valid request instead of failing the whole turn.
+        replace_unsourced_file_block(block);
     }
+}
+
+/// Replaces a degenerate `input_file` / `url_file` block — one that carries none
+/// of the mutually exclusive source parameters the Responses API requires — with
+/// an `input_text` placeholder.
+///
+/// Such blocks should not normally exist, but compaction, resume reconstruction,
+/// and forking can all strip a file's inline `file_data` while leaving the empty
+/// `input_file` shell behind. Sending that shell to the API fails the entire
+/// request, so we degrade gracefully to text instead.
+fn replace_unsourced_file_block(block: &mut Value) {
+    let source_keys: &[&str] = match block.get("type").and_then(Value::as_str) {
+        Some("input_file") => &["file_data", "file_id", "file_url"],
+        Some("url_file") => &["url"],
+        _ => return,
+    };
+    let has_source = block.as_object().is_some_and(|obj| {
+        source_keys.iter().any(|key| {
+            obj.get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+    });
+    if has_source {
+        return;
+    }
+
+    let note = match block.get("filename").and_then(Value::as_str) {
+        Some(name) if !name.trim().is_empty() => {
+            format!("[attachment \"{name}\" is no longer available]")
+        }
+        _ => "[attachment is no longer available]".to_string(),
+    };
+    *block = serde_json::json!({
+        "type": "input_text",
+        "text": note,
+    });
 }
 
 /// Rewrites a `url_file` block into an OpenAI-compatible `input_file` block with `file_url`.
@@ -365,6 +412,104 @@ mod tests {
                 "type": "input_file",
                 "file_data": "data:application/pdf;base64,JVBERi0xLjQ=",
                 "filename": "report.pdf"
+            })
+        );
+    }
+
+    #[test]
+    fn replaces_bare_input_file_block_with_text_placeholder() {
+        // Reproduces the `missing_mutually_exclusive_parameters` 400: a bare
+        // `input_file` block (inline `file_data` dropped during compaction) reaches
+        // the Responses wire shape with none of file_data/file_id/file_url.
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_file" }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_text",
+                "text": "[attachment is no longer available]"
+            })
+        );
+    }
+
+    #[test]
+    fn replaces_unsourced_input_file_block_but_keeps_filename_note() {
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_file",
+                    "filename": "AgentNet.pdf"
+                }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_text",
+                "text": "[attachment \"AgentNet.pdf\" is no longer available]"
+            })
+        );
+    }
+
+    #[test]
+    fn replaces_url_file_block_with_empty_url() {
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "url_file",
+                    "url": "   ",
+                    "filename": "report.pdf"
+                }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_text",
+                "text": "[attachment \"report.pdf\" is no longer available]"
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_valid_input_file_with_file_id() {
+        // A block with a valid source must not be rewritten to a placeholder.
+        let mut payload = serde_json::json!({
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_file",
+                    "file_id": "file-abc123"
+                }]
+            }]
+        });
+
+        rewrite_openai_url_file_blocks_in_payload(&mut payload);
+
+        assert_eq!(
+            payload["input"][0]["content"][0],
+            serde_json::json!({
+                "type": "input_file",
+                "file_id": "file-abc123"
             })
         );
     }
