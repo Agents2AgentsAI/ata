@@ -250,6 +250,17 @@ impl ChatWidget {
         else {
             return;
         };
+        // While the reading-view reader owns the screen, a follow-up turn's
+        // intermediate command cells must not leak into the transcript behind
+        // the reader — the answer reaches the reader through the document tool,
+        // and everything else this turn is suppressed, just like streamed agent
+        // messages in `handle_streaming_delta`. Marking the call suppressed
+        // skips its start cell here and its output/completion rendering via the
+        // existing `suppressed_exec_calls` path.
+        if self.is_suppressing_streaming_for_reader() {
+            self.suppressed_exec_calls.insert(id);
+            return;
+        }
         let (command, parsed_cmd) =
             command_execution_command_and_parsed(&command, &command_actions);
         // Ensure the status indicator is visible while the command runs.
