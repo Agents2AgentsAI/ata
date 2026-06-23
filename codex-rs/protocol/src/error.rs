@@ -324,7 +324,7 @@ const UNEXPECTED_RESPONSE_BODY_MAX_BYTES: usize = 1000;
 impl UnexpectedResponseError {
     fn display_body(&self) -> String {
         if let Some(message) = self.extract_error_message() {
-            return message;
+            return redact_credential_fragments(&message);
         }
 
         let trimmed_body = self.body.trim();
@@ -332,7 +332,10 @@ impl UnexpectedResponseError {
             return "Unknown error".to_string();
         }
 
-        truncate_with_ellipsis(trimmed_body, UNEXPECTED_RESPONSE_BODY_MAX_BYTES)
+        redact_credential_fragments(&truncate_with_ellipsis(
+            trimmed_body,
+            UNEXPECTED_RESPONSE_BODY_MAX_BYTES,
+        ))
     }
 
     fn extract_error_message(&self) -> Option<String> {
@@ -409,6 +412,17 @@ impl std::fmt::Display for UnexpectedResponseError {
 }
 
 impl std::error::Error for UnexpectedResponseError {}
+
+pub(crate) const REDACTED_CREDENTIAL: &str = "[REDACTED_CREDENTIAL]";
+
+/// Redact credential fragments echoed inside provider error messages, using the
+/// shared secret patterns in [`codex_secret_patterns`]. Providers often mask the
+/// offending key as a prefix/suffix around a run of `*`
+/// (e.g. `sk-inval***************************test`); a masked prefix and suffix
+/// is still credential-derived material, so the whole token is replaced.
+pub(crate) fn redact_credential_fragments(text: &str) -> String {
+    codex_secret_patterns::redact_secret_values(text, REDACTED_CREDENTIAL)
+}
 
 fn truncate_with_ellipsis(text: &str, max_bytes: usize) -> String {
     if text.len() <= max_bytes {

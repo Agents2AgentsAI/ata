@@ -48,6 +48,10 @@ const LOG_QUEUE_CAPACITY: usize = 512;
 const LOG_BATCH_SIZE: usize = 128;
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 
+fn redact_if_sensitive(text: String) -> String {
+    codex_secret_patterns::redact_log_line(&text)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LogSinkQueueConfig {
     pub queue_capacity: usize,
@@ -205,7 +209,7 @@ where
             ts_nanos: now.subsec_nanos() as i64,
             level: metadata.level().as_str().to_string(),
             target: metadata.target().to_string(),
-            message: visitor.message,
+            message: visitor.message.map(redact_if_sensitive),
             feedback_log_body: Some(feedback_log_body),
             thread_id,
             process_uuid: Some(self.process_uuid.clone()),
@@ -341,14 +345,14 @@ where
     let formatter = DefaultFields::default();
     let mut formatted = FormattedFields::<DefaultFields>::new(String::new());
     let _ = formatter.format_fields(formatted.as_writer(), fields);
-    formatted.fields
+    redact_if_sensitive(formatted.fields)
 }
 
 fn append_fields(fields: &mut String, values: &Record<'_>) {
     let formatter = DefaultFields::default();
     let mut formatted = FormattedFields::<DefaultFields>::new(std::mem::take(fields));
     let _ = formatter.add_fields(&mut formatted, values);
-    *fields = formatted.fields;
+    *fields = redact_if_sensitive(formatted.fields);
 }
 
 fn current_process_log_uuid() -> &'static str {
@@ -597,6 +601,97 @@ mod tests {
         assert_eq!(
             without_timestamps(&sqlite_logs),
             without_timestamps(&feedback_logs)
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[test]
+    fn redact_if_sensitive_strips_auth_headers_but_keeps_names() {
+        let wire = "POST /v1/responses HTTP/1.1\r\nauthorization: Bearer sk-proj-supersecret1234\r\nuser-agent: codex-tui/0.0.0\r\ncookie: session=abc123def456\r\n";
+        let redacted = redact_if_sensitive(wire.to_string());
+        assert!(!redacted.contains("sk-proj-supersecret1234"));
+        assert!(!redacted.contains("session=abc123def456"));
+        assert!(redacted.contains("authorization: REDACTED"));
+        assert!(redacted.contains("cookie: REDACTED"));
+        assert!(redacted.contains("user-agent: codex-tui/0.0.0"));
+    }
+
+    #[test]
+    fn redact_if_sensitive_handles_debug_maps_and_field_assignments() {
+        let debug_map = r#"{"x-api-key": "anthropic-key-000111222", "accept": "application/json"}"#;
+        let redacted = redact_if_sensitive(debug_map.to_string());
+        assert!(!redacted.contains("anthropic-key-000111222"));
+        assert!(redacted.contains(r#""x-api-key": "REDACTED""#));
+        assert!(redacted.contains(r#""accept": "application/json""#));
+
+        let fields = "access_token=eyJhbGciOiJSUzI1NiJ9.payload.sig model=gpt-5.5";
+        let redacted = redact_if_sensitive(fields.to_string());
+        assert!(!redacted.contains("eyJhbGciOiJSUzI1NiJ9"));
+        assert!(redacted.contains("access_token=REDACTED"));
+    }
+
+    #[test]
+    fn redact_if_sensitive_redacts_shared_value_patterns() {
+        // A masked key fragment carries no recognized field name, so it is only
+        // caught by the shared value patterns. This boundary must ride them.
+        let text = "error: Incorrect API key provided: sk-inval***************************test";
+        let redacted = redact_if_sensitive(text.to_string());
+        assert!(!redacted.contains('*'), "{redacted}");
+        assert!(!redacted.contains("sk-inval"), "{redacted}");
+    }
+
+    #[tokio::test]
+    async fn span_with_auth_header_is_stored_redacted() {
+        let codex_home = temp_codex_home();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+        let layer = start(runtime.clone());
+
+        let guard = tracing_subscriber::registry()
+            .with(
+                layer
+                    .clone()
+                    .with_filter(Targets::new().with_default(tracing::Level::TRACE)),
+            )
+            .set_default();
+
+        let secret = "sk-proj-span-secret-9876543210";
+        tracing::info_span!(
+            "http_request",
+            thread_id = "thread-redact",
+            headers = format!("authorization: Bearer {secret}\r\nuser-agent: codex-tui/0.0.0")
+        )
+        .in_scope(|| {
+            tracing::trace!("request sent");
+        });
+
+        layer.flush().await;
+        drop(guard);
+
+        let body = String::from_utf8(
+            runtime
+                .query_feedback_logs("thread-redact")
+                .await
+                .expect("query feedback logs"),
+        )
+        .expect("valid utf-8");
+        assert!(
+            body.contains("http_request"),
+            "stored log should include the span scope: {body}"
+        );
+        assert!(
+            !body.contains(secret),
+            "stored span leaked the auth header value: {body}"
+        );
+        assert!(
+            body.contains("REDACTED"),
+            "stored span should carry the redaction marker: {body}"
+        );
+        assert!(
+            body.contains("user-agent"),
+            "non-sensitive headers should be kept: {body}"
         );
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;

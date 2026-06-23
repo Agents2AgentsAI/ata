@@ -174,6 +174,16 @@ struct GracefulCtrlCFixture {
 
 async fn start_ctrl_c_restart_fixture(turn_delay: Duration) -> Result<GracefulCtrlCFixture> {
     let server = responses::start_mock_server().await;
+    // Turn-context creation calls `list_models(OnlineIfUncached)`; on CI's fresh
+    // CODEX_HOME the catalog is uncached, so without a `/models` mock the fetch
+    // hits an unmocked GET /models and stalls the turn before it starts running —
+    // which breaks these "wait for the running turn on signal" assertions. Mock
+    // `/models` so the catalog resolves immediately. (Passes locally either way.)
+    responses::mount_models_once(
+        &server,
+        codex_protocol::openai_models::ModelsResponse { models: Vec::new() },
+    )
+    .await;
     let delayed_turn_response = create_final_assistant_message_sse_response("Done")?;
     Mock::given(method("POST"))
         .and(path_regex(".*/responses$"))

@@ -1,0 +1,14 @@
+[package]
+name = "codex-secret-patterns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+regex-lite = { workspace = true }
+
+[lib]
+doctest = false

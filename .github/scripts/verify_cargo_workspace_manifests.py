@@ -24,6 +24,7 @@ TOP_LEVEL_NAME_EXCEPTIONS = {
 }
 UTILITY_NAME_EXCEPTIONS = {
     "path-utils": "codex-utils-path",
+    "secret-patterns": "codex-secret-patterns",
 }
 MANIFEST_FEATURE_EXCEPTIONS = {
     # ATA: codex-treesitter ships with seven `tree-sitter-<lang>` deps gated

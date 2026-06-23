@@ -2563,6 +2563,7 @@ dependencies = [
  "codex-rollout-trace",
  "codex-sandboxing",
  "codex-scheduling",
+ "codex-secret-patterns",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -3578,6 +3579,7 @@ dependencies = [
  "codex-async-utils",
  "codex-execpolicy",
  "codex-network-proxy",
+ "codex-secret-patterns",
  "codex-utils-absolute-path",
  "codex-utils-file",
  "codex-utils-image",
@@ -3799,6 +3801,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-secret-patterns"
+version = "0.0.0"
+dependencies = [
+ "regex-lite",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
@@ -3807,10 +3816,10 @@ dependencies = [
  "base64 0.22.1",
  "codex-git-utils",
  "codex-keyring-store",
+ "codex-secret-patterns",
  "keyring",
  "pretty_assertions",
  "rand 0.9.3",
- "regex",
  "schemars 0.8.22",
  "serde",
  "serde_json",
@@ -3879,6 +3888,7 @@ dependencies = [
  "clap",
  "codex-git-utils",
  "codex-protocol",
+ "codex-secret-patterns",
  "dirs",
  "log",
  "owo-colors",
@@ -4051,6 +4061,7 @@ dependencies = [
  "codex-realtime-webrtc",
  "codex-rollout",
  "codex-sandboxing",
+ "codex-secret-patterns",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",

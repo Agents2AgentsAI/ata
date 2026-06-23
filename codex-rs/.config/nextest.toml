@@ -11,6 +11,11 @@ path = "junit.xml"
 [test-groups.app_server_protocol_codegen]
 max-threads = 1
 
+# Each case spawns a fresh app-server subprocess and drives full turns. Run
+# them serially: even 2-4 concurrent cases contend enough on CPU/IO that the
+# turn/shutdown waits time out (a single websocket case ballooned from ~10s to
+# 122s at max-threads = 4). The slow ubuntu-arm64 lane instead gets a larger
+# job timeout to absorb the serial tail.
 [test-groups.app_server_integration]
 max-threads = 1
 
@@ -20,7 +25,7 @@ max-threads = 1
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
-[test-groups.windows_process_heavy]
+[test-groups.process_heavy]
 max-threads = 2
 
 [[profile.default.overrides]]
@@ -43,6 +48,14 @@ filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
 
 [[profile.default.overrides]]
+# The websocket signal-handling integration tests run a full turn, signal the
+# app-server, and then wait for graceful/forced shutdown. Under full-workspace
+# CI load each of those phases can take tens of seconds, so the default 60s
+# terminate can kill the test before its (generous) internal waits matter.
+filter = 'package(codex-app-server) & test(suite::v2::connection_handling_websocket)'
+slow-timeout = { period = "60s", terminate-after = 4 }
+
+[[profile.default.overrides]]
 # These tests exercise full Codex turns and apply_patch execution, and they are
 # sensitive to Windows runner process-startup stalls when many cases launch at once.
 filter = 'package(codex-core) & kind(test) & test(apply_patch_cli)'
@@ -62,11 +75,12 @@ filter = 'test(start_thread_uses_all_default_environments_from_codex_home)'
 slow-timeout = { period = "1m", terminate-after = 2 }
 
 [[profile.default.overrides]]
-# These Windows-heavy tests spawn subprocesses, session files, or JSON-RPC
-# clients and have been the dominant source of 30s full-CI timeouts.
-platform = 'cfg(windows)'
+# These tests spawn subprocesses, session files, or JSON-RPC clients and run
+# full Codex turns. Under full-workspace parallel load (any platform, not just
+# Windows) they have been the dominant source of 30s full-CI timeouts, so cap
+# their concurrency and give them a longer slow-timeout.
 filter = 'test(suite::resume::) | test(suite::cli_stream::) | test(suite::auth_env::) | test(start_thread_uses_all_default_environments_from_codex_home) | test(connect_stdio_command_initializes_json_rpc_client_on_windows)'
-test-group = 'windows_process_heavy'
+test-group = 'process_heavy'
 slow-timeout = { period = "45s", terminate-after = 2 }
 
 [[profile.default.overrides]]

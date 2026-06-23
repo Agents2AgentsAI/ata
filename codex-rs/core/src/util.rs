@@ -149,15 +149,7 @@ fn is_sensitive_error_key(key: &str) -> bool {
 }
 
 fn redact_secrets_in_text(text: String) -> String {
-    use regex_lite::Regex;
-    use std::sync::LazyLock;
-    static BEARER_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)Bearer\s+[A-Za-z0-9._\-]+")
-            .unwrap_or_else(|e| panic!("BEARER_RE compile failed: {e}"))
-    });
-    BEARER_RE
-        .replace_all(&text, format!("Bearer {REDACTED_SECRET}").as_str())
-        .into_owned()
+    codex_secret_patterns::redact_secret_values(&text, REDACTED_SECRET)
 }
 
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {

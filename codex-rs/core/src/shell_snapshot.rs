@@ -207,7 +207,7 @@ async fn write_shell_snapshot(
         .with_context(|| format!("No available shell for {shell_type:?}"))?;
 
     let raw_snapshot = capture_snapshot(&shell, cwd).await?;
-    let snapshot = strip_snapshot_preamble(&raw_snapshot)?;
+    let snapshot = scrub_secret_exports(&strip_snapshot_preamble(&raw_snapshot)?);
 
     if let Some(parent) = output_path.parent() {
         let parent_display = parent.display();
@@ -232,6 +232,91 @@ async fn capture_snapshot(shell: &Shell, cwd: &AbsolutePathBuf) -> Result<String
         ShellType::Sh => run_shell_script(shell, &sh_snapshot_script(), cwd).await,
         ShellType::PowerShell => run_shell_script(shell, powershell_snapshot_script(), cwd).await,
         ShellType::Cmd => bail!("Shell snapshotting is not yet supported for {shell_type:?}"),
+    }
+}
+
+/// Drop export lines for env vars whose names match known secret patterns so
+/// credentials are not persisted in cleartext under
+/// `$CODEX_HOME/shell_snapshots/`. The live values stay available to spawned
+/// shells through normal environment inheritance; only the on-disk snapshot
+/// is scrubbed.
+fn scrub_secret_exports(snapshot: &str) -> String {
+    let mut out = String::with_capacity(snapshot.len());
+    let mut lines = snapshot.lines();
+    while let Some(line) = lines.next() {
+        match export_var_name(line) {
+            Some(name) if is_secret_env_var(name) => {
+                // If the dropped value spans multiple lines (open quote),
+                // drop the continuation lines too.
+                let mut scanner = QuoteScanner::default();
+                scanner.feed(line);
+                while scanner.in_quote() {
+                    let Some(continuation) = lines.next() else {
+                        break;
+                    };
+                    scanner.feed(continuation);
+                }
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Extract the variable name from a snapshot export line
+/// (`export NAME=...`, `declare -x NAME=...`, `typeset -x NAME=...`, or
+/// PowerShell `$env:NAME='...'`). Returns `None` for non-export lines.
+fn export_var_name(line: &str) -> Option<&str> {
+    let rest = line
+        .strip_prefix("export ")
+        .or_else(|| line.strip_prefix("declare -x "))
+        .or_else(|| line.strip_prefix("typeset -x "))
+        .or_else(|| line.strip_prefix("$env:"))?;
+    let name = rest.split(['=', ' ']).next()?;
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some(name)
+}
+
+fn is_secret_env_var(name: &str) -> bool {
+    codex_secret_patterns::is_secret_env_var_name(name)
+}
+
+/// Tracks whether shell-quoted text is still inside an open quote across
+/// lines, with backslash escapes honored outside single quotes.
+#[derive(Default)]
+struct QuoteScanner {
+    in_single: bool,
+    in_double: bool,
+}
+
+impl QuoteScanner {
+    fn feed(&mut self, line: &str) {
+        let mut escaped = false;
+        for ch in line.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' if !self.in_single => escaped = true,
+                '\'' if !self.in_double => self.in_single = !self.in_single,
+                '"' if !self.in_single => self.in_double = !self.in_double,
+                _ => {}
+            }
+        }
+    }
+
+    fn in_quote(&self) -> bool {
+        self.in_single || self.in_double
     }
 }
 

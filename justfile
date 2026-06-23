@@ -46,6 +46,10 @@ install:
     rustup show active-toolchain
     cargo fetch
 
+# Validate prompt-inspector registry integrity.
+check-prompts:
+    python3 tools/prompt-inspector/validate.py --codex-root .
+
 # Run nextest with --no-fail-fast so all tests are run.
 #
 # Run `cargo install --locked cargo-nextest` if you don't have it installed.
