@@ -46,7 +46,7 @@ jobs:
       lint_matrix: ${{ steps.plan.outputs.lint_matrix }}
       tests_matrix: ${{ steps.plan.outputs.tests_matrix }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Detect changed paths (no external action)
@@ -172,7 +172,7 @@ jobs:
       matrix: ${{ fromJSON(needs.setup.outputs.lint_matrix) }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Activate RunsOn
         if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
         uses: runs-on/action@v2
@@ -591,7 +591,7 @@ jobs:
       matrix: ${{ fromJSON(needs.setup.outputs.tests_matrix) }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Activate RunsOn
         if: ${{ contains(matrix.runs_on || '', 'runs-on=') }}
         uses: runs-on/action@v2

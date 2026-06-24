@@ -23,7 +23,7 @@ jobs:
   tag-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
@@ -150,7 +150,7 @@ jobs:
             runs_on: "runs-on=${{ github.run_id }}/runner=ci-linux-arm64/volume=160gb/spot=false/cpu=16/ram=64"
 
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Print runner specs (Linux)
         if: ${{ runner.os == 'Linux' }}
         shell: bash
@@ -585,7 +585,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Generate release notes from tag commit message
         id: release_notes

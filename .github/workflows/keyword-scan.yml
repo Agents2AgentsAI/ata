@@ -14,7 +14,7 @@ jobs:
     name: Scan for prohibited keywords
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Scan for prohibited patterns
         shell: bash
