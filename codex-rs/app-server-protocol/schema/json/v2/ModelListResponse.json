@@ -205,6 +205,13 @@
             "max"
           ],
           "type": "string"
+        },
+        {
+          "description": "Client-side only: downgraded to `Max` on the wire. Its sole effect is to flip the session into proactive multi-agent delegation.",
+          "enum": [
+            "ultra"
+          ],
+          "type": "string"
         }
       ]
     },
