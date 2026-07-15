@@ -1427,8 +1427,10 @@ impl Session {
             next_cwd,
             codex_home,
             session_source,
+            reading_view_toggled,
         ) = {
             let mut state = self.state.lock().await;
+            let previous_reading_view_override = state.session_configuration.reading_view_override;
             let updated = match state.session_configuration.apply(&updates) {
                 Ok(updated) => updated,
                 Err(err) => {
@@ -1449,6 +1451,14 @@ impl Session {
             let next_cwd = updated.cwd.clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
+            // A `/reading` toggle flips `reading_view_override`. When it actually
+            // changes, tell the model once (a single developer note, not a
+            // per-turn injection) so it isn't confused by the reading-view tools
+            // appearing or disappearing mid-session.
+            let reading_view_toggled = match updated.reading_view_override {
+                Some(enabled) if Some(enabled) != previous_reading_view_override => Some(enabled),
+                _ => None,
+            };
             state.session_configuration = updated;
             (
                 previous_config,
@@ -1458,6 +1468,7 @@ impl Session {
                 next_cwd,
                 codex_home,
                 session_source,
+                reading_view_toggled,
             )
         };
 
@@ -1473,7 +1484,31 @@ impl Session {
                 .await;
         }
 
+        if let Some(enabled) = reading_view_toggled {
+            let items = vec![ResponseInputItem::Message {
+                role: "developer".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: Self::reading_view_toggle_note(enabled).to_string(),
+                }],
+                phase: None,
+            }];
+            if let Err(items) = self.inject_response_items(items).await {
+                self.input_queue
+                    .queue_response_items_for_next_turn(items)
+                    .await;
+            }
+        }
+
         Ok(())
+    }
+
+    // @agent-facing
+    fn reading_view_toggle_note(enabled: bool) -> &'static str {
+        if enabled {
+            "The user turned reading view ON for this session (via /reading). The reading-view tools (present_reading_view and its companions) are now available; use them to present long-form document output."
+        } else {
+            "The user turned reading view OFF for this session (via /reading). The reading-view tools are no longer available — present any document-style output inline in your reply instead."
+        }
     }
 
     pub(crate) async fn preview_settings(

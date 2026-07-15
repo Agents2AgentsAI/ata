@@ -70,6 +70,14 @@ pattern     = "PATCH_DOCUMENT_SECTION_TOOL"
 description = "Find-and-replace text within a reading view section"
 
 [[entries]]
+name        = "reading view toggle note (reading_view_toggle_note)"
+category    = "context-injection"
+file        = "core/src/session/mod.rs"
+pattern     = "reading_view_toggle_note"
+type        = "function"
+description = "Developer note injected once when the user toggles reading view on/off via /reading"
+
+[[entries]]
 name        = "reading_view_display_mode_guidance"
 category    = "tool-descriptions"
 file        = "core/src/tools/handlers/document_reader.rs"

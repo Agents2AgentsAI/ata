@@ -1288,8 +1288,7 @@ async fn enter_submits_when_plan_stream_is_not_active() {
     assert!(chat.input_queue.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            personality: None,
-            ..
+            personality: None, ..
         } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
     }
