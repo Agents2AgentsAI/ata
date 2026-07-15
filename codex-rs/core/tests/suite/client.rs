@@ -2488,6 +2488,7 @@ async fn token_count_includes_rate_limits_snapshot() {
         .with_auth(CodexAuth::from_api_key("test"))
         .with_config(move |config| {
             config.model_provider = provider;
+            config.model = Some("gpt-5.4".to_string());
         });
     let codex = builder
         .build(&server)
