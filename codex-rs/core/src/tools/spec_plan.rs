@@ -627,8 +627,18 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
 /// `reading_view_tools_enabled` so a single `[reading_view] mode = "disabled"`
 /// hides the whole surface from the model.
 fn add_reading_view_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
-    if !reading_view_tools_enabled(&context.turn_context.config) {
-        return;
+    // The session-scoped `/reading` override takes precedence over the persisted
+    // `[reading_view].mode`. `Some(false)` drops the reading-view tools for the
+    // session, `Some(true)` forces them on, and `None` defers to the
+    // config-driven `reading_view_tools_enabled` behavior.
+    match context.turn_context.reading_view_override {
+        Some(false) => return,
+        Some(true) => {}
+        None => {
+            if !reading_view_tools_enabled(&context.turn_context.config) {
+                return;
+            }
+        }
     }
     for (name, spec_lazy) in [
         ("present_reading_view", &*PRESENT_DOCUMENT_TOOL),

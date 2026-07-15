@@ -133,6 +133,7 @@ async fn thread_settings_update(
         service_tier,
         collaboration_mode,
         personality,
+        reading_view_override,
     } = thread_settings;
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
@@ -160,6 +161,7 @@ async fn thread_settings_update(
         reasoning_summary: summary,
         service_tier,
         personality,
+        reading_view_override,
         ..Default::default()
     }
 }

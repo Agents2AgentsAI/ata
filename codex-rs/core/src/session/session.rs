@@ -120,6 +120,11 @@ pub(crate) struct SessionConfiguration {
     pub(super) thread_source: Option<ThreadSource>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) persist_extended_history: bool,
+    /// Session-scoped override for the reading-view tool family. `Some(false)`
+    /// forces the tools off for the session, `Some(true)` forces them on, and
+    /// `None` defers to `[reading_view].mode`. Set in-memory only via
+    /// `SessionSettingsUpdate` (the `/reading` toggle); never persisted to disk.
+    pub(super) reading_view_override: Option<bool>,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
@@ -257,6 +262,10 @@ impl SessionConfiguration {
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
+        }
+        // Carry the session reading-view override through in-memory only.
+        if let Some(reading_view_override) = updates.reading_view_override {
+            next_configuration.reading_view_override = Some(reading_view_override);
         }
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
@@ -450,6 +459,9 @@ pub(crate) struct SessionSettingsUpdate {
     /// disables environments for this turn.
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
     pub(crate) personality: Option<Personality>,
+    /// Session-scoped reading-view tool gate override (see
+    /// `SessionConfiguration::reading_view_override`).
+    pub(crate) reading_view_override: Option<bool>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
 }

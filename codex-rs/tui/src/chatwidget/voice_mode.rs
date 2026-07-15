@@ -1566,7 +1566,7 @@ impl super::ChatWidget {
         if !has_tts_key {
             let warning_cell = history_cell::new_warning_event(
                 "ElevenLabs API key not found — TTS will not work.\n\
-                 Set ELEVENLABS_API_KEY or run /voice-setup to paste your key."
+                 Set ELEVENLABS_API_KEY or open /settings › Voice to paste your key."
                     .to_string(),
             );
             if session_not_ready {
@@ -1581,10 +1581,10 @@ impl super::ChatWidget {
         let mut state = VoiceModeState::new(&voice_config);
 
         // If both TTS and STT are disabled, don't activate — nothing useful
-        // would happen. Point the user to /voice-setup instead.
+        // would happen. Point the user to /settings › Voice instead.
         if !state.tts_enabled && !state.stt_enabled {
             self.add_info_message(
-                "Both TTS and STT are disabled. Use /voice-setup to enable at least one."
+                "Both TTS and STT are disabled. Open /settings › Voice to enable at least one."
                     .to_string(),
                 None,
             );
@@ -4211,7 +4211,7 @@ impl super::ChatWidget {
         {
             if !state.tts_enabled {
                 self.bottom_pane.set_document_reader_tts_flash_msg(Some(
-                    "TTS is disabled \u{2014} enable in /voice-setup".to_string(),
+                    "TTS is disabled \u{2014} enable in /settings \u{203a} Voice".to_string(),
                 ));
                 self.request_redraw();
             }

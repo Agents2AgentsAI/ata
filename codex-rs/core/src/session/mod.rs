@@ -627,6 +627,7 @@ impl Codex {
             thread_source,
             dynamic_tools,
             persist_extended_history,
+            reading_view_override: None,
             inherited_shell_snapshot,
             user_shell_override,
         };

@@ -1028,6 +1028,16 @@ impl App {
                     tts_backend,
                 );
             }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::OpenSettingsVoiceSetup => {
+                self.chat_widget.open_voice_setup_popup();
+            }
+            AppEvent::OpenSettingsReadingView => {
+                self.chat_widget.open_reading_view_picker();
+            }
+            AppEvent::OpenSettingsAudioDevices => {
+                self.chat_widget.open_realtime_audio_popup();
+            }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
             }

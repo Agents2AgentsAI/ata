@@ -64,6 +64,9 @@ pub(crate) enum AppCommand {
         service_tier: Option<Option<String>>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
+        /// Session-scoped reading-view tool gate override (the `/reading`
+        /// toggle). Routed to core via `thread/settings/update`.
+        reading_view_override: Option<bool>,
     },
     ExecApproval {
         id: String,
@@ -209,6 +212,27 @@ impl AppCommand {
             service_tier,
             collaboration_mode,
             personality,
+            reading_view_override: None,
+        }
+    }
+
+    /// Session-scoped `/reading` toggle. Carries only the reading-view override;
+    /// core persists it in the in-memory session configuration.
+    pub(crate) fn override_turn_context_reading_view(enabled: bool) -> Self {
+        Self::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            permission_profile: None,
+            active_permission_profile: None,
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+            reading_view_override: Some(enabled),
         }
     }
 

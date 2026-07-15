@@ -90,6 +90,60 @@ impl ChatWidget {
         });
     }
 
+    /// Open the `/settings` hub: a menu whose rows open the existing voice,
+    /// reading-view, and audio-device sub-views. Rows send `OpenSettings*`
+    /// events that the app dispatcher routes back to the matching `open_*`
+    /// method on `ChatWidget`.
+    pub(crate) fn open_settings_hub_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        #[cfg(not(target_os = "linux"))]
+        items.push(SelectionItem {
+            name: "Voice".to_string(),
+            description: Some("Configure voice defaults (TTS/STT, API key, language).".to_string()),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSettingsVoiceSetup);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        items.push(SelectionItem {
+            name: "Reading view".to_string(),
+            description: Some("Choose how long-form documents are displayed.".to_string()),
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenSettingsReadingView);
+            })],
+            dismiss_on_select: true,
+            ..Default::default()
+        });
+
+        if self.realtime_audio_device_selection_enabled() {
+            items.push(SelectionItem {
+                name: "Audio devices".to_string(),
+                description: Some("Configure realtime microphone and speaker.".to_string()),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::OpenSettingsAudioDevices);
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            });
+        }
+
+        let mut header = ColumnRenderable::new();
+        header.push(Line::from("Settings".bold()));
+        header.push(Line::from(
+            "Configure voice, reading view, and audio devices.".dim(),
+        ));
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            header: Box::new(header),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
+    }
+
     pub(crate) fn open_realtime_audio_popup(&mut self) {
         let items = [
             RealtimeAudioDeviceKind::Microphone,

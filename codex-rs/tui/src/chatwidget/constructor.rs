@@ -221,6 +221,7 @@ impl ChatWidget {
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
             reading_view_mode: initial_reading_view_mode,
+            reading_view_session_override: None,
             reading_view_server: None,
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_title: String::new(),
