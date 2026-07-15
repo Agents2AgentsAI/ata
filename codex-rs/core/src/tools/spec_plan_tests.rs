@@ -1020,6 +1020,49 @@ async fn reading_view_tools_omitted_when_disabled() {
     plan.assert_registered_lacks(READING_VIEW_AGENT_TOOLS);
 }
 
+// The session-scoped `/reading` override (threaded from the TUI to core as
+// `TurnContext::reading_view_override`) takes precedence over the config-driven
+// `[reading_view].mode` gate. `Some(false)` drops the whole reading-view tool
+// family from the plan even when the feature/config would enable it — this is
+// what makes `/reading` off actually cut the tools (and their context) from the
+// model's tool set rather than only hiding the rendered view.
+#[tokio::test]
+async fn reading_view_override_off_drops_tools_even_when_config_enabled() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::ReadingView, /*enabled*/ true);
+        turn.reading_view_override = Some(false);
+    })
+    .await;
+    plan.assert_visible_lacks(READING_VIEW_AGENT_TOOLS);
+    plan.assert_registered_lacks(READING_VIEW_AGENT_TOOLS);
+}
+
+// `Some(true)` forces the reading-view tools on for the session even when the
+// config-driven gate would omit them (feature off, no `[reading_view].mode`).
+#[tokio::test]
+async fn reading_view_override_on_registers_tools_even_when_config_disabled() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::ReadingView, /*enabled*/ false);
+        turn.reading_view_override = Some(true);
+    })
+    .await;
+    plan.assert_visible_contains(READING_VIEW_AGENT_TOOLS);
+    plan.assert_registered_contains(READING_VIEW_AGENT_TOOLS);
+}
+
+// `None` defers to the existing config/feature behavior: with the feature on
+// and no override, the reading-view tools stay registered.
+#[tokio::test]
+async fn reading_view_override_none_defers_to_config() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::ReadingView, /*enabled*/ true);
+        turn.reading_view_override = None;
+    })
+    .await;
+    plan.assert_visible_contains(READING_VIEW_AGENT_TOOLS);
+    plan.assert_registered_contains(READING_VIEW_AGENT_TOOLS);
+}
+
 #[tokio::test]
 async fn artifacts_tool_registered_when_feature_on() {
     let plan = probe(|turn| {

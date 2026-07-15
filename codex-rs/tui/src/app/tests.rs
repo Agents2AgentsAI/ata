@@ -1697,6 +1697,7 @@ default_permissions = "locked-down"
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            reading_view_override: None,
         }
     );
     let cell = match app_event_rx.try_recv() {
@@ -1791,6 +1792,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            reading_view_override: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -1886,6 +1888,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            reading_view_override: None,
         })
     );
     let cell = match app_event_rx.try_recv() {
@@ -1967,6 +1970,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            reading_view_override: None,
         })
     );
 
@@ -2027,6 +2031,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             service_tier: None,
             collaboration_mode: None,
             personality: None,
+            reading_view_override: None,
         })
     );
     assert!(

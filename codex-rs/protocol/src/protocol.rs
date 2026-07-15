@@ -469,6 +469,13 @@ pub struct ThreadSettingsOverrides {
     /// Updated personality preference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
+
+    /// Session-scoped reading-view tool gate override. `Some(false)` forces the
+    /// reading-view tools off for the session, `Some(true)` forces them on, and
+    /// `None` defers to `[reading_view].mode`. Applied in-memory only via the
+    /// `/reading` toggle; never persisted to disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading_view_override: Option<bool>,
 }
 
 /// Submission operation

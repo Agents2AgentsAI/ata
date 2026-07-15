@@ -719,6 +719,12 @@ pub(crate) struct ChatWidget {
     /// codex-reading-view-server, `Disabled` falls back to the inline
     /// transcript cell.
     reading_view_mode: crate::app_event::ReadingViewMode,
+    /// Session-only reading-view override set by `/reading`. `Some(true)` forces
+    /// the view on for this session, `Some(false)` forces it off, `None` defers
+    /// to `reading_view_mode`. Never persisted; the effective mode used for
+    /// rendering combines this with the persisted default via
+    /// `effective_reading_view_mode()`.
+    reading_view_session_override: Option<bool>,
     /// In-process HTTP/WS server hosting the browser-mode reader. `None`
     /// until the first browser-mode document is presented and the server
     /// has fully started.

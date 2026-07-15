@@ -110,6 +110,7 @@ impl App {
             service_tier,
             collaboration_mode,
             personality,
+            reading_view_override,
         } = op
         else {
             return;
@@ -129,6 +130,7 @@ impl App {
             service_tier: service_tier.clone(),
             collaboration_mode: collaboration_mode.clone(),
             personality: *personality,
+            reading_view_override: *reading_view_override,
             ..ThreadSettingsUpdateParams::default()
         };
         self.send_thread_settings_update(app_server, params).await;
@@ -206,4 +208,7 @@ fn thread_settings_update_has_changes(params: &ThreadSettingsUpdateParams) -> bo
         || params.summary.is_some()
         || params.collaboration_mode.is_some()
         || params.personality.is_some()
+        // A `/reading` toggle sends only this field; without it the reading-view
+        // override would be dropped before reaching the app-server.
+        || params.reading_view_override.is_some()
 }

@@ -275,6 +275,11 @@ pub struct ThreadSettingsUpdateParams {
     /// Override the personality for subsequent turns.
     #[ts(optional = nullable)]
     pub personality: Option<Personality>,
+    /// Session-scoped reading-view tool gate override for subsequent turns.
+    /// `false` forces the reading-view tools off, `true` forces them on, and
+    /// omission defers to `[reading_view].mode`.
+    #[ts(optional = nullable)]
+    pub reading_view_override: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

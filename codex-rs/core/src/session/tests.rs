@@ -3006,6 +3006,7 @@ async fn set_rate_limits_retains_previous_credits() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -3110,6 +3111,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -3637,6 +3639,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     }
@@ -4380,6 +4383,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4490,6 +4494,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4736,6 +4741,7 @@ async fn make_session_with_config_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -4840,6 +4846,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         thread_source: None,
         dynamic_tools: Vec::new(),
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
@@ -6334,6 +6341,7 @@ where
         thread_source: None,
         dynamic_tools,
         persist_extended_history: false,
+        reading_view_override: None,
         inherited_shell_snapshot: None,
         user_shell_override: None,
     };
