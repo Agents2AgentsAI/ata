@@ -53,7 +53,9 @@ pub(super) fn build_reasoning_value(
     }
 
     let reasoning = Reasoning {
-        effort: effort.or(model_info.default_reasoning_level),
+        effort: effort
+            .or(model_info.default_reasoning_level)
+            .map(crate::client::reasoning_effort_for_request),
         summary: if summary == ReasoningSummaryConfig::None {
             None
         } else {

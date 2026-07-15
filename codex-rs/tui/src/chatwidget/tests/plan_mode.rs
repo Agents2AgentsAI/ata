@@ -1288,7 +1288,7 @@ async fn enter_submits_when_plan_stream_is_not_active() {
     assert!(chat.input_queue.queued_user_messages.is_empty());
     match next_submit_op(&mut op_rx) {
         Op::UserTurn {
-            personality: Some(Personality::Pragmatic),
+            personality: None,
             ..
         } => {}
         other => panic!("expected Op::UserTurn, got {other:?}"),
@@ -1576,7 +1576,7 @@ async fn collab_mode_is_sent_after_enabling() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality: None,
             ..
         } => {}
         other => {
@@ -1600,7 +1600,7 @@ async fn collab_mode_applies_default_preset() {
                     mode: ModeKind::Default,
                     ..
                 }),
-            personality: Some(Personality::Pragmatic),
+            personality: None,
             ..
         } => {}
         other => {

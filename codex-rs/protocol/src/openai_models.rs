@@ -54,6 +54,9 @@ pub enum ReasoningEffort {
     /// Anthropic Opus 4.7-only: maximum thinking budget. Falls back to
     /// XHigh on providers that don't expose a dedicated Max tier.
     Max,
+    /// Client-side only: downgraded to `Max` on the wire. Its sole effect is to
+    /// flip the session into proactive multi-agent delegation.
+    Ultra,
 }
 
 impl FromStr for ReasoningEffort {
@@ -567,6 +570,9 @@ fn effort_rank(effort: ReasoningEffort) -> i32 {
         // ATA additions: Adaptive sits above XHigh; Max is Opus-4.7-only.
         ReasoningEffort::Adaptive => 6,
         ReasoningEffort::Max => 7,
+        // Ultra ranks above Max; on the wire it downgrades to Max, so it is the
+        // top rung of the ladder for selection/nearest-effort purposes.
+        ReasoningEffort::Ultra => 8,
     }
 }
 

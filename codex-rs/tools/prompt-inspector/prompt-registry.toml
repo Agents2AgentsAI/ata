@@ -307,6 +307,14 @@ type        = "function"
 description = "Instruction to add Co-Authored-By trailer to git commits"
 
 [[entries]]
+name        = "proactive multi-agent mode (PROACTIVE_MULTI_AGENT_MODE_TEXT)"
+category    = "context-injection"
+file        = "core/src/context/multi_agent_mode_instructions.rs"
+pattern     = "PROACTIVE_MULTI_AGENT_MODE_TEXT"
+type        = "const"
+description = "Developer instruction injected under ultra reasoning effort telling the agent to proactively spawn multi-agent v2 sub-agents"
+
+[[entries]]
 name        = "apps listing (render_apps_section)"
 category    = "context-injection"
 file        = "core/src/apps/render.rs"

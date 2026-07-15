@@ -143,6 +143,7 @@ fn reasoning_effort_preset(effort: ReasoningEffort) -> ReasoningEffortPreset {
             ReasoningEffort::XHigh => "Extra high reasoning depth for complex problems",
             ReasoningEffort::Adaptive => "Model decides reasoning depth per turn",
             ReasoningEffort::Max => "Maximum reasoning budget (Opus 4.7)",
+            ReasoningEffort::Ultra => "Maximum reasoning with automatic task delegation",
         }
         .to_string(),
     }

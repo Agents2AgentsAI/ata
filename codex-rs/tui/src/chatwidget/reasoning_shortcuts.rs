@@ -177,6 +177,8 @@ fn effort_rank(effort: ReasoningEffortConfig) -> i32 {
         // (preserves the existing OpenAI-side cycle); Max is selectable
         // when the active provider supports it.
         ReasoningEffortConfig::Max => 7,
+        // Ultra tops the ladder; it downgrades to Max on the wire.
+        ReasoningEffortConfig::Ultra => 8,
     }
 }
 

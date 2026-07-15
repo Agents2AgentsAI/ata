@@ -519,6 +519,7 @@ impl ChatWidget {
             ReasoningEffortConfig::XHigh => "Extra high",
             ReasoningEffortConfig::Adaptive => "Adaptive",
             ReasoningEffortConfig::Max => "Max",
+            ReasoningEffortConfig::Ultra => "Ultra",
         }
     }
 
