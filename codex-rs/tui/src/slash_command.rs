@@ -31,9 +31,7 @@ pub enum SlashCommand {
     AutoReview,
     #[cfg(not(target_os = "linux"))]
     Voice,
-    #[cfg(not(target_os = "linux"))]
-    #[strum(serialize = "voice-setup")]
-    VoiceSetup,
+    Reading,
     Memories,
     Skills,
     Hooks,
@@ -42,8 +40,6 @@ pub enum SlashCommand {
     New,
     Resume,
     Research,
-    #[strum(serialize = "reading-view")]
-    ReadingView,
     Fork,
     Init,
     Compact,
@@ -128,7 +124,7 @@ impl SlashCommand {
             }
             SlashCommand::Personality => "choose a communication style for Codex",
             SlashCommand::Realtime => "toggle realtime voice mode (experimental)",
-            SlashCommand::Settings => "configure realtime microphone/speaker",
+            SlashCommand::Settings => "open settings (voice, reading view, audio devices)",
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agent | SlashCommand::MultiAgents => "switch the active agent thread",
@@ -146,8 +142,7 @@ impl SlashCommand {
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
             #[cfg(not(target_os = "linux"))]
             SlashCommand::Voice => "toggle voice mode for this ATA session",
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::VoiceSetup => "configure voice defaults (TTS/STT, API key, language)",
+            SlashCommand::Reading => "toggle reading view for this session",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
@@ -158,7 +153,6 @@ impl SlashCommand {
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
             SlashCommand::Research => "configure research tool integrations",
-            SlashCommand::ReadingView => "configure the reading-view display mode",
             SlashCommand::Scheduling => "view active cron / monitor tasks",
             SlashCommand::Workspace => {
                 "summarize the active workspace; manage with `ata workspace`"
@@ -263,11 +257,11 @@ impl SlashCommand {
             SlashCommand::Realtime => true,
             SlashCommand::Settings => true,
             SlashCommand::Agent | SlashCommand::MultiAgents => true,
-            SlashCommand::Research | SlashCommand::Scheduling | SlashCommand::ReadingView => true,
+            SlashCommand::Research | SlashCommand::Scheduling | SlashCommand::Reading => true,
             SlashCommand::Workspace => true,
             SlashCommand::Fast => true,
             #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice | SlashCommand::VoiceSetup => true,
+            SlashCommand::Voice => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

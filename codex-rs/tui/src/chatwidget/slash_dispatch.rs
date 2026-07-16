@@ -219,10 +219,7 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Settings => {
-                if !self.realtime_audio_device_selection_enabled() {
-                    return;
-                }
-                self.open_realtime_audio_popup();
+                self.open_settings_hub_popup();
             }
             SlashCommand::Personality => {
                 self.open_personality_popup();
@@ -328,9 +325,8 @@ impl ChatWidget {
             SlashCommand::Voice => {
                 self.toggle_voice_mode();
             }
-            #[cfg(not(target_os = "linux"))]
-            SlashCommand::VoiceSetup => {
-                self.open_voice_setup_popup();
+            SlashCommand::Reading => {
+                self.toggle_reading_view();
             }
             SlashCommand::Memories => {
                 self.open_memories_popup();
@@ -491,16 +487,6 @@ impl ChatWidget {
                 let items = crate::bottom_pane::build_research_tool_items(&self.config.features);
                 let view =
                     crate::bottom_pane::ResearchToolsView::new(items, self.app_event_tx.clone());
-                self.bottom_pane.show_view(Box::new(view));
-                self.request_redraw();
-            }
-            SlashCommand::ReadingView => {
-                let items =
-                    crate::bottom_pane::build_reading_view_tool_items(self.reading_view_mode);
-                let view = crate::bottom_pane::ResearchToolsView::new_reading_view(
-                    items,
-                    self.app_event_tx.clone(),
-                );
                 self.bottom_pane.show_view(Box::new(view));
                 self.request_redraw();
             }
@@ -969,7 +955,6 @@ impl ChatWidget {
             service_tier_commands_enabled: self.fast_mode_enabled(),
             personality_command_enabled: self.config.features.enabled(Feature::Personality),
             realtime_conversation_enabled: self.realtime_conversation_enabled(),
-            audio_device_selection_enabled: self.realtime_audio_device_selection_enabled(),
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
@@ -1034,13 +1019,13 @@ impl ChatWidget {
             | SlashCommand::Statusline
             | SlashCommand::Theme
             | SlashCommand::Research
-            | SlashCommand::ReadingView
+            | SlashCommand::Reading
             | SlashCommand::Scheduling
             | SlashCommand::Workspace
             | SlashCommand::Fast
             | SlashCommand::Pets => QueueDrain::Stop,
             #[cfg(not(target_os = "linux"))]
-            SlashCommand::Voice | SlashCommand::VoiceSetup => QueueDrain::Stop,
+            SlashCommand::Voice => QueueDrain::Stop,
         }
     }
 

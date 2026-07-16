@@ -84,6 +84,10 @@ pub struct TurnContext {
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
     pub(crate) goal_tools_supported: bool,
     pub features: ManagedFeatures,
+    /// Session-scoped reading-view tool gate override, mirrored from
+    /// `SessionConfiguration::reading_view_override`. Consulted by
+    /// `spec_plan::add_reading_view_tools`. `None` defers to `[reading_view].mode`.
+    pub(crate) reading_view_override: Option<bool>,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_self_exe: Option<PathBuf>,
@@ -248,6 +252,7 @@ impl TurnContext {
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
             goal_tools_supported: self.goal_tools_supported,
             features,
+            reading_view_override: self.reading_view_override,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
             codex_self_exe: self.codex_self_exe.clone(),
@@ -574,6 +579,7 @@ impl Session {
             unified_exec_shell_mode,
             goal_tools_supported,
             features: per_turn_config.features.clone(),
+            reading_view_override: session_configuration.reading_view_override,
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
             codex_self_exe: per_turn_config.codex_self_exe.clone(),

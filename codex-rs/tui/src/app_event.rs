@@ -713,6 +713,16 @@ pub(crate) enum AppEvent {
         service_tier: Option<String>,
     },
 
+    /// Open the voice-defaults setup sub-view from the `/settings` hub.
+    #[cfg(not(target_os = "linux"))]
+    OpenSettingsVoiceSetup,
+
+    /// Open the reading-view mode picker from the `/settings` hub.
+    OpenSettingsReadingView,
+
+    /// Open the realtime audio-device sub-view from the `/settings` hub.
+    OpenSettingsAudioDevices,
+
     /// Open the device picker for a realtime microphone or speaker.
     OpenRealtimeAudioDeviceSelection {
         kind: RealtimeAudioDeviceKind,

@@ -45,7 +45,7 @@ pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex"
 /// `"The 'gpt-5.5' model requires a newer version of Codex."`. So we report the
 /// upstream Codex version this tree is based on instead of ATA's version. Bump
 /// this on every upstream merge; keep it >= the upstream version we merged.
-pub const OPENAI_CLIENT_VERSION_OVERRIDE: &str = "0.134.0";
+pub const OPENAI_CLIENT_VERSION_OVERRIDE: &str = "0.144.0";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_4_MODEL_ID: &str = "openai.gpt-5.4";

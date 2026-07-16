@@ -102,6 +102,7 @@ pub(super) async fn spawn_review_thread(
         unified_exec_shell_mode,
         goal_tools_supported,
         features: review_features,
+        reading_view_override: parent_turn_context.reading_view_override,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),

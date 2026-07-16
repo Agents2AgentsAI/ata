@@ -100,6 +100,8 @@ pub const PLUGINS_INSTRUCTIONS_OPEN_TAG: &str = "<plugins_instructions>";
 pub const PLUGINS_INSTRUCTIONS_CLOSE_TAG: &str = "</plugins_instructions>";
 pub const COLLABORATION_MODE_OPEN_TAG: &str = "<collaboration_mode>";
 pub const COLLABORATION_MODE_CLOSE_TAG: &str = "</collaboration_mode>";
+pub const MULTI_AGENT_MODE_OPEN_TAG: &str = "<multi_agent_mode>";
+pub const MULTI_AGENT_MODE_CLOSE_TAG: &str = "</multi_agent_mode>";
 pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
@@ -469,6 +471,13 @@ pub struct ThreadSettingsOverrides {
     /// Updated personality preference.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
+
+    /// Session-scoped reading-view tool gate override. `Some(false)` forces the
+    /// reading-view tools off for the session, `Some(true)` forces them on, and
+    /// `None` defers to `[reading_view].mode`. Applied in-memory only via the
+    /// `/reading` toggle; never persisted to disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading_view_override: Option<bool>,
 }
 
 /// Submission operation

@@ -160,6 +160,18 @@ pub(crate) struct CompactConversationRequestSettings {
     pub(crate) service_tier: Option<String>,
 }
 
+/// Maps a client-side reasoning effort to the value sent on the wire.
+///
+/// `Ultra` is a client-only signal (it flips the session into proactive
+/// multi-agent delegation) and is not a valid API value, so it is downgraded to
+/// `Max` before any request leaves the client.
+pub(crate) fn reasoning_effort_for_request(effort: ReasoningEffortConfig) -> ReasoningEffortConfig {
+    match effort {
+        ReasoningEffortConfig::Ultra => ReasoningEffortConfig::Max,
+        effort => effort,
+    }
+}
+
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///
 /// This is intentionally kept minimal so `ModelClient` does not need to hold a full `Config`. Most
@@ -604,10 +616,12 @@ impl ModelClient {
         let payload = ApiMemorySummarizeInput {
             model: model_info.slug.clone(),
             raw_memories,
-            reasoning: effort.map(|effort| Reasoning {
-                effort: Some(effort),
-                summary: None,
-            }),
+            reasoning: effort
+                .map(reasoning_effort_for_request)
+                .map(|effort| Reasoning {
+                    effort: Some(effort),
+                    summary: None,
+                }),
         };
 
         client
@@ -719,7 +733,9 @@ impl ModelClient {
     ) -> Option<Reasoning> {
         if model_info.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: effort.or(model_info.default_reasoning_level),
+                effort: effort
+                    .or(model_info.default_reasoning_level)
+                    .map(reasoning_effort_for_request),
                 summary: if summary == ReasoningSummaryConfig::None {
                     None
                 } else {

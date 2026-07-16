@@ -44,6 +44,9 @@ struct ThreadSettingsBuildParams {
     summary: Option<ReasoningSummary>,
     collaboration_mode: Option<CollaborationMode>,
     personality: Option<Personality>,
+    // Session-scoped reading-view tool gate override, routed to core inside
+    // `ThreadSettingsOverrides`.
+    reading_view_override: Option<bool>,
 }
 
 impl TurnRequestProcessor {
@@ -409,6 +412,9 @@ impl TurnRequestProcessor {
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
+                    // The reading-view override reaches core through the
+                    // dedicated `thread/settings/update` path, not `turn/start`.
+                    reading_view_override: None,
                 },
             )
             .await?;
@@ -479,6 +485,7 @@ impl TurnRequestProcessor {
             summary,
             collaboration_mode,
             personality,
+            reading_view_override,
         } = params;
 
         if sandbox_policy.is_some() && permissions.is_some() {
@@ -626,6 +633,7 @@ impl TurnRequestProcessor {
             service_tier,
             collaboration_mode,
             personality,
+            reading_view_override,
         })
     }
 
@@ -652,6 +660,7 @@ impl TurnRequestProcessor {
                     summary: params.summary,
                     collaboration_mode: params.collaboration_mode,
                     personality: params.personality,
+                    reading_view_override: params.reading_view_override,
                 },
             )
             .await?;

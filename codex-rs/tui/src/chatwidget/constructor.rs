@@ -221,6 +221,7 @@ impl ChatWidget {
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
             reading_view_mode: initial_reading_view_mode,
+            reading_view_session_override: None,
             reading_view_server: None,
             reading_view_browser_doc_id: String::new(),
             reading_view_browser_title: String::new(),
@@ -268,9 +269,6 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_realtime_conversation_enabled(widget.realtime_conversation_enabled());
-        widget
-            .bottom_pane
-            .set_audio_device_selection_enabled(widget.realtime_audio_device_selection_enabled());
         widget
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());

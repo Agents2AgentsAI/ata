@@ -408,10 +408,27 @@ impl ChatWidget {
         self.bottom_pane.is_document_reader_active()
     }
 
+    /// Reading-view mode used for rendering this session: the persisted default
+    /// (`reading_view_mode`) with the `/reading` session override applied on
+    /// top. `Some(false)` forces `Disabled`; `Some(true)` forces the view on,
+    /// falling back to `Tui` when the persisted default is `Disabled`; `None`
+    /// defers to the persisted default.
+    fn effective_reading_view_mode(&self) -> crate::app_event::ReadingViewMode {
+        use crate::app_event::ReadingViewMode;
+        match self.reading_view_session_override {
+            Some(false) => ReadingViewMode::Disabled,
+            Some(true) => match self.reading_view_mode {
+                ReadingViewMode::Disabled => ReadingViewMode::Tui,
+                mode => mode,
+            },
+            None => self.reading_view_mode,
+        }
+    }
+
     /// Whether the reading view mode is not Disabled.
     /// Also disabled in Plan mode so the reading view doesn't interfere with planning.
     fn is_reading_view_enabled(&self) -> bool {
-        self.reading_view_mode != crate::app_event::ReadingViewMode::Disabled
+        self.effective_reading_view_mode() != crate::app_event::ReadingViewMode::Disabled
             && self.active_mode_kind() != ModeKind::Plan
     }
 
@@ -464,7 +481,44 @@ impl ChatWidget {
 
     /// Whether the reading view is in browser mode.
     fn is_reading_view_browser_mode(&self) -> bool {
-        self.reading_view_mode == crate::app_event::ReadingViewMode::Browser
+        self.effective_reading_view_mode() == crate::app_event::ReadingViewMode::Browser
+    }
+
+    /// Open the reading-view mode picker (the global default persisted to
+    /// `~/.ata/config.toml`). Reached through the `/settings` hub.
+    pub(crate) fn open_reading_view_picker(&mut self) {
+        let items = crate::bottom_pane::build_reading_view_tool_items(self.reading_view_mode);
+        let view = crate::bottom_pane::ResearchToolsView::new_reading_view(
+            items,
+            self.app_event_tx.clone(),
+        );
+        self.bottom_pane.show_view(Box::new(view));
+        self.request_redraw();
+    }
+
+    /// Toggle the session-only reading view on/off (`/reading` command). Unlike
+    /// the `/settings` reading-view picker, this never writes config; it only
+    /// flips `reading_view_session_override` for the current session.
+    pub(crate) fn toggle_reading_view(&mut self) {
+        let currently_on =
+            self.effective_reading_view_mode() != crate::app_event::ReadingViewMode::Disabled;
+        let next_enabled = !currently_on;
+        self.reading_view_session_override = Some(next_enabled);
+        // Drive the core tool gate off the same session override that controls
+        // rendering, so `/reading` off actually drops the reading-view tools
+        // from the model's tool set (reducing context) rather than only hiding
+        // the rendered view. Sent as a non-persisted per-session override; the
+        // `/settings` picker remains the only writer of config.toml.
+        self.app_event_tx.send(AppEvent::CodexOp(
+            AppCommand::override_turn_context_reading_view(next_enabled),
+        ));
+        let message = if next_enabled {
+            "Reading view enabled for this session."
+        } else {
+            "Reading view disabled for this session."
+        };
+        self.add_info_message(message.to_string(), None);
+        self.request_redraw();
     }
 
     /// Split full markdown content on `## ` headings into `(heading, content)`
